@@ -11,7 +11,7 @@
     "seed":          "npm run seed --prefix server",
 
     "build":         "npm run build --prefix client",
-    "build:render":  "npm install --prefix server && npm install --prefix client && npm run build --prefix client",
+"build:render":  "npm install --prefix server --omit=dev && npm install --prefix client --include=dev && npm run build --prefix client",
     "start:render":  "npm run start --prefix server",
     "seed:render":   "npm run seed --prefix server"
   },
