@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: vitom-it-crew
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm run build:render
+    startCommand: npm run start:render
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CLIENT_URL
+        value: https://it.realitniekosystem.cz
+      - key: DATABASE_URL
+        sync: false   # nastav manuálně v Render dashboardu (Neon connection string)
+      - key: ANTHROPIC_API_KEY
+        sync: false   # nastav manuálně (volitelné)
+      - key: GOOGLE_CLIENT_ID
+        sync: false   # nastav manuálně (volitelné)
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false   # nastav manuálně (volitelné)
+      - key: GOOGLE_CALLBACK_URL
+        value: https://it.realitniekosystem.cz/api/auth/google/callback

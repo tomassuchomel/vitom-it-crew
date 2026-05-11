@@ -1,0 +1,24 @@
+{
+  "name": "vitom-it-crew",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VITOM IT Crew – interní aplikace pro správu projektů, úkolů, časů a nákladů vývojářského týmu",
+  "scripts": {
+    "install:all":   "npm install && npm install --prefix server && npm install --prefix client",
+    "dev":           "concurrently -k -n server,client -c blue,magenta \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "dev:server":    "npm run dev --prefix server",
+    "dev:client":    "npm run dev --prefix client",
+    "seed":          "npm run seed --prefix server",
+
+    "build":         "npm run build --prefix client",
+    "build:render":  "npm install --prefix server && npm install --prefix client && npm run build --prefix client",
+    "start:render":  "npm run start --prefix server",
+    "seed:render":   "npm run seed --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
