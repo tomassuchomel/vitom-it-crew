@@ -1,16 +1,18 @@
 // Naplnění DB ukázkovými daty pro 4-členný tým.
 // Spustit: npm run seed (POZOR – smaže existující data!)
+// Nebo automaticky při startu, pokud je DB prázdná (volá se z index.js).
 import 'dotenv/config';
 import { pool, query, migrate } from './db.js';
 
-async function main() {
-  await migrate();
-
-  console.log('[seed] mažu existující data…');
-  await query(`
-    TRUNCATE attachments, questions, time_entries, tasks, projects, users
-    RESTART IDENTITY CASCADE
-  `);
+// Hlavní seed funkce, kterou volá CLI i auto-seed při startu serveru
+export async function seedDatabase({ wipe = true } = {}) {
+  if (wipe) {
+    console.log('[seed] mažu existující data…');
+    await query(`
+      TRUNCATE attachments, questions, time_entries, tasks, projects, users
+      RESTART IDENTITY CASCADE
+    `);
+  }
 
   // ---------- Uživatelé ----------
   const users = [
@@ -100,12 +102,32 @@ async function main() {
     `, [userIds[e.user], projectIds[e.proj], iso(addDays(today, e.day)), e.hours, e.desc]);
   }
   console.log(`[seed] vloženo ${entries.length} time entries`);
-
   console.log('\n✅ Seed hotový.');
 }
 
-main().then(() => pool.end()).catch(err => {
-  console.error('[seed] CHYBA:', err);
-  pool.end();
-  process.exit(1);
-});
+// Auto-seed: spustí seed jen pokud je DB úplně prázdná
+export async function autoSeedIfEmpty() {
+  const r = await query('SELECT COUNT(*)::int AS c FROM users');
+  if (r.rows[0].c > 0) {
+    console.log(`[seed] DB obsahuje ${r.rows[0].c} uživatelů, auto-seed přeskočen`);
+    return false;
+  }
+  console.log('[seed] DB je prázdná → spouštím auto-seed…');
+  await seedDatabase({ wipe: false });
+  return true;
+}
+
+// CLI: npm run seed
+const isCli = import.meta.url === `file://${process.argv[1]}`;
+if (isCli) {
+  (async () => {
+    await migrate();
+    await seedDatabase({ wipe: true });
+  })()
+    .then(() => pool.end())
+    .catch((err) => {
+      console.error('[seed] CHYBA:', err);
+      pool.end();
+      process.exit(1);
+    });
+}
