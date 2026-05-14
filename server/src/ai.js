@@ -126,6 +126,80 @@ Posuď stav a vrať JSON podle formátu.`;
   }
 }
 
+// ----------- Odhad času úkolu (AI) -----------
+// Reálná praxe v týmu VITOM: senior programátor používá Claude (Anthropic) a Lovable
+// pro AI-assisted coding. Mnoho úkolů je 3-5× rychlejší než klasický odhad. Server
+// práce (deploy, integrace, infra) zhruba normální tempo.
+const TASK_ESTIMATE_SYSTEM = `Jsi expert na odhad času programátorských úkolů pro tým VITOM IT Crew.
+
+KONTEXT:
+- Tým: senior programátor používá Claude (Anthropic API + Claude Code) a Lovable.dev pro AI-assisted vývoj.
+- Vibe coding přístup: rychlé iterace s AI, generování komponent, refaktoring, testů.
+- Tempo s AI je 3-5× rychlejší pro většinu standardních kódovacích úkolů než tradiční manuální coding.
+
+REFERENČNÍ TEMPO (s AI nástroji):
+- Triviální (CRUD form, jednoduchá React komponenta, drobná oprava): 0.25 - 1.5 h
+- Středně složité (API endpoint s validací, integrace 3rd party, refaktor modulu): 1 - 4 h
+- Komplexní (architektonické změny, debug obtížné chyby, integrace více systémů, deployment, infra): 4 - 12 h
+- Velké (nová funkcionalita napříč stackem, performance optimization, security audit): 8 - 24 h
+
+POSTUP:
+1. Přečti název a popis úkolu.
+2. Posuď, zda jde o kódování (rychlejší s AI) nebo server práci (běžné tempo).
+3. Odhadni hodiny v intervalu, kde je vyšší konec ~30% nad nižším.
+4. Doporučení k rozdělení pokud > 8h.
+5. Vrať čistý JSON.
+
+VÝSTUP (jen JSON, nic okolo):
+{
+  "estimated_h": <number>,            // střední odhad, např. 3.5
+  "category": "trivial" | "medium" | "complex" | "large",
+  "note": "1-2 věty zdůvodnění s ohledem na AI urychlení"
+}`;
+
+export async function estimateTask(task) {
+  if (!HAS_AI) {
+    return { error: 'no_api_key' };
+  }
+  const userMsg = `Úkol:
+Název: ${task.title}
+Popis: ${task.description || '(prázdný popis)'}
+Priorita: ${task.priority || 'normal'}
+
+Odhadni čas v hodinách s ohledem na AI urychlení.`;
+
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 400,
+      system: TASK_ESTIMATE_SYSTEM,
+      messages: [{ role: 'user', content: userMsg }],
+    }),
+  });
+  if (!res.ok) {
+    return { error: 'api_error', status: res.status, message: (await res.text()).slice(0, 500) };
+  }
+  const data = await res.json();
+  const text = data.content?.[0]?.text || '';
+  try {
+    const cleaned = text.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+    return {
+      estimated_h: Number(parsed.estimated_h),
+      category: parsed.category,
+      note: parsed.note,
+    };
+  } catch (err) {
+    return { error: 'parse_error', raw: text };
+  }
+}
+
 export async function chat(messages) {
   if (!HAS_AI) {
     return { error: 'no_api_key', message: 'Anthropic API klíč není nastaven.' };

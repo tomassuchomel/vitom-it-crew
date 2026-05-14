@@ -4,6 +4,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import Modal from '../components/Modal.jsx';
 import AskQuestionModal from '../components/AskQuestionModal.jsx';
 import Attachments from '../components/Attachments.jsx';
+import { StatusBadge, StatusActions, AIEstimateBadge } from '../components/TaskStatus.jsx';
 import { Input, Textarea, Select } from './ProjectsList.jsx';
 import { projects as projectsApi, tasks as tasksApi, users as usersApi } from '../api.js';
 import { useAuth, can } from '../auth.jsx';
@@ -57,6 +58,18 @@ export default function ProjectDetail() {
       .finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, [id]);
+
+  // Pokud nějaký úkol má ai_estimate_status = 'pending', polluj DB každých 4s,
+  // dokud všechny AI odhady nedoběhnou.
+  useEffect(() => {
+    if (!data) return;
+    const hasPending = data.tasks.some(t => t.ai_estimate_status === 'pending');
+    if (!hasPending) return;
+    const timer = setTimeout(() => {
+      projectsApi.get(id).then(setData).catch(() => {});
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [data, id]);
 
   const loadEdits = () => {
     setEditsLoading(true);
@@ -358,20 +371,13 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
   return (
     <li className="py-2.5">
       <div className="flex items-start gap-3" style={{ paddingLeft: indent * 24 }}>
-        <input
-          type="checkbox"
-          checked={isDone}
-          disabled={!canEditStatus}
-          onChange={(e) => onStatusChange(task, e.target.checked ? 'done' : 'todo')}
-          className="mt-1"
-        />
+        {/* Žádný checkbox – stav je v badge, akce v tlačítkách */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className={`font-medium text-sm ${isDone ? 'line-through text-slate-400' : 'text-slate-800'}`}>
+            {/* Velký, jasně viditelný status badge */}
+            <StatusBadge status={task.status} />
+            <span className={`font-medium text-sm ${isDone ? 'line-through text-ink-400' : 'text-ink-800'}`}>
               {task.title}
-            </span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_BADGE[task.status]}`}>
-              {STATUS_OPTIONS.find(o => o.value === task.status)?.label}
             </span>
             {task.priority !== 'normal' && (
               <span className={`text-[10px] font-bold ${PRIORITY_BADGE[task.priority]}`}>
@@ -379,60 +385,39 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
               </span>
             )}
             <QuestionBadge task={task} />
+            <AIEstimateBadge task={task} />
           </div>
-          <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+          <div className="text-xs text-ink-500 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
             {task.assignee_name && <span>👤 {task.assignee_name}</span>}
-            {task.due_date && <span>📅 {task.due_date}</span>}
-            {task.estimated_h && <span>⏱ odhad {task.estimated_h}h</span>}
+            {task.due_date && <span>📅 {fmtDate(task.due_date)}</span>}
+            {task.estimated_h && <span>⏱ ruční odhad {task.estimated_h}h</span>}
             {task.attachment_count > 0 && (
               <span className="text-brand-500 font-medium">📎 {task.attachment_count}</span>
             )}
           </div>
-          {/* Inline náhled příloh – jen když nějaké jsou */}
+          {/* Inline náhled příloh */}
           {task.attachment_count > 0 && (
             <div className="mt-2">
               <Attachments taskId={task.id} canEdit={false} compact />
             </div>
           )}
-        </div>
-        <div className="flex items-center gap-1 text-xs">
-          {/* Rychlé akční tlačítka pro stav (pro každého, kdo smí měnit stav) */}
-          {canEditStatus && !isDone && (
-            <>
-              {task.status === 'todo' && (
-                <button
-                  onClick={() => onStatusChange(task, 'in_progress')}
-                  className="px-2 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded font-medium"
-                  title="Začít pracovat"
-                >▶ Začít pracovat</button>
-              )}
-              <button
-                onClick={() => onStatusChange(task, 'done')}
-                className="px-2 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded font-medium"
-                title="Označit jako hotovo"
-              >✓ Hotovo</button>
-            </>
-          )}
-          {canEditStatus && isDone && (
+          {/* Akční tlačítka – ZMĚNA STAVU. Vizuálně oddělené od status badge výše. */}
+          <div className="mt-2 flex items-center gap-1 flex-wrap">
+            <StatusActions task={task} onChange={onStatusChange} canChange={canEditStatus} />
+            <span className="mx-1 text-ink-200">|</span>
             <button
-              onClick={() => onStatusChange(task, 'todo')}
-              className="px-2 py-1 text-slate-500 hover:bg-slate-100 border border-slate-200 rounded"
-              title="Vrátit do práce"
-            >↩ Vrátit</button>
-          )}
-          {/* Dotaz – kdokoli */}
-          <button
-            onClick={() => onAsk(task)}
-            className="px-2 py-1 text-slate-500 hover:text-brand-600 hover:bg-slate-50 rounded"
-            title="Přidat dotaz"
-          >💬</button>
-          {canEditFully && (
-            <>
-              <button onClick={() => onAddSubtask(task.id)} className="text-slate-400 hover:text-brand-600 px-1" title="Přidat podúkol">+ pod</button>
-              <button onClick={() => onEdit(task)} className="text-slate-400 hover:text-brand-600 px-1" title="Upravit">✎</button>
-              <button onClick={() => onDelete(task)} className="text-slate-400 hover:text-red-600 px-1" title="Smazat">🗑</button>
-            </>
-          )}
+              onClick={() => onAsk(task)}
+              className="px-2 py-1 text-xs text-ink-500 hover:text-brand-500 hover:bg-cream-50 rounded"
+              title="Přidat dotaz"
+            >💬 Dotaz</button>
+            {canEditFully && (
+              <>
+                <button onClick={() => onAddSubtask(task.id)} className="px-2 py-1 text-xs text-ink-400 hover:text-brand-500" title="Přidat podúkol">+ podúkol</button>
+                <button onClick={() => onEdit(task)} className="px-2 py-1 text-xs text-ink-400 hover:text-brand-500" title="Upravit">✎ Edit</button>
+                <button onClick={() => onDelete(task)} className="px-2 py-1 text-xs text-ink-400 hover:text-red-600" title="Smazat">🗑</button>
+              </>
+            )}
+          </div>
         </div>
       </div>
       {children.length > 0 && (

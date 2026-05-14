@@ -1,8 +1,44 @@
 import { Router } from 'express';
 import { query } from '../db.js';
 import { requireAuth, can } from '../auth.js';
+import { estimateTask, HAS_AI } from '../ai.js';
 
 const router = Router();
+
+// Spustí AI odhad na pozadí, výsledek uloží do tasks.
+// Fire-and-forget – nikdy nehází chybu nahoru.
+function kickoffAIEstimate(task) {
+  if (!HAS_AI) return;
+  // Označíme status jako pending, ať frontend ví, že běží
+  query(`UPDATE tasks SET ai_estimate_status = 'pending' WHERE id = $1`, [task.id]).catch(() => {});
+  // Spustíme async, neblokujeme response
+  setImmediate(async () => {
+    try {
+      const result = await estimateTask(task);
+      if (result.error) {
+        await query(
+          `UPDATE tasks SET ai_estimate_status = 'error', ai_estimate_note = $1, ai_estimate_at = NOW() WHERE id = $2`,
+          [String(result.message || result.error).slice(0, 300), task.id]
+        );
+        console.warn('[ai estimate]', task.id, result.error);
+        return;
+      }
+      await query(
+        `UPDATE tasks SET ai_estimated_h = $1, ai_estimate_note = $2,
+                          ai_estimate_status = 'done', ai_estimate_at = NOW()
+         WHERE id = $3`,
+        [result.estimated_h || null, result.note || null, task.id]
+      );
+      console.log(`[ai estimate] úkol #${task.id}: ${result.estimated_h}h – ${result.note}`);
+    } catch (err) {
+      console.error('[ai estimate] selhal:', err);
+      await query(
+        `UPDATE tasks SET ai_estimate_status = 'error', ai_estimate_at = NOW() WHERE id = $1`,
+        [task.id]
+      ).catch(() => {});
+    }
+  });
+}
 
 // Moje úkoly
 router.get('/mine', requireAuth, async (req, res) => {
@@ -53,7 +89,10 @@ router.post('/', requireAuth, async (req, res) => {
     assignee_id || null, status || 'todo', priority || 'normal',
     estimated_h || null, due_date || null,
   ]);
-  res.json({ task: r.rows[0] });
+  const task = r.rows[0];
+  // AI odhad na pozadí (neblokuje response)
+  kickoffAIEstimate(task);
+  res.json({ task });
 });
 
 // Update – ext.dev jen status na vlastním úkolu
@@ -81,7 +120,25 @@ router.put('/:id', requireAuth, async (req, res) => {
     RETURNING *
   `, [next.title, next.description, next.assignee_id, next.status,
       next.priority, next.estimated_h, next.due_date, next.parent_id, id]);
+
+  // Pokud se změnil název nebo popis, re-spustíme AI odhad
+  const titleChanged = req.body.title !== undefined && req.body.title !== cur.title;
+  const descChanged  = req.body.description !== undefined && req.body.description !== cur.description;
+  if (titleChanged || descChanged) {
+    kickoffAIEstimate(r.rows[0]);
+  }
+
   res.json({ task: r.rows[0] });
+});
+
+// Manuální spuštění AI odhadu pro konkrétní úkol
+router.post('/:id/estimate', requireAuth, async (req, res) => {
+  if (!can.createTasks(req.user)) return res.status(403).json({ error: 'forbidden' });
+  const id = Number(req.params.id);
+  const t = await query('SELECT * FROM tasks WHERE id = $1', [id]);
+  if (!t.rows[0]) return res.status(404).json({ error: 'not_found' });
+  kickoffAIEstimate(t.rows[0]);
+  res.json({ ok: true, status: 'pending' });
 });
 
 // Smazání

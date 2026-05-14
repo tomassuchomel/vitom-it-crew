@@ -2,15 +2,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
+import { StatusBadge, StatusActions, AIEstimateBadge, STATUS_META } from '../components/TaskStatus.jsx';
 import { tasks as tasksApi } from '../api.js';
 import { useAuth } from '../auth.jsx';
 
-const STATUS = {
-  todo:        { label: 'Čeká',     color: 'bg-cream-200 text-ink-600',         dot: 'bg-ink-400' },
-  in_progress: { label: 'V práci',  color: 'bg-blue-100 text-blue-700',         dot: 'bg-blue-500' },
-  review:      { label: 'Review',   color: 'bg-accent-100 text-accent-700',     dot: 'bg-accent-500' },
-  done:        { label: 'Hotovo',   color: 'bg-emerald-100 text-emerald-700',   dot: 'bg-emerald-500' },
-};
+// Alias pro zachování kompatibility se zbytkem souboru
+const STATUS = STATUS_META;
 const PIPELINE_ORDER = ['todo', 'in_progress', 'review', 'done'];
 
 const PRIORITY = {
@@ -127,38 +124,29 @@ function ListView({ tasks, filter, onStatusChange }) {
       <ul className="divide-y divide-cream-200">
         {tasks.map(t => (
           <li key={t.id} className="p-4 hover:bg-cream-50">
-            <div className="flex items-start gap-3">
-              <input
-                type="checkbox"
-                checked={t.status === 'done'}
-                onChange={(e) => onStatusChange(t, e.target.checked ? 'done' : 'todo')}
-                className="mt-1"
-              />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`font-medium ${t.status === 'done' ? 'line-through text-ink-400' : 'text-ink-800'}`}>
-                    {t.title}
-                  </span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS[t.status].color}`}>
-                    {STATUS[t.status].label}
-                  </span>
-                  {t.priority !== 'normal' && (
-                    <span className={`text-xs font-bold ${PRIORITY[t.priority].color}`}>
-                      {PRIORITY[t.priority].label}
-                    </span>
-                  )}
-                  <QuestionBadges task={t} />
-                </div>
-                {t.description && <div className="text-sm text-ink-600 mt-1">{t.description}</div>}
-                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-500 mt-1">
-                  <Link to={`/projects/${t.project_id}`} className="hover:text-brand-500">
-                    📁 {t.project_name}{t.project_client && ` · ${t.project_client}`}
-                  </Link>
-                  {t.due_date && <span>📅 {t.due_date}</span>}
-                  {t.estimated_h && <span>⏱ {t.estimated_h}h odhad</span>}
-                </div>
-              </div>
-              <ActionButtons task={t} onStatusChange={onStatusChange} />
+            <div className="flex items-center gap-2 flex-wrap">
+              <StatusBadge status={t.status} />
+              <span className={`font-medium ${t.status === 'done' ? 'line-through text-ink-400' : 'text-ink-800'}`}>
+                {t.title}
+              </span>
+              {t.priority !== 'normal' && (
+                <span className={`text-xs font-bold ${PRIORITY[t.priority].color}`}>
+                  {PRIORITY[t.priority].label}
+                </span>
+              )}
+              <QuestionBadges task={t} />
+              <AIEstimateBadge task={t} />
+            </div>
+            {t.description && <div className="text-sm text-ink-600 mt-1">{t.description}</div>}
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-500 mt-1">
+              <Link to={`/projects/${t.project_id}`} className="hover:text-brand-500">
+                📁 {t.project_name}{t.project_client && ` · ${t.project_client}`}
+              </Link>
+              {t.due_date && <span>📅 {String(t.due_date).slice(0, 10)}</span>}
+              {t.estimated_h && <span>⏱ ruční odhad {t.estimated_h}h</span>}
+            </div>
+            <div className="mt-2">
+              <StatusActions task={t} onChange={onStatusChange} />
             </div>
           </li>
         ))}
@@ -258,11 +246,14 @@ function PipelineCard({ task, isDragging, onDragStart, onDragEnd, onStatusChange
         isDragging ? 'opacity-30 rotate-1' : 'hover:shadow-md hover:border-cream-300'
       }`}
     >
-      {task.priority !== 'normal' && (
-        <div className={`text-[10px] font-bold mb-1 ${PRIORITY[task.priority].color}`}>
-          {PRIORITY[task.priority].label}
-        </div>
-      )}
+      <div className="flex items-center gap-1 mb-2">
+        <StatusBadge status={task.status} size="small" />
+        {task.priority !== 'normal' && (
+          <span className={`text-[10px] font-bold ${PRIORITY[task.priority].color}`}>
+            {PRIORITY[task.priority].label}
+          </span>
+        )}
+      </div>
       <div className={`text-sm font-medium ${task.status === 'done' ? 'line-through text-ink-400' : 'text-ink-800'}`}>
         {task.title}
       </div>
@@ -270,45 +261,19 @@ function PipelineCard({ task, isDragging, onDragStart, onDragEnd, onStatusChange
         📁 {task.project_name}
       </Link>
       <div className="flex flex-wrap gap-1 text-[10px] text-ink-500 mt-2">
-        {task.due_date && <span className="px-1.5 py-0.5 bg-cream-100 rounded">📅 {task.due_date}</span>}
+        {task.due_date && <span className="px-1.5 py-0.5 bg-cream-100 rounded">📅 {String(task.due_date).slice(0, 10)}</span>}
         {task.estimated_h && <span className="px-1.5 py-0.5 bg-cream-100 rounded">⏱ {task.estimated_h}h</span>}
+        <AIEstimateBadge task={task} />
       </div>
       <div className="flex justify-between items-center mt-2 pt-2 border-t border-cream-100">
         <QuestionBadges task={task} small />
-        <ActionButtons task={task} onStatusChange={onStatusChange} compact />
+        <StatusActions task={task} onChange={onStatusChange} compact />
       </div>
     </div>
   );
 }
 
 // ---------- Sdílené komponenty ----------
-function ActionButtons({ task, onStatusChange, compact = false }) {
-  const isDone = task.status === 'done';
-  if (isDone) {
-    return (
-      <button
-        onClick={() => onStatusChange(task, 'todo')}
-        className={`text-ink-500 hover:bg-cream-100 border border-cream-300 rounded ${compact ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-1 text-xs'}`}
-      >↩ Vrátit</button>
-    );
-  }
-  const sz = compact ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-1 text-xs';
-  return (
-    <div className="flex items-center gap-1">
-      {task.status === 'todo' && (
-        <button
-          onClick={() => onStatusChange(task, 'in_progress')}
-          className={`bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded font-medium ${sz}`}
-        >▶ {compact ? 'Začít' : 'Začít pracovat'}</button>
-      )}
-      <button
-        onClick={() => onStatusChange(task, 'done')}
-        className={`bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded font-medium ${sz}`}
-      >✓ Hotovo</button>
-    </div>
-  );
-}
-
 function QuestionBadges({ task, small = false }) {
   const sz = small ? 'text-[9px]' : 'text-xs';
   if (task.pending_questions_for_me > 0) {

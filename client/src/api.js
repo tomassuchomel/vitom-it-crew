@@ -30,6 +30,7 @@ export const tasks = {
   create:  (data) => api.post('/tasks', data).then(r => r.data),
   update:  (id, data) => api.put(`/tasks/${id}`, data).then(r => r.data),
   remove:  (id) => api.delete(`/tasks/${id}`).then(r => r.data),
+  estimate:(id) => api.post(`/tasks/${id}/estimate`).then(r => r.data),
 };
 
 export const questions = {

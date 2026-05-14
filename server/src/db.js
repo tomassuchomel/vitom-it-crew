@@ -130,6 +130,27 @@ export async function migrate() {
     CREATE INDEX IF NOT EXISTS idx_q_task        ON questions(task_id);
     CREATE INDEX IF NOT EXISTS idx_att_task      ON attachments(task_id);
     CREATE INDEX IF NOT EXISTS idx_pe_project    ON project_edits(project_id, created_at DESC);
+
+    -- AI odhad času úkolu (idempotentní ALTER pro starší DB)
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='tasks' AND column_name='ai_estimated_h') THEN
+        ALTER TABLE tasks ADD COLUMN ai_estimated_h REAL;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='tasks' AND column_name='ai_estimate_note') THEN
+        ALTER TABLE tasks ADD COLUMN ai_estimate_note TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='tasks' AND column_name='ai_estimate_status') THEN
+        -- 'idle' | 'pending' | 'done' | 'error'
+        ALTER TABLE tasks ADD COLUMN ai_estimate_status TEXT DEFAULT 'idle';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='tasks' AND column_name='ai_estimate_at') THEN
+        ALTER TABLE tasks ADD COLUMN ai_estimate_at TIMESTAMPTZ;
+      END IF;
+    END $$;
   `);
   console.log('[db] PostgreSQL schéma připraveno');
 }
