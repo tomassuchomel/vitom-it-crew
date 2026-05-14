@@ -58,7 +58,7 @@ router.get('/projects-cost', requireAuth, async (req, res) => {
   if (!can.seeCosts(req.user)) return res.status(403).json({ error: 'forbidden' });
   const r = await query(`
     SELECT
-      p.id, p.name, p.client, p.budget, p.status, p.start_date, p.due_date,
+      p.id, p.name, p.budget, p.status, p.start_date, p.due_date,
       COALESCE(SUM(te.hours), 0) AS hours,
       COALESCE(SUM(te.hours * u.hourly_rate), 0) AS cost
     FROM projects p

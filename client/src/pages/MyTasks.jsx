@@ -184,7 +184,7 @@ function ListView({ tasks, filter, onStatusChange, onOpen }) {
             </div>
             {t.description && <div className="text-sm text-ink-600 mt-1 line-clamp-2">{t.description}</div>}
             <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-500 mt-1">
-              <span>📁 {t.project_name}{t.project_client && ` · ${t.project_client}`}</span>
+              <span>📁 {t.project_name}</span>
               {t.due_date && <span>📅 {String(t.due_date).slice(0, 10)}</span>}
               {t.estimated_h && <span>⏱ ruční odhad {t.estimated_h}h</span>}
             </div>

@@ -154,7 +154,6 @@ export default function Reports() {
             <thead className="text-xs uppercase text-slate-500 tracking-wide border-b border-slate-200">
               <tr>
                 <th className="text-left py-2">Projekt</th>
-                <th className="text-left py-2">Klient</th>
                 <th className="text-right py-2">Hodin</th>
                 <th className="text-right py-2">Náklady</th>
                 <th className="text-right py-2">Rozpočet</th>
@@ -168,7 +167,6 @@ export default function Reports() {
                 return (
                   <tr key={p.id} className="border-b border-slate-100 last:border-0">
                     <td className="py-2 font-medium">{p.name}</td>
-                    <td className="py-2 text-slate-600">{p.client || '—'}</td>
                     <td className="py-2 text-right">{p.hours.toFixed(1)}</td>
                     <td className="py-2 text-right">{Math.round(p.cost).toLocaleString('cs-CZ')} Kč</td>
                     <td className="py-2 text-right text-slate-600">{p.budget ? `${Number(p.budget).toLocaleString('cs-CZ')} Kč` : '—'}</td>

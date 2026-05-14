@@ -5,11 +5,11 @@ import { requireAuth, can } from '../auth.js';
 const router = Router();
 
 // Pole, která logujeme do audit logu (PUT). Manager_id je číslo, name jmenné mapování níže.
-const TRACKED_FIELDS = ['name', 'description', 'client', 'start_date', 'due_date', 'status', 'manager_id', 'budget'];
+const TRACKED_FIELDS = ['name', 'description', 'start_date', 'due_date', 'status', 'manager_id', 'budget'];
 
 // Human-readable popisky polí (pro audit log v UI)
 const FIELD_LABELS = {
-  name: 'Název', description: 'Popis', client: 'Klient',
+  name: 'Název', description: 'Popis',
   start_date: 'Začátek', due_date: 'Termín', status: 'Stav',
   manager_id: 'Manager', budget: 'Rozpočet',
 };
@@ -83,13 +83,13 @@ router.get('/:id/edits', requireAuth, async (req, res) => {
 // Vytvoření – admin/manager
 router.post('/', requireAuth, async (req, res) => {
   if (!can.manageProjects(req.user)) return res.status(403).json({ error: 'forbidden' });
-  const { name, description, client, start_date, due_date, manager_id, budget } = req.body || {};
+  const { name, description, start_date, due_date, manager_id, budget } = req.body || {};
   if (!name || !start_date || !due_date) return res.status(400).json({ error: 'missing_fields' });
   const r = await query(`
-    INSERT INTO projects (name, description, client, start_date, due_date, manager_id, budget)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO projects (name, description, start_date, due_date, manager_id, budget)
+    VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING *
-  `, [name, description || null, client || null, start_date, due_date, manager_id || req.user.id, budget || null]);
+  `, [name, description || null, start_date, due_date, manager_id || req.user.id, budget || null]);
   const project = r.rows[0];
   // log create
   await query(`INSERT INTO project_edits (project_id, user_id, action, note) VALUES ($1, $2, 'create', $3)`,
@@ -130,11 +130,11 @@ router.put('/:id', requireAuth, async (req, res) => {
   // Update v DB
   const r = await query(`
     UPDATE projects SET
-      name = $1, description = $2, client = $3, start_date = $4, due_date = $5,
-      status = $6, manager_id = $7, budget = $8
-    WHERE id = $9
+      name = $1, description = $2, start_date = $3, due_date = $4,
+      status = $5, manager_id = $6, budget = $7
+    WHERE id = $8
     RETURNING *
-  `, [next.name, next.description, next.client, next.start_date, next.due_date,
+  `, [next.name, next.description, next.start_date, next.due_date,
       next.status, next.manager_id, next.budget, id]);
 
   // Log každé změny zvlášť

@@ -239,7 +239,7 @@ function ProjectLabel({ project }) {
   return (
     <Link to={`/projects/${project.id}`} className="block px-4 py-3 text-sm border-b border-cream-100 hover:bg-cream-100 transition" style={{ height: 64 }}>
       <div className="font-medium text-ink-800 truncate">{project.name}</div>
-      <div className="text-xs text-ink-500 truncate">{project.client || '—'}</div>
+      <div className="text-xs text-ink-500 truncate">{project.manager_name || '—'}</div>
       {!isDone ? (
         <div className={`text-[10px] font-semibold mt-0.5 ${cd.overdue ? 'text-red-600' : cd.days <= 3 ? 'text-red-500' : cd.days <= 7 ? 'text-accent-600' : 'text-emerald-600'}`}>
           {cd.overdue ? '⚠ ' : '⏱ '}{cd.text}

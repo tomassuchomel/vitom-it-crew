@@ -51,7 +51,6 @@ export default function ProjectsList() {
                 {STATUS_LABEL[p.status]}
               </span>
             </div>
-            {p.client && <div className="text-xs text-slate-500 mb-3">{p.client}</div>}
             <div className="text-xs text-slate-600 space-y-1">
               <div className="flex justify-between"><span>Termín</span><span className="font-medium">{p.due_date}</span></div>
               <div className="flex justify-between"><span>Úkoly</span><span className="font-medium">{p.done_count} / {p.task_count}</span></div>
@@ -85,7 +84,7 @@ export default function ProjectsList() {
 }
 
 function CreateProjectModal({ open, onClose, users, onCreated }) {
-  const [form, setForm] = useState({ name: '', client: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '' });
+  const [form, setForm] = useState({ name: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '' });
   const [err, setErr] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -99,7 +98,7 @@ function CreateProjectModal({ open, onClose, users, onCreated }) {
         budget: form.budget ? Number(form.budget) : null,
       });
       onCreated();
-      setForm({ name: '', client: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '' });
+      setForm({ name: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '' });
     } catch (e) { setErr(e.response?.data?.error || 'Uložení selhalo'); }
     finally { setSaving(false); }
   };
@@ -114,7 +113,6 @@ function CreateProjectModal({ open, onClose, users, onCreated }) {
       </>}>
       <form onSubmit={submit} className="space-y-3 text-sm">
         <Input label="Název *" value={form.name} onChange={v => setForm({ ...form, name: v })} required />
-        <Input label="Klient" value={form.client} onChange={v => setForm({ ...form, client: v })} />
         <Textarea label="Popis" value={form.description} onChange={v => setForm({ ...form, description: v })} />
         <div className="grid grid-cols-2 gap-3">
           <Input label="Začátek *" type="date" value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} required />

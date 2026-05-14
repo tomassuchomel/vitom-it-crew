@@ -59,7 +59,6 @@ router.get('/mine', requireAuth, async (req, res) => {
   const r = await query(`
     SELECT t.*,
       p.name AS project_name,
-      p.client AS project_client,
       p.due_date AS project_due_date,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.to_user_id = $1 AND q.status = 'pending') AS pending_questions_for_me,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,

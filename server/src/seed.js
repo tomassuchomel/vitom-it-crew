@@ -43,19 +43,19 @@ export async function seedDatabase({ wipe = true } = {}) {
   const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 
   const projects = [
-    { name: 'E-shop pro klienta A',     description: 'Redesign a nová logika košíku, integrace s ERP.',
-      client: 'Klient A s.r.o.',  start: addDays(today, -20), due: addDays(today,  25), budget: 250000 },
-    { name: 'Interní CRM',              description: 'Modul reportů a notifikací nad existujícím CRM.',
-      client: 'Vitom (interní)',  start: addDays(today, -10), due: addDays(today,  40), budget: 180000 },
-    { name: 'Mobilní aplikace klient B',description: 'iOS + Android aplikace pro objednávkový systém.',
-      client: 'Klient B a.s.',    start: addDays(today,   5), due: addDays(today,  90), budget: 420000 },
+    { name: 'E-shop',          description: 'Redesign a nová logika košíku, integrace s ERP.',
+      start: addDays(today, -20), due: addDays(today,  25), budget: 250000 },
+    { name: 'Interní CRM',     description: 'Modul reportů a notifikací nad existujícím CRM.',
+      start: addDays(today, -10), due: addDays(today,  40), budget: 180000 },
+    { name: 'Mobilní aplikace',description: 'iOS + Android aplikace pro objednávkový systém.',
+      start: addDays(today,   5), due: addDays(today,  90), budget: 420000 },
   ];
   const projectIds = [];
   for (const p of projects) {
     const r = await query(`
-      INSERT INTO projects (name, description, client, start_date, due_date, manager_id, budget)
-      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id
-    `, [p.name, p.description, p.client, iso(p.start), iso(p.due), userIds.manager, p.budget]);
+      INSERT INTO projects (name, description, start_date, due_date, manager_id, budget)
+      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+    `, [p.name, p.description, iso(p.start), iso(p.due), userIds.manager, p.budget]);
     projectIds.push(r.rows[0].id);
   }
   console.log(`[seed] vloženo ${projects.length} projektů`);

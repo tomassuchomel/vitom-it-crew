@@ -72,7 +72,7 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
             <div className="text-xs text-ink-500 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
               {task.project_name && (
                 <Link to={`/projects/${task.project_id}`} className="hover:text-brand-500" onClick={onClose}>
-                  📁 {task.project_name}{task.project_client && ` · ${task.project_client}`}
+                  📁 {task.project_name}
                 </Link>
               )}
               {task.due_date && <span>📅 {String(task.due_date).slice(0, 10)}</span>}

@@ -113,7 +113,7 @@ export default function ProjectDetail() {
     <div>
       <PageHeader
         title={project.name}
-        subtitle={`${project.client || 'Bez klienta'} · ${fmtDate(project.start_date)} → ${fmtDate(project.due_date)}`}
+        subtitle={`${fmtDate(project.start_date)} → ${fmtDate(project.due_date)}`}
         actions={
           <div className="flex items-center gap-2">
             {can.manageProjects(user) && (
@@ -240,7 +240,7 @@ export default function ProjectDetail() {
 // ---------- Edit Project Modal ----------
 function EditProjectModal({ open, onClose, project, users, onSaved }) {
   const [form, setForm] = useState({
-    name: '', client: '', description: '',
+    name: '', description: '',
     start_date: '', due_date: '',
     status: 'active', manager_id: '', budget: '',
   });
@@ -251,7 +251,6 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
     if (open && project) {
       setForm({
         name: project.name || '',
-        client: project.client || '',
         description: project.description || '',
         start_date: fmtDate(project.start_date),
         due_date: fmtDate(project.due_date),
@@ -290,7 +289,6 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
       </>}>
       <form onSubmit={submit} className="space-y-3 text-sm">
         <Input label="Název *" value={form.name} onChange={v => setForm({ ...form, name: v })} required />
-        <Input label="Klient" value={form.client} onChange={v => setForm({ ...form, client: v })} />
         <Textarea label="Popis" value={form.description} onChange={v => setForm({ ...form, description: v })} />
         <div className="grid grid-cols-2 gap-3">
           <Input label="Začátek *" type="date" value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} required />

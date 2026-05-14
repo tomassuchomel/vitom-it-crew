@@ -49,7 +49,6 @@ export async function migrate() {
       id            SERIAL PRIMARY KEY,
       name          TEXT NOT NULL,
       description   TEXT,
-      client        TEXT,
       start_date    DATE NOT NULL,
       due_date      DATE NOT NULL,
       status        TEXT NOT NULL DEFAULT 'active'
@@ -153,6 +152,14 @@ export async function migrate() {
       IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                      WHERE table_name='tasks' AND column_name='ai_estimate_at') THEN
         ALTER TABLE tasks ADD COLUMN ai_estimate_at TIMESTAMPTZ;
+      END IF;
+    END $$;
+
+    -- Odstranění už nepotřebného sloupce client u projektů (stavíme si sami pro sebe)
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='projects' AND column_name='client') THEN
+        ALTER TABLE projects DROP COLUMN client;
       END IF;
     END $$;
 
