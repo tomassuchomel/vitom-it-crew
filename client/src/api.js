@@ -13,6 +13,9 @@ export const auth = {
   config:    () => api.get('/auth/config').then(r => r.data),
   devUsers:  () => api.get('/auth/dev-users').then(r => r.data),
   devLogin:  (userId) => api.post('/auth/dev-login', { userId }).then(r => r.data),
+  login:     (email, password) => api.post('/auth/login', { email, password }).then(r => r.data),
+  changePassword: (currentPassword, newPassword) =>
+    api.post('/auth/change-password', { currentPassword, newPassword }).then(r => r.data),
   logout:    () => api.post('/auth/logout').then(r => r.data),
 };
 
@@ -72,6 +75,22 @@ export const users = {
   list:    () => api.get('/users').then(r => r.data),
   create:  (data) => api.post('/users', data).then(r => r.data),
   update:  (id, data) => api.put(`/users/${id}`, data).then(r => r.data),
+  remove:  (id) => api.delete(`/users/${id}`).then(r => r.data),
+  updateMe: (data) => api.put('/users/me', data).then(r => r.data),
+  uploadAvatar: (file) => {
+    const fd = new FormData();
+    fd.append('avatar', file);
+    return api.post('/users/me/avatar', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data);
+  },
+  removeAvatar: () => api.delete('/users/me/avatar').then(r => r.data),
+  resetPassword: (id) => api.post(`/users/${id}/reset-password`).then(r => r.data),
+  avatarUrl: (user) => {
+    if (!user?.id) return null;
+    const v = user.avatar_updated_at ? new Date(user.avatar_updated_at).getTime() : (user.id || 0);
+    return `/api/users/${user.id}/avatar?v=${v}`;
+  },
 };
 
 export const reports = {

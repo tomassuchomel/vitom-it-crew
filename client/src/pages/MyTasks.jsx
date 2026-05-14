@@ -1,12 +1,13 @@
-// Moje úkoly – přepínání List / Pipeline (Kanban) view
+// Moje úkoly – hlavní pracovní prostor uživatele.
+// Kliknutí na úkol otevře plný TaskDetailModal (editace, status, poznámka, přílohy, dotazy).
+// Stránka Projekty je pak jen "big picture" a kliknutí v MyTasks nás tam nepřesměrovává.
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
+import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge, STATUS_META } from '../components/TaskStatus.jsx';
 import { tasks as tasksApi } from '../api.js';
 import { useAuth } from '../auth.jsx';
 
-// Alias pro zachování kompatibility se zbytkem souboru
 const STATUS = STATUS_META;
 const PIPELINE_ORDER = ['todo', 'in_progress', 'review', 'done'];
 
@@ -18,7 +19,7 @@ const PRIORITY = {
 };
 
 const STATUS_TABS = [
-  { value: '',           label: 'Vše' },
+  { value: 'all',        label: 'Vše' },
   { value: 'todo',       label: 'Čeká' },
   { value: 'in_progress',label: 'V práci' },
   { value: 'review',     label: 'Review' },
@@ -29,22 +30,34 @@ export default function MyTasks() {
   const { user } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('');
+  const [filter, setFilter] = useState('all');
   const [view, setView] = useState(() => localStorage.getItem('myTasks.view') || 'list');
+  const [detailTaskId, setDetailTaskId] = useState(null);
 
   useEffect(() => {
     localStorage.setItem('myTasks.view', view);
   }, [view]);
 
+  // Načteme vždy všechny úkoly přiřazené mně – filtr aplikujeme čistě na klientu.
+  // To zabraňuje dřívějšímu bugu, kdy se filtr na backend zaměňoval s view a nepřepočítával se UI.
   const load = () => {
     setLoading(true);
-    // V Pipeline pohledu chceme všechny stavy najednou (nezávisle na filtru)
-    const params = (view === 'list' && filter) ? { status: filter } : {};
-    tasksApi.mine(params)
+    tasksApi.mine()
       .then(d => setTasks(d.tasks))
       .finally(() => setLoading(false));
   };
-  useEffect(load, [filter, view]);
+  useEffect(load, []);
+
+  const filteredTasks = useMemo(() => {
+    if (view === 'pipeline' || filter === 'all') return tasks;
+    return tasks.filter(t => t.status === filter);
+  }, [tasks, filter, view]);
+
+  const counts = useMemo(() => {
+    const c = { all: tasks.length, todo: 0, in_progress: 0, review: 0, done: 0 };
+    for (const t of tasks) { if (c[t.status] !== undefined) c[t.status]++; }
+    return c;
+  }, [tasks]);
 
   const handleStatusChange = async (task, status) => {
     // Optimistic update – ihned přesune kartu, pak refetch
@@ -56,28 +69,36 @@ export default function MyTasks() {
     }
   };
 
+  const detailTask = useMemo(
+    () => tasks.find(t => t.id === detailTaskId) || null,
+    [detailTaskId, tasks]
+  );
+
   return (
     <div>
       <PageHeader
         title="Moje úkoly"
-        subtitle={`Úkoly přiřazené ${user.name}`}
-        actions={
-          <ViewSwitcher value={view} onChange={setView} />
-        }
+        subtitle={`Úkoly přiřazené ${user.name} – tvůj hlavní pracovní prostor`}
+        actions={<ViewSwitcher value={view} onChange={setView} />}
       />
 
       <div className="p-8 space-y-4">
         {/* Filtry – jen v list view */}
         {view === 'list' && (
-          <div className="flex gap-1 bg-white rounded-xl border border-cream-200 p-1 w-fit">
+          <div className="flex gap-1 bg-white rounded-xl border border-cream-200 p-1 w-fit flex-wrap">
             {STATUS_TABS.map(t => (
               <button
                 key={t.value}
                 onClick={() => setFilter(t.value)}
-                className={`px-3 py-1.5 text-sm rounded-lg transition ${
+                className={`px-3 py-1.5 text-sm rounded-lg transition flex items-center gap-1.5 ${
                   filter === t.value ? 'bg-brand-500 text-white' : 'hover:bg-cream-100 text-ink-600'
                 }`}
-              >{t.label}</button>
+              >
+                <span>{t.label}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                  filter === t.value ? 'bg-white/20 text-white' : 'bg-cream-200 text-ink-500'
+                }`}>{counts[t.value] || 0}</span>
+              </button>
             ))}
           </div>
         )}
@@ -85,11 +106,28 @@ export default function MyTasks() {
         {loading ? (
           <div className="bg-white rounded-xl border border-cream-200 p-6 text-center text-ink-400">Načítám…</div>
         ) : view === 'list' ? (
-          <ListView tasks={tasks} filter={filter} onStatusChange={handleStatusChange} />
+          <ListView
+            tasks={filteredTasks}
+            filter={filter}
+            onStatusChange={handleStatusChange}
+            onOpen={(t) => setDetailTaskId(t.id)}
+          />
         ) : (
-          <PipelineView tasks={tasks} onStatusChange={handleStatusChange} />
+          <PipelineView
+            tasks={tasks}
+            onStatusChange={handleStatusChange}
+            onOpen={(t) => setDetailTaskId(t.id)}
+          />
         )}
       </div>
+
+      {detailTask && (
+        <TaskDetailModal
+          task={detailTask}
+          onClose={() => setDetailTaskId(null)}
+          onChanged={load}
+        />
+      )}
     </div>
   );
 }
@@ -111,11 +149,11 @@ function ViewSwitcher({ value, onChange }) {
 }
 
 // ---------- LIST VIEW ----------
-function ListView({ tasks, filter, onStatusChange }) {
+function ListView({ tasks, filter, onStatusChange, onOpen }) {
   if (tasks.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-cream-200 p-10 text-center text-ink-400">
-        {filter ? 'V této kategorii nic nemáš.' : 'Zatím žádné přiřazené úkoly.'}
+        {filter && filter !== 'all' ? 'V této kategorii nic nemáš.' : 'Zatím žádné přiřazené úkoly.'}
       </div>
     );
   }
@@ -123,7 +161,11 @@ function ListView({ tasks, filter, onStatusChange }) {
     <div className="bg-white rounded-xl border border-cream-200 overflow-hidden">
       <ul className="divide-y divide-cream-200">
         {tasks.map(t => (
-          <li key={t.id} className="p-4 hover:bg-cream-50">
+          <li
+            key={t.id}
+            onClick={() => onOpen(t)}
+            className="p-4 hover:bg-cream-50 cursor-pointer transition"
+          >
             <div className="flex items-center gap-2 flex-wrap">
               <StatusBadge status={t.status} />
               <span className={`font-medium ${t.status === 'done' ? 'line-through text-ink-400' : 'text-ink-800'}`}>
@@ -136,16 +178,18 @@ function ListView({ tasks, filter, onStatusChange }) {
               )}
               <QuestionBadges task={t} />
               <AIEstimateBadge task={t} />
+              {t.attachment_count > 0 && (
+                <span className="text-xs text-brand-500 font-medium">📎 {t.attachment_count}</span>
+              )}
             </div>
-            {t.description && <div className="text-sm text-ink-600 mt-1">{t.description}</div>}
+            {t.description && <div className="text-sm text-ink-600 mt-1 line-clamp-2">{t.description}</div>}
             <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-500 mt-1">
-              <Link to={`/projects/${t.project_id}`} className="hover:text-brand-500">
-                📁 {t.project_name}{t.project_client && ` · ${t.project_client}`}
-              </Link>
+              <span>📁 {t.project_name}{t.project_client && ` · ${t.project_client}`}</span>
               {t.due_date && <span>📅 {String(t.due_date).slice(0, 10)}</span>}
               {t.estimated_h && <span>⏱ ruční odhad {t.estimated_h}h</span>}
             </div>
-            <div className="mt-2">
+            {/* Akce stavu – aby se kliknutí nepropagovalo do otevření detailu */}
+            <div className="mt-2" onClick={(e) => e.stopPropagation()}>
               <StatusActions task={t} onChange={onStatusChange} />
             </div>
           </li>
@@ -156,7 +200,7 @@ function ListView({ tasks, filter, onStatusChange }) {
 }
 
 // ---------- PIPELINE VIEW ----------
-function PipelineView({ tasks, onStatusChange }) {
+function PipelineView({ tasks, onStatusChange, onOpen }) {
   const [dragId, setDragId] = useState(null);
 
   const grouped = useMemo(() => {
@@ -193,13 +237,14 @@ function PipelineView({ tasks, onStatusChange }) {
           onDrop={onDropIntoColumn}
           dragId={dragId}
           onStatusChange={onStatusChange}
+          onOpen={onOpen}
         />
       ))}
     </div>
   );
 }
 
-function Column({ statusKey, tasks, onDragStart, onDragEnd, onDrop, dragId, onStatusChange }) {
+function Column({ statusKey, tasks, onDragStart, onDragEnd, onDrop, dragId, onStatusChange, onOpen }) {
   const [over, setOver] = useState(false);
   const status = STATUS[statusKey];
   return (
@@ -228,6 +273,7 @@ function Column({ statusKey, tasks, onDragStart, onDragEnd, onDrop, dragId, onSt
               onDragStart={onDragStart}
               onDragEnd={onDragEnd}
               onStatusChange={onStatusChange}
+              onOpen={onOpen}
             />
           ))
         )}
@@ -236,13 +282,14 @@ function Column({ statusKey, tasks, onDragStart, onDragEnd, onDrop, dragId, onSt
   );
 }
 
-function PipelineCard({ task, isDragging, onDragStart, onDragEnd, onStatusChange }) {
+function PipelineCard({ task, isDragging, onDragStart, onDragEnd, onStatusChange, onOpen }) {
   return (
     <div
       draggable
       onDragStart={(e) => onDragStart(e, task)}
       onDragEnd={onDragEnd}
-      className={`bg-white rounded-lg p-3 border border-cream-200 shadow-sm cursor-grab active:cursor-grabbing transition ${
+      onClick={() => onOpen(task)}
+      className={`bg-white rounded-lg p-3 border border-cream-200 shadow-sm cursor-pointer transition ${
         isDragging ? 'opacity-30 rotate-1' : 'hover:shadow-md hover:border-cream-300'
       }`}
     >
@@ -257,15 +304,16 @@ function PipelineCard({ task, isDragging, onDragStart, onDragEnd, onStatusChange
       <div className={`text-sm font-medium ${task.status === 'done' ? 'line-through text-ink-400' : 'text-ink-800'}`}>
         {task.title}
       </div>
-      <Link to={`/projects/${task.project_id}`} className="text-xs text-ink-500 hover:text-brand-500 block mt-1 truncate">
+      <div className="text-xs text-ink-500 block mt-1 truncate">
         📁 {task.project_name}
-      </Link>
+      </div>
       <div className="flex flex-wrap gap-1 text-[10px] text-ink-500 mt-2">
         {task.due_date && <span className="px-1.5 py-0.5 bg-cream-100 rounded">📅 {String(task.due_date).slice(0, 10)}</span>}
         {task.estimated_h && <span className="px-1.5 py-0.5 bg-cream-100 rounded">⏱ {task.estimated_h}h</span>}
+        {task.attachment_count > 0 && <span className="px-1.5 py-0.5 bg-brand-50 text-brand-600 rounded">📎 {task.attachment_count}</span>}
         <AIEstimateBadge task={task} />
       </div>
-      <div className="flex justify-between items-center mt-2 pt-2 border-t border-cream-100">
+      <div className="flex justify-between items-center mt-2 pt-2 border-t border-cream-100" onClick={(e) => e.stopPropagation()}>
         <QuestionBadges task={task} small />
         <StatusActions task={task} onChange={onStatusChange} compact />
       </div>
@@ -278,25 +326,24 @@ function QuestionBadges({ task, small = false }) {
   const sz = small ? 'text-[9px]' : 'text-xs';
   if (task.pending_questions_for_me > 0) {
     return (
-      <Link
-        to="/questions"
+      <span
         className={`px-2 py-0.5 bg-red-100 text-red-700 rounded font-semibold ${sz}`}
         title="Někdo se tě ptá"
-      >💬 {task.pending_questions_for_me} pro mě</Link>
+      >💬 {task.pending_questions_for_me} pro mě</span>
     );
   }
   if (task.pending_q > 0) {
     return (
-      <Link to="/questions?box=sent" className={`px-2 py-0.5 bg-amber-100 text-amber-700 rounded font-semibold ${sz}`}>
+      <span className={`px-2 py-0.5 bg-amber-100 text-amber-700 rounded font-semibold ${sz}`}>
         💬 {task.pending_q} čeká
-      </Link>
+      </span>
     );
   }
   if (task.answered_q > 0) {
     return (
-      <Link to="/questions?box=sent" className={`px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded ${sz}`}>
+      <span className={`px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded ${sz}`}>
         💬 {task.answered_q} ✓
-      </Link>
+      </span>
     );
   }
   return null;

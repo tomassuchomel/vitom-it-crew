@@ -1,0 +1,30 @@
+# Závislosti
+node_modules/
+
+# Environment / tajemství
+.env
+.env.local
+.env.*.local
+server/.env
+client/.env
+
+# Build artefakty
+client/dist/
+server/dist/
+
+# SQLite (staré, nepoužívá se)
+server/data/*.db
+server/data/*.db-*
+server/data/uploads/
+
+# Logy
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# macOS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -15,14 +15,35 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false));
   }, []);
 
+  const refreshMe = async () => {
+    try {
+      const d = await authApi.me();
+      setUser(d.user);
+      return d.user;
+    } catch {
+      setUser(null);
+      return null;
+    }
+  };
+
   const value = {
     user,
     loading,
     setUser,
+    refreshMe,
+    login: async (email, password) => {
+      const d = await authApi.login(email, password);
+      setUser(d.user);
+      return d.user;
+    },
     devLogin: async (userId) => {
       const d = await authApi.devLogin(userId);
       setUser(d.user);
       return d.user;
+    },
+    changePassword: async (currentPassword, newPassword) => {
+      await authApi.changePassword(currentPassword, newPassword);
+      await refreshMe();
     },
     logout: async () => {
       await authApi.logout();
@@ -46,6 +67,7 @@ export const can = {
   seeAllHours:    (u) => u && ['admin', 'manager'].includes(u.role),
   seeCosts:       (u) => u && ['admin', 'manager'].includes(u.role),
   manageUsers:    (u) => u && u.role === 'admin',
+  deleteUsers:    (u) => u && ['admin', 'manager'].includes(u.role),
 };
 
 export const ROLE_LABELS = {

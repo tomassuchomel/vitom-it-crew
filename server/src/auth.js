@@ -24,7 +24,9 @@ export async function requireAuth(req, res, next) {
     const payload = jwt.verify(token, JWT_SECRET);
     // čerstvá data uživatele z DB
     const r = await query(
-      'SELECT id, email, name, role, hourly_rate, active FROM users WHERE id = $1',
+      `SELECT id, email, name, first_name, last_name, role, hourly_rate, active,
+              must_change_password, avatar_updated_at
+       FROM users WHERE id = $1`,
       [payload.id]
     );
     const user = r.rows[0];

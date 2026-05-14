@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 
-import { migrate } from './db.js';
+import { migrate, backfillAuth } from './db.js';
 import { autoSeedIfEmpty } from './seed.js';
 import { passport, HAS_GOOGLE } from './auth.js';
 
@@ -83,6 +83,8 @@ async function start() {
     if (process.env.DISABLE_AUTOSEED !== '1') {
       await autoSeedIfEmpty();
     }
+    // Backfill hesel + jmen pro existující uživatele (idempotentní)
+    await backfillAuth();
   } catch (err) {
     console.error('[server] Migrace/seed selhala:', err.message);
     process.exit(1);

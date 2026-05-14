@@ -19,13 +19,18 @@ const SELECT_FULL = `
 `;
 
 // Seznam dotazů
+// Pokud je zadáno ?taskId=, vrátíme všechny dotazy navázané na ten úkol (bez ohledu na box).
 router.get('/', requireAuth, async (req, res) => {
+  const taskId = req.query.taskId ? Number(req.query.taskId) : null;
   const box = req.query.box || 'mine';
   const status = req.query.status;
   const filters = [];
   const params = [];
 
-  if (box === 'mine') {
+  if (taskId) {
+    params.push(taskId);
+    filters.push(`q.task_id = $${params.length}`);
+  } else if (box === 'mine') {
     params.push(req.user.id, req.user.id);
     filters.push(`(q.to_user_id = $${params.length - 1} OR q.from_user_id = $${params.length})`);
   } else if (box === 'inbox') {

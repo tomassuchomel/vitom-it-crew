@@ -1,6 +1,7 @@
 // Denní zápis hodin – formulář na vrchu, historie pod tím
 import { useEffect, useMemo, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
+import Avatar from '../components/Avatar.jsx';
 import { Input, Textarea, Select } from './ProjectsList.jsx';
 import { time as timeApi, projects as projectsApi, users as usersApi } from '../api.js';
 import { useAuth, can } from '../auth.jsx';
@@ -96,7 +97,14 @@ export default function TimeTracking() {
               ) : entries.map(e => (
                 <tr key={e.id} className="hover:bg-slate-50">
                   <td className="px-4 py-2.5 whitespace-nowrap">{e.date}</td>
-                  {can.seeAllHours(user) && <td className="px-4 py-2.5">{e.user_name}</td>}
+                  {can.seeAllHours(user) && (
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <Avatar user={{ id: e.user_id, name: e.user_name }} size={24} />
+                        <span>{e.user_name}</span>
+                      </div>
+                    </td>
+                  )}
                   <td className="px-4 py-2.5">{e.project_name}</td>
                   <td className="px-4 py-2.5 text-slate-600">{e.description || '—'}</td>
                   <td className="px-4 py-2.5 text-right font-medium">{e.hours.toFixed(1)}</td>

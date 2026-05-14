@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import Modal from '../components/Modal.jsx';
+import Avatar from '../components/Avatar.jsx';
 import AskQuestionModal from '../components/AskQuestionModal.jsx';
 import Attachments from '../components/Attachments.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge } from '../components/TaskStatus.jsx';
@@ -41,6 +42,7 @@ const PRIORITY_BADGE = {
 
 export default function ProjectDetail() {
   const { id } = useParams();
+  const nav = useNavigate();
   const { user } = useAuth();
   const [data, setData] = useState(null);
   const [users, setUsers] = useState([]);
@@ -96,6 +98,16 @@ export default function ProjectDetail() {
     await tasksApi.remove(task.id);
     load();
   };
+  const handleDeleteProject = async () => {
+    const msg = `Opravdu smazat projekt „${data.project.name}"?\n\nTato akce je nevratná. Smaže se i:\n• všechny úkoly (${tasks.length}) a jejich podúkoly\n• všechny dotazy a přílohy spojené s tímto projektem\n• zápisy hodin na tento projekt\n• historie změn projektu`;
+    if (!confirm(msg)) return;
+    try {
+      await projectsApi.remove(data.project.id);
+      nav('/projects');
+    } catch (e) {
+      alert('Smazání selhalo: ' + (e.response?.data?.error || 'unknown'));
+    }
+  };
 
   return (
     <div>
@@ -105,10 +117,17 @@ export default function ProjectDetail() {
         actions={
           <div className="flex items-center gap-2">
             {can.manageProjects(user) && (
-              <button
-                onClick={() => setEditOpen(true)}
-                className="px-3 py-1.5 text-sm border border-brand-500 text-brand-500 rounded-lg hover:bg-brand-50 font-medium"
-              >✎ Editovat projekt</button>
+              <>
+                <button
+                  onClick={() => setEditOpen(true)}
+                  className="px-3 py-1.5 text-sm border border-brand-500 text-brand-500 rounded-lg hover:bg-brand-50 font-medium"
+                >✎ Editovat projekt</button>
+                <button
+                  onClick={handleDeleteProject}
+                  className="px-3 py-1.5 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50 font-medium"
+                  title="Smazat projekt"
+                >🗑 Smazat</button>
+              </>
             )}
             <Link to="/projects" className="text-sm text-ink-500 hover:text-ink-800">← Zpět</Link>
           </div>
@@ -388,7 +407,12 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
             <AIEstimateBadge task={task} />
           </div>
           <div className="text-xs text-ink-500 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
-            {task.assignee_name && <span>👤 {task.assignee_name}</span>}
+            {task.assignee_name && (
+              <span className="inline-flex items-center gap-1.5">
+                <Avatar user={{ id: task.assignee_id, name: task.assignee_name }} size={20} />
+                {task.assignee_name}
+              </span>
+            )}
             {task.due_date && <span>📅 {fmtDate(task.due_date)}</span>}
             {task.estimated_h && <span>⏱ ruční odhad {task.estimated_h}h</span>}
             {task.attachment_count > 0 && (

@@ -2,7 +2,8 @@
 // Spustit: npm run seed (POZOR – smaže existující data!)
 // Nebo automaticky při startu, pokud je DB prázdná (volá se z index.js).
 import 'dotenv/config';
-import { pool, query, migrate } from './db.js';
+import bcrypt from 'bcryptjs';
+import { pool, query, migrate, backfillAuth, DEFAULT_PASSWORD, PASSWORD_SALT_ROUNDS } from './db.js';
 
 // Hlavní seed funkce, kterou volá CLI i auto-seed při startu serveru
 export async function seedDatabase({ wipe = true } = {}) {
@@ -15,21 +16,26 @@ export async function seedDatabase({ wipe = true } = {}) {
   }
 
   // ---------- Uživatelé ----------
+  // Všichni dostanou výchozí heslo (DEFAULT_PASSWORD) + must_change_password=TRUE,
+  // takže při prvním přihlášení si musí zvolit vlastní.
+  const defaultHash = await bcrypt.hash(DEFAULT_PASSWORD, PASSWORD_SALT_ROUNDS);
   const users = [
-    { email: 'tomas.suchomel@vitom.cz',  name: 'Tomáš Suchomel',     role: 'admin',         rate: 1500 },
-    { email: 'manager@vitom.cz',         name: 'Project Manager',    role: 'manager',       rate: 1200 },
-    { email: 'senior.dev@vitom.cz',      name: 'Senior Programátor', role: 'senior_dev',    rate: 1300 },
-    { email: 'external.dev@vitom.cz',    name: 'Externí Programátor',role: 'external_dev',  rate: 700  },
+    { email: 'tomas.suchomel@vitom.cz',  first: 'Tomáš',   last: 'Suchomel',    role: 'admin',         rate: 1500 },
+    { email: 'manager@vitom.cz',         first: 'Project', last: 'Manager',     role: 'manager',       rate: 1200 },
+    { email: 'senior.dev@vitom.cz',      first: 'Senior',  last: 'Programátor', role: 'senior_dev',    rate: 1300 },
+    { email: 'external.dev@vitom.cz',    first: 'Externí', last: 'Programátor', role: 'external_dev',  rate: 700  },
   ];
   const userIds = {};
   for (const u of users) {
+    const fullName = `${u.first} ${u.last}`.trim();
     const r = await query(
-      `INSERT INTO users (email, name, role, hourly_rate) VALUES ($1, $2, $3, $4) RETURNING id`,
-      [u.email, u.name, u.role, u.rate]
+      `INSERT INTO users (email, name, first_name, last_name, role, hourly_rate, password_hash, must_change_password)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE) RETURNING id`,
+      [u.email, fullName, u.first, u.last, u.role, u.rate, defaultHash]
     );
     userIds[u.role] = r.rows[0].id;
   }
-  console.log(`[seed] vloženo ${users.length} uživatelů`);
+  console.log(`[seed] vloženo ${users.length} uživatelů (výchozí heslo: ${DEFAULT_PASSWORD})`);
 
   // ---------- Projekty ----------
   const today = new Date();

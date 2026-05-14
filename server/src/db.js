@@ -3,6 +3,10 @@
 // API: query(text, params) → Promise<{ rows, rowCount }>
 // Migrace schématu se spustí automaticky při startu serveru.
 import pg from 'pg';
+import bcrypt from 'bcryptjs';
+
+export const DEFAULT_PASSWORD = 'ITCrew23';
+export const PASSWORD_SALT_ROUNDS = 10;
 
 const { Pool } = pg;
 
@@ -151,9 +155,75 @@ export async function migrate() {
         ALTER TABLE tasks ADD COLUMN ai_estimate_at TIMESTAMPTZ;
       END IF;
     END $$;
+
+    -- Přihlášení heslem + profil (idempotentní ALTER)
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='users' AND column_name='password_hash') THEN
+        ALTER TABLE users ADD COLUMN password_hash TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='users' AND column_name='must_change_password') THEN
+        ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT TRUE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='users' AND column_name='first_name') THEN
+        ALTER TABLE users ADD COLUMN first_name TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='users' AND column_name='last_name') THEN
+        ALTER TABLE users ADD COLUMN last_name TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='users' AND column_name='avatar_data') THEN
+        ALTER TABLE users ADD COLUMN avatar_data BYTEA;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='users' AND column_name='avatar_mime') THEN
+        ALTER TABLE users ADD COLUMN avatar_mime TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='users' AND column_name='avatar_updated_at') THEN
+        ALTER TABLE users ADD COLUMN avatar_updated_at TIMESTAMPTZ;
+      END IF;
+    END $$;
   `);
   console.log('[db] PostgreSQL schéma připraveno');
 }
 
+// Post-migrace: pro existující uživatele bez password_hash / first_name nastav výchozí hodnoty.
+// Idempotentní – běh proběhne při každém startu, ale upraví jen řádky, kde to dává smysl.
+export async function backfillAuth() {
+  // 1) Rozdělit `name` na first_name + last_name pro řádky, kde to chybí
+  const missingName = await query(
+    `SELECT id, name FROM users WHERE first_name IS NULL OR last_name IS NULL`
+  );
+  for (const u of missingName.rows) {
+    const parts = String(u.name || '').trim().split(/\s+/);
+    const first = parts.length > 0 ? parts[0] : '';
+    const last  = parts.length > 1 ? parts.slice(1).join(' ') : '';
+    await query(
+      `UPDATE users SET first_name = COALESCE(first_name, $1), last_name = COALESCE(last_name, $2) WHERE id = $3`,
+      [first, last, u.id]
+    );
+  }
+  if (missingName.rows.length > 0) {
+    console.log(`[db] backfill: rozděleno jméno u ${missingName.rows.length} uživatelů`);
+  }
+
+  // 2) Pro uživatele bez hesla nastav výchozí heslo + must_change_password
+  const missingPwd = await query(`SELECT id FROM users WHERE password_hash IS NULL`);
+  if (missingPwd.rows.length > 0) {
+    const hash = await bcrypt.hash(DEFAULT_PASSWORD, PASSWORD_SALT_ROUNDS);
+    for (const u of missingPwd.rows) {
+      await query(
+        `UPDATE users SET password_hash = $1, must_change_password = TRUE WHERE id = $2`,
+        [hash, u.id]
+      );
+    }
+    console.log(`[db] backfill: výchozí heslo nastaveno u ${missingPwd.rows.length} uživatelů (musí si změnit)`);
+  }
+}
+
 // Provede migrate při importu (volá se v index.js)
-export default { pool, query, migrate };
+export default { pool, query, migrate, backfillAuth };

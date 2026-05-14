@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import { projects as projectsApi, reports as reportsApi } from '../api.js';
+import Avatar from '../components/Avatar.jsx';
 
 const PROJECT_COLORS = ['#0c363e', '#e72b78', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4'];
 const HOURS_PER_DAY = 6; // pracovních hodin denně – konstanta podle zadání
@@ -362,9 +363,7 @@ function WorkerCard({ worker }) {
   return (
     <div className="bg-white rounded-xl shadow-sm border border-cream-200 p-4">
       <div className="flex items-center gap-2 mb-3">
-        <div className="w-9 h-9 rounded-full bg-cream-200 flex items-center justify-center text-sm font-bold text-ink-600">
-          {worker.user_name.split(' ').map(s => s[0]).slice(0,2).join('')}
-        </div>
+        <Avatar user={{ id: worker.user_id, name: worker.user_name }} size={36} />
         <div className="min-w-0 flex-1">
           <div className="font-semibold text-ink-800 truncate">{worker.user_name}</div>
           <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded ${ROLE_BADGE[worker.role]}`}>
@@ -401,9 +400,7 @@ function DoneCard({ worker }) {
   return (
     <div className="bg-white rounded-xl shadow-sm border border-emerald-200 p-4">
       <div className="flex items-center gap-2 mb-3">
-        <div className="w-9 h-9 rounded-full bg-emerald-100 flex items-center justify-center text-sm font-bold text-emerald-700">
-          {worker.user_name.split(' ').map(s => s[0]).slice(0,2).join('')}
-        </div>
+        <Avatar user={{ id: worker.user_id, name: worker.user_name }} size={36} />
         <div className="min-w-0 flex-1">
           <div className="font-semibold text-ink-800 truncate">{worker.user_name}</div>
           <span className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">

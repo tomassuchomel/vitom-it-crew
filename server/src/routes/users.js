@@ -1,34 +1,134 @@
 import { Router } from 'express';
-import { query } from '../db.js';
+import multer from 'multer';
+import bcrypt from 'bcryptjs';
+import { query, DEFAULT_PASSWORD, PASSWORD_SALT_ROUNDS } from '../db.js';
 import { requireAuth, requireRole, can } from '../auth.js';
 
 const router = Router();
 
+const AVATAR_MIME_OK = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const AVATAR_MAX = 2 * 1024 * 1024; // 2 MB
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: AVATAR_MAX },
+  fileFilter: (req, file, cb) => {
+    if (!AVATAR_MIME_OK.has(file.mimetype)) return cb(new Error('only_images'));
+    cb(null, true);
+  },
+});
+
+// Helper – co posíláme klientovi
+function publicUser(u, { includeRate = false } = {}) {
+  if (!u) return null;
+  const out = {
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    first_name: u.first_name,
+    last_name: u.last_name,
+    role: u.role,
+    active: u.active,
+    must_change_password: !!u.must_change_password,
+    avatar_updated_at: u.avatar_updated_at,
+  };
+  if (includeRate) out.hourly_rate = u.hourly_rate;
+  return out;
+}
+
 // Seznam uživatelů – sazby vidí jen admin/manager
 router.get('/', requireAuth, async (req, res) => {
   const showRates = can.seeCosts(req.user);
-  const sql = showRates
-    ? 'SELECT id, email, name, role, hourly_rate, active FROM users ORDER BY id'
-    : 'SELECT id, email, name, role, active FROM users ORDER BY id';
-  const r = await query(sql);
-  res.json({ users: r.rows });
+  const r = await query(
+    `SELECT id, email, name, first_name, last_name, role, hourly_rate, active,
+            must_change_password, avatar_updated_at
+     FROM users ORDER BY id`
+  );
+  res.json({ users: r.rows.map(u => publicUser(u, { includeRate: showRates })) });
 });
 
-// Vytvoření – jen admin
+// Avatar – binární endpoint. Veřejný v rámci přihlášených uživatelů.
+router.get('/:id/avatar', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const r = await query(
+    `SELECT avatar_data, avatar_mime FROM users WHERE id = $1`,
+    [id]
+  );
+  const row = r.rows[0];
+  if (!row || !row.avatar_data) return res.status(404).end();
+  res.setHeader('Content-Type', row.avatar_mime || 'image/jpeg');
+  // Krátká cache – stačí pro rychlé renderování, ale po změně se brzo propíše ostatním.
+  // Vlastní změny si frontend cache-bustí přes ?v= s timestampem z auth.me.
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.end(row.avatar_data);
+});
+
+// Edit vlastního profilu – jméno + příjmení
+router.put('/me', requireAuth, async (req, res) => {
+  const { first_name, last_name } = req.body || {};
+  const first = String(first_name || '').trim();
+  const last  = String(last_name || '').trim();
+  if (!first || !last) return res.status(400).json({ error: 'missing_name' });
+  const name = `${first} ${last}`;
+  await query(
+    `UPDATE users SET first_name = $1, last_name = $2, name = $3 WHERE id = $4`,
+    [first, last, name, req.user.id]
+  );
+  const r = await query(
+    `SELECT id, email, name, first_name, last_name, role, hourly_rate, active,
+            must_change_password, avatar_updated_at
+     FROM users WHERE id = $1`,
+    [req.user.id]
+  );
+  res.json({ user: publicUser(r.rows[0], { includeRate: true }) });
+});
+
+// Upload vlastního avataru (multipart pole `avatar`)
+router.post('/me/avatar', requireAuth, avatarUpload.single('avatar'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no_file' });
+  await query(
+    `UPDATE users SET avatar_data = $1, avatar_mime = $2, avatar_updated_at = NOW() WHERE id = $3`,
+    [req.file.buffer, req.file.mimetype, req.user.id]
+  );
+  const r = await query(`SELECT avatar_updated_at FROM users WHERE id = $1`, [req.user.id]);
+  res.json({ ok: true, avatar_updated_at: r.rows[0].avatar_updated_at });
+});
+
+// Smazat vlastní avatar
+router.delete('/me/avatar', requireAuth, async (req, res) => {
+  await query(
+    `UPDATE users SET avatar_data = NULL, avatar_mime = NULL, avatar_updated_at = NOW() WHERE id = $1`,
+    [req.user.id]
+  );
+  res.json({ ok: true });
+});
+
+// Vytvoření – jen admin. Nový uživatel dostane výchozí heslo a must_change_password.
 router.post('/', requireAuth, requireRole('admin'), async (req, res) => {
-  const { email, name, role, hourly_rate } = req.body || {};
-  if (!email || !name || !role) return res.status(400).json({ error: 'missing_fields' });
+  const { email, name, first_name, last_name, role, hourly_rate } = req.body || {};
+  // Backward kompatibilita – pokud klient pošle jen `name`, rozdělíme automaticky
+  let first = String(first_name || '').trim();
+  let last  = String(last_name || '').trim();
+  if ((!first || !last) && name) {
+    const parts = String(name).trim().split(/\s+/);
+    if (!first) first = parts[0] || '';
+    if (!last)  last  = parts.slice(1).join(' ') || '';
+  }
+  const fullName = (first || last) ? `${first} ${last}`.trim() : String(name || '').trim();
+
+  if (!email || !fullName || !role) return res.status(400).json({ error: 'missing_fields' });
   if (!['admin', 'manager', 'senior_dev', 'external_dev'].includes(role)) {
     return res.status(400).json({ error: 'invalid_role' });
   }
   try {
+    const hash = await bcrypt.hash(DEFAULT_PASSWORD, PASSWORD_SALT_ROUNDS);
     const r = await query(
-      `INSERT INTO users (email, name, role, hourly_rate)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, email, name, role, hourly_rate, active`,
-      [email.toLowerCase().trim(), name.trim(), role, Number(hourly_rate) || 0]
+      `INSERT INTO users (email, name, first_name, last_name, role, hourly_rate, password_hash, must_change_password)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
+       RETURNING id, email, name, first_name, last_name, role, hourly_rate, active,
+                 must_change_password, avatar_updated_at`,
+      [email.toLowerCase().trim(), fullName, first, last, role, Number(hourly_rate) || 0, hash]
     );
-    res.json({ user: r.rows[0] });
+    res.json({ user: publicUser(r.rows[0], { includeRate: true }), default_password: DEFAULT_PASSWORD });
   } catch (err) {
     if (String(err).includes('unique')) return res.status(409).json({ error: 'email_exists' });
     throw err;
@@ -41,16 +141,80 @@ router.put('/:id', requireAuth, requireRole('admin'), async (req, res) => {
   const curR = await query('SELECT * FROM users WHERE id = $1', [id]);
   const cur = curR.rows[0];
   if (!cur) return res.status(404).json({ error: 'not_found' });
-  const { name = cur.name, role = cur.role, hourly_rate = cur.hourly_rate, active = cur.active } = req.body || {};
+  const {
+    name = cur.name,
+    first_name = cur.first_name,
+    last_name = cur.last_name,
+    role = cur.role,
+    hourly_rate = cur.hourly_rate,
+    active = cur.active,
+  } = req.body || {};
+
+  // Pokud admin pošle first/last, použijeme je a přegenerujeme name
+  let first = first_name, last = last_name, newName = name;
+  if (req.body?.first_name !== undefined || req.body?.last_name !== undefined) {
+    first = String(first_name || '').trim() || cur.first_name || '';
+    last  = String(last_name  || '').trim() || cur.last_name  || '';
+    newName = `${first} ${last}`.trim() || cur.name;
+  }
+
   await query(
-    'UPDATE users SET name = $1, role = $2, hourly_rate = $3, active = $4 WHERE id = $5',
-    [name, role, Number(hourly_rate) || 0, !!active, id]
+    `UPDATE users SET name = $1, first_name = $2, last_name = $3,
+                      role = $4, hourly_rate = $5, active = $6
+     WHERE id = $7`,
+    [newName, first, last, role, Number(hourly_rate) || 0, !!active, id]
   );
   const r = await query(
-    'SELECT id, email, name, role, hourly_rate, active FROM users WHERE id = $1',
+    `SELECT id, email, name, first_name, last_name, role, hourly_rate, active,
+            must_change_password, avatar_updated_at
+     FROM users WHERE id = $1`,
     [id]
   );
-  res.json({ user: r.rows[0] });
+  res.json({ user: publicUser(r.rows[0], { includeRate: true }) });
+});
+
+// Smazání uživatele – admin nebo project manager.
+// Bezpečnostní pojistky: nelze smazat sám sebe, nelze smazat posledního admina.
+// FK kaskáda v DB smaže navázané záznamy (time_entries, questions, attachments, project_edits),
+// úkoly mají SET NULL u assignee_id (zůstanou, jen bez přiřazení), projekty mají SET NULL u manager_id.
+router.delete('/:id', requireAuth, async (req, res) => {
+  if (!can.manageProjects(req.user)) return res.status(403).json({ error: 'forbidden' });
+  const id = Number(req.params.id);
+  if (id === req.user.id) return res.status(400).json({ error: 'cannot_delete_self' });
+
+  const r = await query('SELECT id, role FROM users WHERE id = $1', [id]);
+  const target = r.rows[0];
+  if (!target) return res.status(404).json({ error: 'not_found' });
+
+  if (target.role === 'admin') {
+    const adminCount = await query(`SELECT COUNT(*)::int AS c FROM users WHERE role = 'admin' AND active = TRUE`);
+    if (Number(adminCount.rows[0].c) <= 1) {
+      return res.status(400).json({ error: 'last_admin', message: 'Nelze smazat posledního aktivního admina.' });
+    }
+  }
+
+  await query('DELETE FROM users WHERE id = $1', [id]);
+  res.json({ ok: true });
+});
+
+// Admin reset hesla – nastaví výchozí heslo a vynutí změnu při příštím loginu
+router.post('/:id/reset-password', requireAuth, requireRole('admin'), async (req, res) => {
+  const id = Number(req.params.id);
+  const hash = await bcrypt.hash(DEFAULT_PASSWORD, PASSWORD_SALT_ROUNDS);
+  const r = await query(
+    `UPDATE users SET password_hash = $1, must_change_password = TRUE
+     WHERE id = $2 RETURNING id`,
+    [hash, id]
+  );
+  if (!r.rows[0]) return res.status(404).json({ error: 'not_found' });
+  res.json({ ok: true, default_password: DEFAULT_PASSWORD });
+});
+
+// Error handler pro multer (upload avataru)
+router.use((err, req, res, next) => {
+  if (err?.message === 'only_images') return res.status(400).json({ error: 'only_images', message: 'Povoleny jsou jen obrázky (JPEG, PNG, WebP, GIF).' });
+  if (err?.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'file_too_large', message: 'Avatar > 2 MB.' });
+  next(err);
 });
 
 export default router;

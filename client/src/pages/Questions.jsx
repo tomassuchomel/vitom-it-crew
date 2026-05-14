@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
+import Avatar from '../components/Avatar.jsx';
 import { questions as questionsApi } from '../api.js';
 import { useAuth, can } from '../auth.jsx';
 
@@ -140,9 +141,15 @@ export default function Questions() {
                           {directionFor(q) === 'sent' ? '↗ Odeslal jsem' : directionFor(q) === 'received' ? '↘ Pro mě' : ''}
                         </span>
                       )}
-                      <span className="font-medium text-ink-700">{q.from_user_name}</span>
+                      <span className="inline-flex items-center gap-1.5 font-medium text-ink-700">
+                        <Avatar user={{ id: q.from_user_id, name: q.from_user_name }} size={20} />
+                        {q.from_user_name}
+                      </span>
                       <span>→</span>
-                      <span className="font-medium text-ink-700">{q.to_user_name}</span>
+                      <span className="inline-flex items-center gap-1.5 font-medium text-ink-700">
+                        <Avatar user={{ id: q.to_user_id, name: q.to_user_name }} size={20} />
+                        {q.to_user_name}
+                      </span>
                       <span>·</span>
                       <span>{new Date(q.created_at + 'Z').toLocaleString('cs-CZ')}</span>
                       {q.status === 'pending' ? (

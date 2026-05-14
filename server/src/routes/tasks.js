@@ -63,7 +63,8 @@ router.get('/mine', requireAuth, async (req, res) => {
       p.due_date AS project_due_date,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.to_user_id = $1 AND q.status = 'pending') AS pending_questions_for_me,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
-      (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q
+      (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q,
+      (SELECT COUNT(*) FROM attachments a WHERE a.task_id = t.id)                          AS attachment_count
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
     WHERE t.assignee_id = $2 ${extra}
@@ -103,10 +104,17 @@ router.put('/:id', requireAuth, async (req, res) => {
   if (!cur) return res.status(404).json({ error: 'not_found' });
 
   if (!can.createTasks(req.user)) {
+    // Externí dev / běžný assignee může u VLASTNÍHO úkolu měnit jen status nebo popis (poznámku).
     if (cur.assignee_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
-    const { status } = req.body || {};
-    if (!status) return res.status(400).json({ error: 'only_status_allowed' });
-    await query('UPDATE tasks SET status = $1 WHERE id = $2', [status, id]);
+    const allowed = ['status', 'description'];
+    const keys = Object.keys(req.body || {}).filter(k => allowed.includes(k));
+    if (keys.length === 0) return res.status(400).json({ error: 'no_allowed_fields' });
+    const sets = [];
+    const params = [];
+    if ('status' in req.body) { params.push(req.body.status); sets.push(`status = $${params.length}`); }
+    if ('description' in req.body) { params.push(req.body.description ?? null); sets.push(`description = $${params.length}`); }
+    params.push(id);
+    await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
     const r = await query('SELECT * FROM tasks WHERE id = $1', [id]);
     return res.json({ task: r.rows[0] });
   }

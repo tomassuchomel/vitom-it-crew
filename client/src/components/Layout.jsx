@@ -3,6 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth, can, ROLE_LABELS } from '../auth.jsx';
 import { questions as questionsApi } from '../api.js';
 import VitomLogo from './VitomLogo.jsx';
+import Avatar from './Avatar.jsx';
 import AIAdvisor from './AIAdvisor.jsx';
 
 const NAV = [
@@ -80,8 +81,13 @@ export default function Layout({ children }) {
           })}
         </nav>
         <div className="p-5 border-t border-brand-700/50 text-xs">
-          <div className="font-semibold text-cream-50">{user?.name}</div>
-          <div className="text-cream-100/70">{ROLE_LABELS[user?.role]}</div>
+          <NavLink to="/profile" className="flex items-center gap-3 hover:bg-brand-600/40 -mx-2 px-2 py-1.5 rounded-lg transition">
+            <Avatar user={user} size={36} ring />
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold text-cream-50 truncate">{user?.name}</div>
+              <div className="text-cream-100/70 truncate">{ROLE_LABELS[user?.role]}</div>
+            </div>
+          </NavLink>
           <button
             onClick={handleLogout}
             className="mt-2 text-accent-400 hover:text-accent-300 underline"
