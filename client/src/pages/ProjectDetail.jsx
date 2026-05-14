@@ -26,6 +26,14 @@ const STATUS_BADGE = {
   review: 'bg-amber-100 text-amber-700',
   done: 'bg-emerald-100 text-emerald-700',
 };
+const PROJECT_STATUS_LABEL = {
+  active: 'Aktivní', done: 'Hotovo', cancelled: 'Zrušeno',
+};
+// PostgreSQL vrací DATE jako ISO string – ořežeme čas
+const fmtDate = (v) => {
+  if (!v) return '—';
+  return String(v).slice(0, 10);
+};
 const PRIORITY_BADGE = {
   low: 'text-slate-400', normal: 'text-slate-500', high: 'text-amber-600', urgent: 'text-red-600',
 };
@@ -38,6 +46,9 @@ export default function ProjectDetail() {
   const [loading, setLoading] = useState(true);
   const [taskModal, setTaskModal] = useState(null); // null | { parent_id?, task? }
   const [askModal, setAskModal] = useState(null);   // null | { taskId, taskTitle, defaultToUserId }
+  const [editOpen, setEditOpen] = useState(false);
+  const [edits, setEdits] = useState([]);
+  const [editsLoading, setEditsLoading] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -46,6 +57,12 @@ export default function ProjectDetail() {
       .finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, [id]);
+
+  const loadEdits = () => {
+    setEditsLoading(true);
+    projectsApi.edits(id).then(d => setEdits(d.edits)).finally(() => setEditsLoading(false));
+  };
+  useEffect(() => { loadEdits(); }, [id]);
 
   if (loading || !data) return <div className="p-6 text-slate-500">Načítám…</div>;
   const { project, tasks } = data;
@@ -71,9 +88,17 @@ export default function ProjectDetail() {
     <div>
       <PageHeader
         title={project.name}
-        subtitle={`${project.client || 'Bez klienta'} · ${project.start_date} → ${project.due_date}`}
+        subtitle={`${project.client || 'Bez klienta'} · ${fmtDate(project.start_date)} → ${fmtDate(project.due_date)}`}
         actions={
-          <Link to="/projects" className="text-sm text-slate-500 hover:text-slate-800">← Zpět na projekty</Link>
+          <div className="flex items-center gap-2">
+            {can.manageProjects(user) && (
+              <button
+                onClick={() => setEditOpen(true)}
+                className="px-3 py-1.5 text-sm border border-brand-500 text-brand-500 rounded-lg hover:bg-brand-50 font-medium"
+              >✎ Editovat projekt</button>
+            )}
+            <Link to="/projects" className="text-sm text-ink-500 hover:text-ink-800">← Zpět</Link>
+          </div>
         }
       />
 
@@ -120,14 +145,29 @@ export default function ProjectDetail() {
         </div>
 
         <div className="space-y-4">
-          <div className="bg-white rounded-xl border border-slate-200 p-5 text-sm">
-            <h3 className="font-semibold text-slate-800 mb-3">Detaily</h3>
-            <Row label="Stav" value={project.status} />
+          <div className="bg-white rounded-xl border border-cream-200 p-5 text-sm">
+            <h3 className="font-semibold text-ink-800 mb-3">Detaily</h3>
+            <Row label="Stav" value={PROJECT_STATUS_LABEL[project.status] || project.status} />
             <Row label="Manager" value={project.manager_name || '—'} />
-            <Row label="Začátek" value={project.start_date} />
-            <Row label="Termín" value={project.due_date} />
+            <Row label="Začátek" value={fmtDate(project.start_date)} />
+            <Row label="Termín" value={fmtDate(project.due_date)} />
+            <Row label="Odhad úkolů" value={`${Number(project.estimated_h_total || 0).toFixed(1)} h`} />
             {can.seeCosts(user) && project.budget && (
               <Row label="Rozpočet" value={`${Number(project.budget).toLocaleString('cs-CZ')} Kč`} />
+            )}
+          </div>
+
+          {/* Historie změn */}
+          <div className="bg-white rounded-xl border border-cream-200 p-5 text-sm">
+            <h3 className="font-semibold text-ink-800 mb-3">Historie změn</h3>
+            {editsLoading ? (
+              <div className="text-xs text-ink-400">Načítám…</div>
+            ) : edits.length === 0 ? (
+              <div className="text-xs text-ink-400 italic">Žádné změny zatím nezaznamenány.</div>
+            ) : (
+              <ul className="space-y-2 max-h-96 overflow-y-auto">
+                {edits.map(e => <EditLogItem key={e.id} edit={e} />)}
+              </ul>
             )}
           </div>
         </div>
@@ -153,7 +193,128 @@ export default function ProjectDetail() {
         defaultToUserId={askModal?.defaultToUserId}
         onCreated={() => setAskModal(null)}
       />
+
+      <EditProjectModal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        project={project}
+        users={users}
+        onSaved={() => { setEditOpen(false); load(); loadEdits(); }}
+      />
     </div>
+  );
+}
+
+// ---------- Edit Project Modal ----------
+function EditProjectModal({ open, onClose, project, users, onSaved }) {
+  const [form, setForm] = useState({
+    name: '', client: '', description: '',
+    start_date: '', due_date: '',
+    status: 'active', manager_id: '', budget: '',
+  });
+  const [err, setErr] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open && project) {
+      setForm({
+        name: project.name || '',
+        client: project.client || '',
+        description: project.description || '',
+        start_date: fmtDate(project.start_date),
+        due_date: fmtDate(project.due_date),
+        status: project.status || 'active',
+        manager_id: project.manager_id || '',
+        budget: project.budget != null ? String(project.budget) : '',
+      });
+      setErr(null);
+    }
+  }, [open, project]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr(null); setSaving(true);
+    try {
+      await projectsApi.update(project.id, {
+        ...form,
+        manager_id: form.manager_id ? Number(form.manager_id) : null,
+        budget: form.budget ? Number(form.budget) : null,
+      });
+      onSaved();
+    } catch (er) {
+      setErr(er.response?.data?.error || 'Uložení selhalo');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Editace projektu: ${project?.name || ''}`}
+      footer={<>
+        <button onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-cream-300">Zrušit</button>
+        <button onClick={submit} disabled={saving} className="px-3 py-1.5 text-sm rounded bg-brand-500 text-white disabled:opacity-50">
+          {saving ? 'Ukládám…' : 'Uložit změny'}
+        </button>
+      </>}>
+      <form onSubmit={submit} className="space-y-3 text-sm">
+        <Input label="Název *" value={form.name} onChange={v => setForm({ ...form, name: v })} required />
+        <Input label="Klient" value={form.client} onChange={v => setForm({ ...form, client: v })} />
+        <Textarea label="Popis" value={form.description} onChange={v => setForm({ ...form, description: v })} />
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Začátek *" type="date" value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} required />
+          <Input label="Termín *" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} required />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Select label="Stav" value={form.status} onChange={v => setForm({ ...form, status: v })} options={[
+            { value: 'active', label: 'Aktivní' },
+            { value: 'done', label: 'Hotovo' },
+            { value: 'cancelled', label: 'Zrušeno' },
+          ]} />
+          <Select label="Manager" value={form.manager_id} onChange={v => setForm({ ...form, manager_id: v })}
+            options={[{ value: '', label: '—' }, ...users.filter(u => ['admin', 'manager'].includes(u.role)).map(u => ({ value: u.id, label: u.name }))]} />
+        </div>
+        <Input label="Rozpočet (Kč)" type="number" value={form.budget} onChange={v => setForm({ ...form, budget: v })} />
+        {err && <div className="text-red-600 text-xs">{err}</div>}
+        <div className="text-xs text-ink-400">Změny se zaznamenají do historie projektu.</div>
+      </form>
+    </Modal>
+  );
+}
+
+// ---------- Edit Log Item ----------
+function EditLogItem({ edit }) {
+  const date = new Date(edit.created_at);
+  const dateStr = date.toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  if (edit.action === 'create') {
+    return (
+      <li className="text-xs border-l-2 border-emerald-400 pl-2 py-1">
+        <div className="font-medium text-emerald-700">🌱 Vytvořeno</div>
+        <div className="text-ink-500">{edit.user_name} · {dateStr}</div>
+      </li>
+    );
+  }
+  if (edit.action === 'delete') {
+    return (
+      <li className="text-xs border-l-2 border-red-400 pl-2 py-1">
+        <div className="font-medium text-red-700">🗑 Smazáno</div>
+        <div className="text-ink-500">{edit.user_name} · {dateStr}</div>
+      </li>
+    );
+  }
+  // update
+  return (
+    <li className="text-xs border-l-2 border-brand-400 pl-2 py-1">
+      <div className="font-medium text-ink-800">
+        ✎ {edit.field_label}
+      </div>
+      <div className="text-ink-600 mt-0.5">
+        <span className="line-through text-ink-400">{edit.old_value || '∅'}</span>
+        {' → '}
+        <span className="font-medium">{edit.new_value || '∅'}</span>
+      </div>
+      <div className="text-ink-500 mt-0.5">{edit.user_name} · {dateStr}</div>
+    </li>
   );
 }
 

@@ -108,6 +108,19 @@ export async function migrate() {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS project_edits (
+      id            SERIAL PRIMARY KEY,
+      project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      action        TEXT NOT NULL DEFAULT 'update'    -- 'create' | 'update' | 'delete'
+                    CHECK (action IN ('create','update','delete')),
+      field         TEXT,                              -- u 'update' název změněného pole
+      old_value     TEXT,
+      new_value     TEXT,
+      note          TEXT,                              -- volitelný komentář
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_parent  ON tasks(parent_id);
     CREATE INDEX IF NOT EXISTS idx_te_user_date  ON time_entries(user_id, date);
@@ -116,6 +129,7 @@ export async function migrate() {
     CREATE INDEX IF NOT EXISTS idx_q_from        ON questions(from_user_id);
     CREATE INDEX IF NOT EXISTS idx_q_task        ON questions(task_id);
     CREATE INDEX IF NOT EXISTS idx_att_task      ON attachments(task_id);
+    CREATE INDEX IF NOT EXISTS idx_pe_project    ON project_edits(project_id, created_at DESC);
   `);
   console.log('[db] PostgreSQL schéma připraveno');
 }
