@@ -393,59 +393,99 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
   const canEditFully = can.createTasks(user);
   const canEditStatus = canEditFully || task.assignee_id === user.id;
   const isDone = task.status === 'done';
+  const isSubtask = indent > 0;
+
+  // Levý barevný proužek dle stavu – diskrétní vizuální kotva
+  const STATUS_BAR = {
+    todo: 'bg-amber-300',
+    in_progress: 'bg-blue-400',
+    review: 'bg-accent-400',
+    done: 'bg-emerald-400',
+  };
+
+  // Priorita – kompaktní, ale výrazná. Normální se nezobrazuje vůbec.
+  const PRIORITY_PILL = {
+    urgent: { label: '🔥 Urgent', cls: 'bg-red-50 text-red-700 border-red-200' },
+    high:   { label: '⬆ Vysoká',  cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+    low:    { label: '⬇ Nízká',   cls: 'bg-slate-50 text-slate-500 border-slate-200' },
+  };
+  const priorityPill = PRIORITY_PILL[task.priority];
 
   return (
-    <li className="py-2.5">
-      <div className="flex items-start gap-3" style={{ paddingLeft: indent * 24 }}>
-        {/* Žádný checkbox – stav je v badge, akce v tlačítkách */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Velký, jasně viditelný status badge */}
-            <StatusBadge status={task.status} />
-            <span className={`font-medium text-sm ${isDone ? 'line-through text-ink-400' : 'text-ink-800'}`}>
+    <li className="py-1">
+      <div className="flex" style={{ paddingLeft: indent * 24 }}>
+        {/* Levý status proužek */}
+        <div className={`w-1 rounded-full flex-shrink-0 ${STATUS_BAR[task.status] || 'bg-slate-200'}`} />
+        <div className={`flex-1 min-w-0 pl-3 py-2 ${isDone ? 'opacity-70' : ''}`}>
+          {/* Top řádek: NÁZEV (dominantní) + status badge vpravo */}
+          <div className="flex items-start gap-3">
+            <h3 className={`flex-1 min-w-0 ${isSubtask ? 'text-base' : 'text-lg'} font-semibold leading-snug ${
+              isDone ? 'line-through text-ink-400' : 'text-ink-800'
+            }`}>
               {task.title}
-            </span>
-            {task.priority !== 'normal' && (
-              <span className={`text-[10px] font-bold ${PRIORITY_BADGE[task.priority]}`}>
-                {task.priority === 'urgent' ? '🔥' : task.priority === 'high' ? '⬆' : task.priority === 'low' ? '⬇' : ''}
+            </h3>
+            <div className="flex-shrink-0">
+              <StatusBadge status={task.status} size={isSubtask ? 'small' : 'normal'} />
+            </div>
+          </div>
+
+          {/* Meta řádek: avatar + jméno · termín · odhad · přílohy · priorita · dotazy · AI */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-500">
+            {task.assignee_name && (
+              <span className="inline-flex items-center gap-1.5 text-ink-600">
+                <Avatar user={{ id: task.assignee_id, name: task.assignee_name }} size={20} />
+                <span className="font-medium">{task.assignee_name}</span>
+              </span>
+            )}
+            {task.due_date && (
+              <span className="inline-flex items-center gap-1">
+                <span>📅</span>{fmtDate(task.due_date)}
+              </span>
+            )}
+            {task.estimated_h && (
+              <span className="inline-flex items-center gap-1">
+                <span>⏱</span>{task.estimated_h} h
+              </span>
+            )}
+            {task.attachment_count > 0 && (
+              <span className="inline-flex items-center gap-1 text-brand-500 font-medium">
+                <span>📎</span>{task.attachment_count}
+              </span>
+            )}
+            {priorityPill && (
+              <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full border ${priorityPill.cls}`}>
+                {priorityPill.label}
               </span>
             )}
             <QuestionBadge task={task} />
             <AIEstimateBadge task={task} />
           </div>
-          <div className="text-xs text-ink-500 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
-            {task.assignee_name && (
-              <span className="inline-flex items-center gap-1.5">
-                <Avatar user={{ id: task.assignee_id, name: task.assignee_name }} size={20} />
-                {task.assignee_name}
-              </span>
-            )}
-            {task.due_date && <span>📅 {fmtDate(task.due_date)}</span>}
-            {task.estimated_h && <span>⏱ ruční odhad {task.estimated_h}h</span>}
-            {task.attachment_count > 0 && (
-              <span className="text-brand-500 font-medium">📎 {task.attachment_count}</span>
-            )}
-          </div>
+
           {/* Inline náhled příloh */}
           {task.attachment_count > 0 && (
             <div className="mt-2">
               <Attachments taskId={task.id} canEdit={false} compact />
             </div>
           )}
-          {/* Akční tlačítka – ZMĚNA STAVU. Vizuálně oddělené od status badge výše. */}
+
+          {/* Akční tlačítka */}
           <div className="mt-2 flex items-center gap-1 flex-wrap">
             <StatusActions task={task} onChange={onStatusChange} canChange={canEditStatus} />
-            <span className="mx-1 text-ink-200">|</span>
-            <button
-              onClick={() => onAsk(task)}
-              className="px-2 py-1 text-xs text-ink-500 hover:text-brand-500 hover:bg-cream-50 rounded"
-              title="Přidat dotaz"
-            >💬 Dotaz</button>
-            {canEditFully && (
+            {(canEditFully || true) && (
               <>
-                <button onClick={() => onAddSubtask(task.id)} className="px-2 py-1 text-xs text-ink-400 hover:text-brand-500" title="Přidat podúkol">+ podúkol</button>
-                <button onClick={() => onEdit(task)} className="px-2 py-1 text-xs text-ink-400 hover:text-brand-500" title="Upravit">✎ Edit</button>
-                <button onClick={() => onDelete(task)} className="px-2 py-1 text-xs text-ink-400 hover:text-red-600" title="Smazat">🗑</button>
+                <span className="mx-1 text-ink-200">|</span>
+                <button
+                  onClick={() => onAsk(task)}
+                  className="px-2 py-1 text-xs text-ink-500 hover:text-brand-500 hover:bg-cream-50 rounded"
+                  title="Přidat dotaz"
+                >💬 Dotaz</button>
+                {canEditFully && (
+                  <>
+                    <button onClick={() => onAddSubtask(task.id)} className="px-2 py-1 text-xs text-ink-400 hover:text-brand-500" title="Přidat podúkol">+ podúkol</button>
+                    <button onClick={() => onEdit(task)} className="px-2 py-1 text-xs text-ink-400 hover:text-brand-500" title="Upravit">✎ Edit</button>
+                    <button onClick={() => onDelete(task)} className="px-2 py-1 text-xs text-ink-400 hover:text-red-600" title="Smazat">🗑</button>
+                  </>
+                )}
               </>
             )}
           </div>

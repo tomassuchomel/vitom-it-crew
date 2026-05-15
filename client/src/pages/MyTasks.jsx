@@ -157,43 +157,87 @@ function ListView({ tasks, filter, onStatusChange, onOpen }) {
       </div>
     );
   }
+  const STATUS_BAR = {
+    todo: 'bg-amber-300',
+    in_progress: 'bg-blue-400',
+    review: 'bg-accent-400',
+    done: 'bg-emerald-400',
+  };
+  const PRIORITY_PILL = {
+    urgent: { label: '🔥 Urgent', cls: 'bg-red-50 text-red-700 border-red-200' },
+    high:   { label: '⬆ Vysoká',  cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+    low:    { label: '⬇ Nízká',   cls: 'bg-slate-50 text-slate-500 border-slate-200' },
+  };
+
   return (
     <div className="bg-white rounded-xl border border-cream-200 overflow-hidden">
       <ul className="divide-y divide-cream-200">
-        {tasks.map(t => (
-          <li
-            key={t.id}
-            onClick={() => onOpen(t)}
-            className="p-4 hover:bg-cream-50 cursor-pointer transition"
-          >
-            <div className="flex items-center gap-2 flex-wrap">
-              <StatusBadge status={t.status} />
-              <span className={`font-medium ${t.status === 'done' ? 'line-through text-ink-400' : 'text-ink-800'}`}>
-                {t.title}
-              </span>
-              {t.priority !== 'normal' && (
-                <span className={`text-xs font-bold ${PRIORITY[t.priority].color}`}>
-                  {PRIORITY[t.priority].label}
-                </span>
-              )}
-              <QuestionBadges task={t} />
-              <AIEstimateBadge task={t} />
-              {t.attachment_count > 0 && (
-                <span className="text-xs text-brand-500 font-medium">📎 {t.attachment_count}</span>
-              )}
-            </div>
-            {t.description && <div className="text-sm text-ink-600 mt-1 line-clamp-2">{t.description}</div>}
-            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-500 mt-1">
-              <span>📁 {t.project_name}</span>
-              {t.due_date && <span>📅 {String(t.due_date).slice(0, 10)}</span>}
-              {t.estimated_h && <span>⏱ ruční odhad {t.estimated_h}h</span>}
-            </div>
-            {/* Akce stavu – aby se kliknutí nepropagovalo do otevření detailu */}
-            <div className="mt-2" onClick={(e) => e.stopPropagation()}>
-              <StatusActions task={t} onChange={onStatusChange} />
-            </div>
-          </li>
-        ))}
+        {tasks.map(t => {
+          const isDone = t.status === 'done';
+          const priorityPill = PRIORITY_PILL[t.priority];
+          return (
+            <li
+              key={t.id}
+              onClick={() => onOpen(t)}
+              className="flex hover:bg-cream-50 cursor-pointer transition"
+            >
+              {/* Levý status proužek pro rychlou orientaci */}
+              <div className={`w-1 flex-shrink-0 ${STATUS_BAR[t.status] || 'bg-slate-200'}`} />
+              <div className={`flex-1 min-w-0 p-4 ${isDone ? 'opacity-70' : ''}`}>
+                {/* Top: NÁZEV dominantní + status badge vpravo */}
+                <div className="flex items-start gap-3">
+                  <h3 className={`flex-1 min-w-0 text-lg font-semibold leading-snug ${
+                    isDone ? 'line-through text-ink-400' : 'text-ink-800'
+                  }`}>
+                    {t.title}
+                  </h3>
+                  <div className="flex-shrink-0">
+                    <StatusBadge status={t.status} />
+                  </div>
+                </div>
+
+                {/* Popis (zkrácený) */}
+                {t.description && (
+                  <div className="text-sm text-ink-600 mt-1 line-clamp-2">{t.description}</div>
+                )}
+
+                {/* Meta */}
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-500">
+                  <span className="inline-flex items-center gap-1 text-ink-600">
+                    <span>📁</span>{t.project_name}
+                  </span>
+                  {t.due_date && (
+                    <span className="inline-flex items-center gap-1">
+                      <span>📅</span>{String(t.due_date).slice(0, 10)}
+                    </span>
+                  )}
+                  {t.estimated_h && (
+                    <span className="inline-flex items-center gap-1">
+                      <span>⏱</span>{t.estimated_h} h
+                    </span>
+                  )}
+                  {t.attachment_count > 0 && (
+                    <span className="inline-flex items-center gap-1 text-brand-500 font-medium">
+                      <span>📎</span>{t.attachment_count}
+                    </span>
+                  )}
+                  {priorityPill && (
+                    <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full border ${priorityPill.cls}`}>
+                      {priorityPill.label}
+                    </span>
+                  )}
+                  <QuestionBadges task={t} />
+                  <AIEstimateBadge task={t} />
+                </div>
+
+                {/* Akce stavu – stop click bubbling */}
+                <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                  <StatusActions task={t} onChange={onStatusChange} />
+                </div>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
