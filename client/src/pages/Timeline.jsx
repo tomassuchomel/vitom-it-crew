@@ -94,7 +94,14 @@ export default function Timeline() {
             Zatím žádné projekty. <Link to="/projects" className="text-brand-500 underline">Přidej první</Link>.
           </div>
         ) : (
-          <GanttChart projects={projects} zoom={zoom} />
+          <>
+            {projects.filter(p => p.effective_due_date).length > 0 && (
+              <GanttChart projects={projects.filter(p => p.effective_due_date)} zoom={zoom} />
+            )}
+            {projects.filter(p => !p.effective_due_date).length > 0 && (
+              <UndatedProjects projects={projects.filter(p => !p.effective_due_date)} />
+            )}
+          </>
         )}
 
         <div>
@@ -132,13 +139,13 @@ function GanttChart({ projects, zoom }) {
   // Spočítáme rozsah osy + délku osy v px (zoom × pixels per day)
   const layout = useMemo(() => {
     const starts = projects.map(p => parseDate(p.start_date));
-    const dues   = projects.map(p => parseDate(p.due_date));
+    const dues   = projects.map(p => parseDate(p.effective_due_date));
     const min = new Date(Math.min(...starts, today.getTime()) - 5 * dayMs);
     const max = new Date(Math.max(...dues, today.getTime()) + 5 * dayMs);
     const totalDays = Math.max(1, daysBetween(min, max));
 
     // Najdeme nejdelší projekt – jeho délka určuje pixelovou škálu
-    const longestDays = Math.max(...projects.map(p => daysBetween(parseDate(p.start_date), parseDate(p.due_date))));
+    const longestDays = Math.max(...projects.map(p => daysBetween(parseDate(p.start_date), parseDate(p.effective_due_date))));
     // Při zoom=1 chceme, aby nejdelší projekt zabíral cca 800 px → pixels per day:
     const basePxPerDay = Math.max(8, Math.round(800 / Math.max(1, longestDays)));
     const pxPerDay = basePxPerDay * zoom;
@@ -235,7 +242,7 @@ function GanttChart({ projects, zoom }) {
 // ---------- Levý sloupec - label projektu ----------
 function ProjectLabel({ project }) {
   const isDone = project.status === 'done';
-  const cd = countdown(project.due_date);
+  const cd = countdown(project.effective_due_date);
   return (
     <Link to={`/projects/${project.id}`} className="block px-4 py-3 text-sm border-b border-cream-100 hover:bg-cream-100 transition" style={{ height: 64 }}>
       <div className="font-medium text-ink-800 truncate">{project.name}</div>
@@ -288,14 +295,14 @@ function TimeAxis({ marks, pxPerDay }) {
 function ProjectRow({ project, layout, colorIdx }) {
   const today = todayMid();
   const start = parseDate(project.start_date);
-  const due = parseDate(project.due_date);
+  const due = parseDate(project.effective_due_date);
   const left = daysBetween(layout.min, start) * layout.pxPerDay;
   const width = Math.max(layout.pxPerDay, daysBetween(start, due) * layout.pxPerDay);
   const color = PROJECT_COLORS[colorIdx % PROJECT_COLORS.length];
   const totalDays = daysBetween(start, due);
   const elapsed = Math.max(0, Math.min(totalDays, daysBetween(start, today)));
   const progressPct = totalDays > 0 ? (elapsed / totalDays * 100) : 0;
-  const cd = countdown(project.due_date);
+  const cd = countdown(project.effective_due_date);
   const isDone = project.status === 'done';
 
   // Tenká linka odhadu práce
@@ -421,6 +428,37 @@ function DoneCard({ worker }) {
           <li className="text-xs text-ink-400">+ {worker.tasks.length - 6} dalších</li>
         )}
       </ul>
+    </div>
+  );
+}
+
+// ---------- Projekty bez termínu ----------
+// Běží na pozadí, není pevný deadline. Pokud se objeví aktivní úkol s termínem,
+// projekt se zase objeví v Gantt grafu nahoře.
+function UndatedProjects({ projects }) {
+  return (
+    <div>
+      <h2 className="text-lg font-semibold text-ink-800 mb-3">
+        Bez pevného termínu
+        <span className="text-xs text-ink-400 font-normal ml-2">běží na pozadí, objeví se v Gantt grafu, jakmile dostanou aktivní úkol s termínem</span>
+      </h2>
+      <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+        {projects.map(p => (
+          <Link
+            key={p.id}
+            to={`/projects/${p.id}`}
+            className="bg-white rounded-xl border border-cream-200 hover:shadow-md hover:border-cream-300 transition p-4 block"
+          >
+            <div className="font-medium text-ink-800 truncate">{p.name}</div>
+            <div className="text-xs text-ink-500 truncate mt-0.5">{p.manager_name || '—'}</div>
+            <div className="text-[11px] text-ink-500 mt-2 flex gap-3">
+              <span>{p.done_count}/{p.task_count} hotovo</span>
+              <span>·</span>
+              <span>{Number(p.hours_logged || 0).toFixed(1)} h</span>
+            </div>
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }

@@ -15,10 +15,23 @@ const FIELD_LABELS = {
 };
 
 // Seznam projektů s agregacemi (+ estimated_h_total pro Timeline)
+//
+// effective_due_date: pokud projekt nemá svůj termín, použije se nejbližší termín
+// AKTIVNÍHO úkolu (status != 'done', due_date IS NOT NULL). Jakmile úkol skončí,
+// termín se zase ztratí a projekt spadne na konec seznamu.
 router.get('/', requireAuth, async (req, res) => {
   const showCosts = can.seeCosts(req.user);
   const r = await query(`
     SELECT p.*,
+      COALESCE(p.due_date,
+        (SELECT MIN(t.due_date) FROM tasks t
+          WHERE t.project_id = p.id AND t.status != 'done' AND t.due_date IS NOT NULL)
+      ) AS effective_due_date,
+      CASE
+        WHEN p.due_date IS NOT NULL THEN 'project'
+        WHEN EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = p.id AND t.status != 'done' AND t.due_date IS NOT NULL) THEN 'task'
+        ELSE NULL
+      END AS due_source,
       (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) AS task_count,
       (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = 'done') AS done_count,
       (SELECT COALESCE(SUM(te.hours), 0) FROM time_entries te WHERE te.project_id = p.id) AS hours_logged,
@@ -30,7 +43,7 @@ router.get('/', requireAuth, async (req, res) => {
       mu.name AS manager_name
     FROM projects p
     LEFT JOIN users mu ON mu.id = p.manager_id
-    ORDER BY p.due_date ASC
+    ORDER BY effective_due_date NULLS LAST, p.created_at DESC
   `);
   const projects = r.rows;
   if (!showCosts) projects.forEach(p => { delete p.cost_so_far; delete p.budget; });
@@ -42,6 +55,15 @@ router.get('/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const pR = await query(`
     SELECT p.*, mu.name AS manager_name,
+      COALESCE(p.due_date,
+        (SELECT MIN(t.due_date) FROM tasks t
+          WHERE t.project_id = p.id AND t.status != 'done' AND t.due_date IS NOT NULL)
+      ) AS effective_due_date,
+      CASE
+        WHEN p.due_date IS NOT NULL THEN 'project'
+        WHEN EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = p.id AND t.status != 'done' AND t.due_date IS NOT NULL) THEN 'task'
+        ELSE NULL
+      END AS due_source,
       (SELECT COALESCE(SUM(t.estimated_h), 0) FROM tasks t WHERE t.project_id = p.id) AS estimated_h_total
     FROM projects p LEFT JOIN users mu ON mu.id = p.manager_id
     WHERE p.id = $1
@@ -84,12 +106,12 @@ router.get('/:id/edits', requireAuth, async (req, res) => {
 router.post('/', requireAuth, async (req, res) => {
   if (!can.manageProjects(req.user)) return res.status(403).json({ error: 'forbidden' });
   const { name, description, start_date, due_date, manager_id, budget } = req.body || {};
-  if (!name || !start_date || !due_date) return res.status(400).json({ error: 'missing_fields' });
+  if (!name || !start_date) return res.status(400).json({ error: 'missing_fields' });
   const r = await query(`
     INSERT INTO projects (name, description, start_date, due_date, manager_id, budget)
     VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING *
-  `, [name, description || null, start_date, due_date, manager_id || req.user.id, budget || null]);
+  `, [name, description || null, start_date, due_date || null, manager_id || req.user.id, budget || null]);
   const project = r.rows[0];
   // log create
   await query(`INSERT INTO project_edits (project_id, user_id, action, note) VALUES ($1, $2, 'create', $3)`,
@@ -127,15 +149,17 @@ router.put('/:id', requireAuth, async (req, res) => {
     return res.json({ project: cur, edits: [] });
   }
 
-  // Update v DB
+  // Update v DB. Prázdný string z UI převedeme na NULL pro DATE / FK sloupce.
+  const nullableDate = (v) => (v === '' || v === undefined) ? null : v;
+  const nullableNum  = (v) => (v === '' || v === undefined || v === null) ? null : Number(v);
   const r = await query(`
     UPDATE projects SET
       name = $1, description = $2, start_date = $3, due_date = $4,
       status = $5, manager_id = $6, budget = $7
     WHERE id = $8
     RETURNING *
-  `, [next.name, next.description, next.start_date, next.due_date,
-      next.status, next.manager_id, next.budget, id]);
+  `, [next.name, next.description, next.start_date, nullableDate(next.due_date),
+      next.status, next.manager_id || null, nullableNum(next.budget), id]);
 
   // Log každé změny zvlášť
   for (const c of changes) {

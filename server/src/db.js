@@ -50,7 +50,8 @@ export async function migrate() {
       name          TEXT NOT NULL,
       description   TEXT,
       start_date    DATE NOT NULL,
-      due_date      DATE NOT NULL,
+      -- due_date je volitelný; pokud chybí, UI ho odvozuje z nejbližšího aktivního úkolu
+      due_date      DATE,
       status        TEXT NOT NULL DEFAULT 'active'
                     CHECK (status IN ('active','done','cancelled')),
       manager_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -160,6 +161,14 @@ export async function migrate() {
       IF EXISTS (SELECT 1 FROM information_schema.columns
                  WHERE table_name='projects' AND column_name='client') THEN
         ALTER TABLE projects DROP COLUMN client;
+      END IF;
+    END $$;
+
+    -- Projekty mohou být bez termínu (odvodí se z aktivního úkolu, pokud existuje)
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='projects' AND column_name='due_date' AND is_nullable = 'NO') THEN
+        ALTER TABLE projects ALTER COLUMN due_date DROP NOT NULL;
       END IF;
     END $$;
 

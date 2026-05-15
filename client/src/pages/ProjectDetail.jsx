@@ -113,7 +113,11 @@ export default function ProjectDetail() {
     <div>
       <PageHeader
         title={project.name}
-        subtitle={`${fmtDate(project.start_date)} → ${fmtDate(project.due_date)}`}
+        subtitle={
+          project.effective_due_date
+            ? `${fmtDate(project.start_date)} → ${fmtDate(project.effective_due_date)}${project.due_source === 'task' ? ' (termín z úkolu)' : ''}`
+            : `Od ${fmtDate(project.start_date)} · bez termínu`
+        }
         actions={
           <div className="flex items-center gap-2">
             {can.manageProjects(user) && (
@@ -182,7 +186,12 @@ export default function ProjectDetail() {
             <Row label="Stav" value={PROJECT_STATUS_LABEL[project.status] || project.status} />
             <Row label="Manager" value={project.manager_name || '—'} />
             <Row label="Začátek" value={fmtDate(project.start_date)} />
-            <Row label="Termín" value={fmtDate(project.due_date)} />
+            <Row
+              label="Termín"
+              value={project.effective_due_date
+                ? `${fmtDate(project.effective_due_date)}${project.due_source === 'task' ? ' (z úkolu)' : ''}`
+                : 'bez termínu'}
+            />
             <Row label="Odhad úkolů" value={`${Number(project.estimated_h_total || 0).toFixed(1)} h`} />
             {can.seeCosts(user) && project.budget && (
               <Row label="Rozpočet" value={`${Number(project.budget).toLocaleString('cs-CZ')} Kč`} />
@@ -292,7 +301,7 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
         <Textarea label="Popis" value={form.description} onChange={v => setForm({ ...form, description: v })} />
         <div className="grid grid-cols-2 gap-3">
           <Input label="Začátek *" type="date" value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} required />
-          <Input label="Termín *" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} required />
+          <Input label="Termín (nepovinné)" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Select label="Stav" value={form.status} onChange={v => setForm({ ...form, status: v })} options={[

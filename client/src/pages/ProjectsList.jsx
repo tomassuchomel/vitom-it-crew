@@ -52,7 +52,14 @@ export default function ProjectsList() {
               </span>
             </div>
             <div className="text-xs text-slate-600 space-y-1">
-              <div className="flex justify-between"><span>Termín</span><span className="font-medium">{p.due_date}</span></div>
+              <div className="flex justify-between">
+                <span>Termín</span>
+                <span className="font-medium">
+                  {p.effective_due_date
+                    ? <>{String(p.effective_due_date).slice(0,10)}{p.due_source === 'task' && <span className="ml-1 text-[10px] text-ink-400">(z úkolu)</span>}</>
+                    : <span className="text-ink-400">bez termínu</span>}
+                </span>
+              </div>
               <div className="flex justify-between"><span>Úkoly</span><span className="font-medium">{p.done_count} / {p.task_count}</span></div>
               <div className="flex justify-between"><span>Odpracováno</span><span className="font-medium">{p.hours_logged?.toFixed(1)} h</span></div>
               {can.seeCosts(user) && (
@@ -116,7 +123,7 @@ function CreateProjectModal({ open, onClose, users, onCreated }) {
         <Textarea label="Popis" value={form.description} onChange={v => setForm({ ...form, description: v })} />
         <div className="grid grid-cols-2 gap-3">
           <Input label="Začátek *" type="date" value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} required />
-          <Input label="Termín *" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} required />
+          <Input label="Termín (nepovinné)" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} />
         </div>
         <Select label="Project manager" value={form.manager_id} onChange={v => setForm({ ...form, manager_id: v })}
           options={[{ value: '', label: '—' }, ...users.filter(u => ['admin', 'manager'].includes(u.role)).map(u => ({ value: u.id, label: u.name }))]} />
