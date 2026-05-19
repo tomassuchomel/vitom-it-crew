@@ -1,4 +1,4 @@
-// Hlavní worker loop AI agenta. Zatím skeleton – neprovádí skutečné volání Claude.
+// Hlavní worker loop AI agenta.
 //
 // Tok per task:
 //   1) pickne queued task z TaskQueue
@@ -6,10 +6,16 @@
 //   3) zvaliduje scope_paths (safety.js)
 //   4) přepne stav: queued → planning (StateMachine)
 //   5) vytvoří worktree (GitManager)
-//   6) zapíše placeholder do activityLog ("agent by tu pracoval")
-//   7) přepne stav: planning → implementing → in_review
-//   8) NEČISTÍ worktree – ten zůstává pro lidskou review (cleanupWorktree
-//      je expliticky volán až při done/failed v budoucnu)
+//   6) sestaví TaskBundle (ContextAssembler)
+//   7) spustí ImplementationAgent (Claude API loop s tools)
+//   8) Pokud agent skončil úspěšně:
+//        – pushne branch (NIKDY do main)
+//        – vytvoří draft PR přes GitHub API
+//        – uloží ai_pr_url, ai_cost_usd, structured output do activityLogu
+//        – přepne stav: planning → implementing → in_review
+//      Pokud neúspěch:
+//        – přepne stav na failed / needs_human (podle kódu chyby)
+//   9) NEČISTÍ worktree – ten zůstává pro lidskou review
 //
 // Graceful shutdown:
 //   – SIGINT/SIGTERM zastaví polling
@@ -27,7 +33,12 @@ import { createTaskQueue } from './taskQueue.js';
 import { createContextAssembler } from './contextAssembler.js';
 import { createGitManager } from './gitManager.js';
 import { createActivityLog } from './activityLog.js';
+import { runImplementationAgent } from './implementationAgent.js';
+import { createPullRequest, parseGitHubRemote } from './githubApi.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
+const execFileP = promisify(execFile);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /**
@@ -112,9 +123,10 @@ export function createWorker(opts = {}) {
       return;
     }
 
-    // 5) Sestav bundle (placeholder – skutečné volání agenta tu zatím není)
+    // 5) Sestav bundle
+    let bundle;
     try {
-      const bundle = await assembler.assemble(task.id);
+      bundle = await assembler.assemble(task.id);
       await log.record(task.id, 'context_assembled', {
         comments_count: bundle.comments.length,
         has_parent: !!bundle.parent,
@@ -126,17 +138,126 @@ export function createWorker(opts = {}) {
       return;
     }
 
-    // 6) PLACEHOLDER – tady by Claude pracoval. Zatím jen zapíšeme co by udělal.
-    await log.record(task.id, 'placeholder_work', {
-      note: 'agent by tu pracoval – kostra workeru, skutečné Claude volání zatím není',
-      worktreePath: worktree.worktreePath,
-    });
-
-    // 7) planning → implementing → in_review
+    // 6) Spusť ImplementationAgent – Claude přes Anthropic API s tools
     await transitionStatus({ q: query, log }, task.id, 'planning', 'implementing');
+    const remainingBudget = Math.min(daily.remainingUsd, taskBudget.remainingUsd);
+    let agentResult;
+    try {
+      agentResult = await runImplementationAgent({
+        task,
+        bundle,
+        worktreePath: worktree.worktreePath,
+        branch: worktree.branch,
+        apiKey: config.anthropicApiKey,
+        maxIterations: task.max_iterations || 8,
+        maxCostUsd: remainingBudget,
+      });
+    } catch (err) {
+      await log.record(task.id, 'agent_error', { error: err.message });
+      await transitionStatus({ q: query, log }, task.id, 'implementing', 'failed', { reason: 'agent_error' });
+      return;
+    }
+
+    await log.record(
+      task.id,
+      'agent_run_complete',
+      {
+        success: agentResult.success,
+        iterations: agentResult.iterations,
+        error: agentResult.error,
+      },
+      agentResult.costUsd
+    );
+
+    if (!agentResult.success) {
+      const nextState = agentResult.error === 'budget_exhausted' || agentResult.error === 'max_iterations_reached'
+        ? 'needs_human'
+        : 'failed';
+      await log.record(task.id, 'agent_summary', { summary: agentResult.summary || null });
+      await transitionStatus({ q: query, log }, task.id, 'implementing', nextState, {
+        reason: agentResult.error,
+      });
+      return;
+    }
+
+    // 7) Agent skončil úspěšně. Ulož strukturovaný výstup do logu.
+    await log.record(task.id, 'agent_summary', { summary: agentResult.summary });
+
+    // 8) Sanity check – jsou tu commity?
+    let commitsAhead = 0;
+    try {
+      commitsAhead = await git.commitsAheadOfBase(task.id);
+    } catch (err) {
+      await log.record(task.id, 'commits_check_failed', { error: err.message });
+    }
+    if (commitsAhead === 0) {
+      await log.record(task.id, 'no_commits', { note: 'agent neprovedl žádné commity – nepushuju, čeká člověk' });
+      await transitionStatus({ q: query, log }, task.id, 'implementing', 'needs_human', { reason: 'no_commits' });
+      return;
+    }
+
+    // 9) Push branch (NIKDY do main – GitManager hlídá)
+    let pushed;
+    try {
+      pushed = await git.pushBranch(task.id);
+      await log.record(task.id, 'branch_pushed', { branch: pushed.branch });
+    } catch (err) {
+      await log.record(task.id, 'push_failed', { error: err.message });
+      await transitionStatus({ q: query, log }, task.id, 'implementing', 'needs_human', { reason: 'push_failed' });
+      return;
+    }
+
+    // 10) Vytvoř draft PR
+    try {
+      const remote = await detectRemote(worktree.worktreePath);
+      const { owner, repo } = parseGitHubRemote(remote);
+      const pr = await createPullRequest({
+        token: config.githubToken,
+        owner, repo,
+        head: pushed.branch,
+        base: git.baseBranch,
+        title: `[claude] ${task.title}`,
+        body: buildPrBody(task, agentResult.summary),
+        draft: true,
+      });
+      await query(`UPDATE tasks SET ai_pr_url = $1 WHERE id = $2`, [pr.html_url, task.id]);
+      await log.record(task.id, 'pr_created', { pr_url: pr.html_url, number: pr.number });
+    } catch (err) {
+      await log.record(task.id, 'pr_creation_failed', { error: err.message });
+      // PR selhal, ale push prošel – uživatel může otevřít PR ručně. needs_human.
+      await transitionStatus({ q: query, log }, task.id, 'implementing', 'needs_human', { reason: 'pr_creation_failed' });
+      return;
+    }
+
+    // 11) implementing → in_review
     await transitionStatus({ q: query, log }, task.id, 'implementing', 'in_review', {
-      note: 'skeleton run – diff zatím prázdný',
+      iterations: agentResult.iterations,
+      cost_usd: Number(agentResult.costUsd.toFixed(4)),
     });
+  }
+
+  // Helper: zjisti origin remote URL z worktree (pro odvození owner/repo)
+  async function detectRemote(worktreePath) {
+    try {
+      const { stdout } = await execFileP('git', ['remote', 'get-url', 'origin'], { cwd: worktreePath });
+      return stdout.trim();
+    } catch (err) {
+      throw new Error(`nelze zjistit origin remote: ${err.message}`);
+    }
+  }
+
+  // Helper: sestaví PR body z task description + agent summary
+  function buildPrBody(task, summary) {
+    const lines = [
+      `**Task #${task.id}:** ${task.title}`,
+      '',
+      task.description ? `## Zadání\n\n${task.description}\n` : '',
+      summary ? `## Agent output\n\n${summary}` : '',
+      '',
+      '---',
+      '_Vytvořeno autonomním Claude agentem. Před mergem zkontroluj diff a spuštěné testy._',
+    ];
+    return lines.filter(Boolean).join('\n');
   }
 
   async function tick() {

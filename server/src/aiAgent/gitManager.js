@@ -130,7 +130,57 @@ export function createGitManager({ repoRoot, workDir, branchPrefix, baseBranch =
     return stdout;
   }
 
-  return { createWorktree, cleanupWorktree, getDiff, listWorktrees };
+  /**
+   * Pushne branch task-X na origin. ODMÍTÁME push na main / master nebo cokoliv
+   * mimo allowed prefix – defense-in-depth proti tomu, že by ImplementationAgent
+   * branch někde přepsal.
+   *
+   * @param {number} taskId
+   * @returns {Promise<{ pushed: boolean, branch: string }>}
+   */
+  async function pushBranch(taskId) {
+    assertTaskId(taskId);
+    const branch = branchName(taskId);
+    if (!isAllowedBranch(branch, branchPrefix)) {
+      throw new GitManagerError(`branch "${branch}" neprošla allowlist`, { code: 'branch_not_allowed' });
+    }
+    if (branch === 'main' || branch === 'master' || branch === baseBranch) {
+      throw new GitManagerError('push do main/master/baseBranch je zakázán', { code: 'forbidden_target' });
+    }
+    const wt = worktreePath(taskId);
+    // git push -u origin <branch> z worktree – aby tracking byl správně.
+    await git(['push', '-u', 'origin', branch], wt);
+    return { pushed: true, branch };
+  }
+
+  /**
+   * Vrátí počet commitů, které jsou na branchi navíc proti origin/baseBranch.
+   * Slouží jako sanity check „je co pushovat / má smysl PR".
+   */
+  async function commitsAheadOfBase(taskId) {
+    assertTaskId(taskId);
+    const wt = worktreePath(taskId);
+    const ref = `origin/${baseBranch}..HEAD`;
+    const { stdout } = await git(['rev-list', '--count', ref], wt);
+    return Number(stdout.trim()) || 0;
+  }
+
+  function getBranchName(taskId) {
+    assertTaskId(taskId);
+    return branchName(taskId);
+  }
+
+  function getWorktreePath(taskId) {
+    assertTaskId(taskId);
+    return worktreePath(taskId);
+  }
+
+  return {
+    createWorktree, cleanupWorktree, getDiff, listWorktrees,
+    pushBranch, commitsAheadOfBase,
+    getBranchName, getWorktreePath,
+    baseBranch,
+  };
 }
 
 export { GitManagerError };
