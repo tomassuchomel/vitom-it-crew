@@ -2,6 +2,59 @@ import { Router } from 'express';
 import { query } from '../db.js';
 import { requireAuth, can } from '../auth.js';
 import { estimateTask, HAS_AI } from '../ai.js';
+import {
+  AI_TASK_DEFAULTS,
+  validateAiStatus,
+  validateExecutionMode,
+  normalizeJsonArray,
+} from '../taskModel.js';
+
+// Minimální délka popisu, pokud je úkol přiřazen AI agentovi.
+// Bez kontextu agent nemůže rozumně pracovat.
+const AI_DESCRIPTION_MIN = 30;
+
+// Vytáhne AI agent pole z těla requestu a vrátí buď
+// { fields, error }. Pokud error není null, fields by se neměl použít.
+// Validuje:
+//   - povolené hodnoty execution_mode + ai_status
+//   - JSON arrays
+//   - pokud ai_assignee=true: aspoň 1 acceptance criterion + popis ≥ 30 znaků
+function extractAiFields(body, description) {
+  const out = { ...AI_TASK_DEFAULTS };
+  if ('ai_assignee' in body) out.ai_assignee = !!body.ai_assignee;
+  if ('execution_mode' in body) {
+    const err = validateExecutionMode(body.execution_mode);
+    if (err) return { error: err };
+    out.execution_mode = body.execution_mode || 'manual';
+  }
+  if ('ai_status' in body) {
+    const err = validateAiStatus(body.ai_status);
+    if (err) return { error: err };
+    out.ai_status = body.ai_status || 'idle';
+  }
+  try {
+    if ('acceptance_criteria' in body) out.acceptance_criteria = normalizeJsonArray(body.acceptance_criteria, 'acceptance_criteria');
+    if ('out_of_scope'        in body) out.out_of_scope        = normalizeJsonArray(body.out_of_scope, 'out_of_scope');
+    if ('scope_paths'         in body) out.scope_paths         = normalizeJsonArray(body.scope_paths, 'scope_paths');
+  } catch (err) {
+    return { error: err.message };
+  }
+  // Vyfiltrujeme prázdné stringy (uživatel může nechat prázdný řádek v dynamickém listu)
+  out.acceptance_criteria = out.acceptance_criteria.map(s => String(s).trim()).filter(Boolean);
+  out.out_of_scope        = out.out_of_scope.map(s => String(s).trim()).filter(Boolean);
+  out.scope_paths         = out.scope_paths.map(s => String(s).trim()).filter(Boolean);
+
+  // Validace business pravidel jen pokud je AI agent zapnutý
+  if (out.ai_assignee) {
+    if (out.acceptance_criteria.length === 0) {
+      return { error: 'ai_assignee_requires_acceptance_criteria' };
+    }
+    if (!description || String(description).trim().length < AI_DESCRIPTION_MIN) {
+      return { error: 'ai_assignee_requires_description', min: AI_DESCRIPTION_MIN };
+    }
+  }
+  return { fields: out };
+}
 
 const router = Router();
 
@@ -81,14 +134,28 @@ router.post('/', requireAuth, async (req, res) => {
   if (!can.createTasks(req.user)) return res.status(403).json({ error: 'forbidden' });
   const { project_id, parent_id, title, description, assignee_id, status, priority, estimated_h, due_date } = req.body || {};
   if (!project_id || !title) return res.status(400).json({ error: 'missing_fields' });
+
+  // AI agent fields – validuje + filtruje + dopočítá defaulty
+  const aiExtract = extractAiFields(req.body || {}, description);
+  if (aiExtract.error) return res.status(400).json({ error: aiExtract.error, min: aiExtract.min });
+  const ai = aiExtract.fields;
+
   const r = await query(`
-    INSERT INTO tasks (project_id, parent_id, title, description, assignee_id, status, priority, estimated_h, due_date)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    INSERT INTO tasks (
+      project_id, parent_id, title, description, assignee_id, status, priority, estimated_h, due_date,
+      ai_assignee, execution_mode, acceptance_criteria, out_of_scope, scope_paths, ai_status
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15)
     RETURNING *
   `, [
     project_id, parent_id || null, title, description || null,
     assignee_id || null, status || 'todo', priority || 'normal',
     estimated_h || null, due_date || null,
+    ai.ai_assignee, ai.execution_mode,
+    JSON.stringify(ai.acceptance_criteria),
+    JSON.stringify(ai.out_of_scope),
+    JSON.stringify(ai.scope_paths),
+    ai.ai_status,
   ]);
   const task = r.rows[0];
   // AI odhad na pozadí (neblokuje response)
@@ -160,16 +227,46 @@ router.put('/:id', requireAuth, async (req, res) => {
   const newCompletedAt = 'completed_at' in comp ? comp.completed_at : cur.completed_at;
   const newCompletedBy = 'completed_by' in comp ? comp.completed_by : cur.completed_by;
 
+  // AI agent fields – pokud body nějaké posílá, validuj a aplikuj.
+  // Pokud body žádné neposílá, ponecháme z DB (cur). Validace popisu / kritérií běží
+  // proti finální podobě úkolu (kombinace cur + body).
+  const aiTouched = ['ai_assignee','execution_mode','acceptance_criteria','out_of_scope','scope_paths','ai_status']
+    .some(k => k in req.body);
+  let newAi;
+  if (aiTouched) {
+    const aiExtract = extractAiFields(req.body, next.description);
+    if (aiExtract.error) return res.status(400).json({ error: aiExtract.error, min: aiExtract.min });
+    newAi = aiExtract.fields;
+  } else {
+    newAi = {
+      ai_assignee: cur.ai_assignee,
+      execution_mode: cur.execution_mode,
+      acceptance_criteria: cur.acceptance_criteria,
+      out_of_scope: cur.out_of_scope,
+      scope_paths: cur.scope_paths,
+      ai_status: cur.ai_status,
+    };
+  }
+
   const r = await query(`
     UPDATE tasks SET
       title = $1, description = $2, assignee_id = $3, status = $4,
       priority = $5, estimated_h = $6, due_date = $7, parent_id = $8,
-      actual_h = $9, completed_at = $10, completed_by = $11
-    WHERE id = $12
+      actual_h = $9, completed_at = $10, completed_by = $11,
+      ai_assignee = $12, execution_mode = $13,
+      acceptance_criteria = $14::jsonb, out_of_scope = $15::jsonb, scope_paths = $16::jsonb,
+      ai_status = $17
+    WHERE id = $18
     RETURNING *
   `, [next.title, next.description, next.assignee_id, next.status,
       next.priority, next.estimated_h, next.due_date, next.parent_id,
-      newActualH, newCompletedAt, newCompletedBy, id]);
+      newActualH, newCompletedAt, newCompletedBy,
+      newAi.ai_assignee, newAi.execution_mode,
+      JSON.stringify(newAi.acceptance_criteria),
+      JSON.stringify(newAi.out_of_scope),
+      JSON.stringify(newAi.scope_paths),
+      newAi.ai_status,
+      id]);
 
   // Pokud se změnil název nebo popis, re-spustíme AI odhad
   const titleChanged = req.body.title !== undefined && req.body.title !== cur.title;

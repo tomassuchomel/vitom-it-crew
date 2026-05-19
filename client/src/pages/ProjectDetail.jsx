@@ -530,6 +530,10 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
   );
 }
 
+// Pro AI agenta vyžadujeme aspoň takhle dlouhý popis – jinak agent nemá kontext.
+// Zrcadli AI_DESCRIPTION_MIN v server/src/routes/tasks.js
+const AI_DESC_MIN = 30;
+
 function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved }) {
   const [form, setForm] = useState({
     title: task?.title || '',
@@ -539,13 +543,34 @@ function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved })
     priority: task?.priority || 'normal',
     estimated_h: task?.estimated_h || '',
     due_date: task?.due_date || '',
+    // AI agent fields
+    ai_assignee: !!task?.ai_assignee,
+    execution_mode: task?.execution_mode || 'manual',
+    acceptance_criteria: Array.isArray(task?.acceptance_criteria) ? task.acceptance_criteria : [],
+    out_of_scope: Array.isArray(task?.out_of_scope) ? task.out_of_scope : [],
+    scope_paths: Array.isArray(task?.scope_paths) ? task.scope_paths : [],
   });
   const [err, setErr] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  // Klientská validace – vrátí null pokud OK, jinak chybový string.
+  // Backend dělá identickou kontrolu, ale tady chytíme chybu před zbytečným kolečkem.
+  const clientValidate = () => {
+    if (!form.ai_assignee) return null;
+    const acs = form.acceptance_criteria.map(s => String(s).trim()).filter(Boolean);
+    if (acs.length === 0) return 'Pro Claude úkol musíš zadat alespoň 1 acceptance criterion.';
+    if (String(form.description).trim().length < AI_DESC_MIN) {
+      return `Popis je krátký pro AI agenta. Potřebujeme alespoň ${AI_DESC_MIN} znaků kontextu.`;
+    }
+    return null;
+  };
+
   const submit = async (e) => {
     e.preventDefault();
-    setErr(null); setSaving(true);
+    setErr(null);
+    const cErr = clientValidate();
+    if (cErr) { setErr(cErr); return; }
+    setSaving(true);
     try {
       const payload = {
         ...form,
@@ -553,11 +578,22 @@ function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved })
         parent_id: parentId || task?.parent_id || null,
         assignee_id: form.assignee_id ? Number(form.assignee_id) : null,
         estimated_h: form.estimated_h ? Number(form.estimated_h) : null,
+        // Při ukládání ořežeme prázdné řádky z dynamických listů
+        acceptance_criteria: form.acceptance_criteria.map(s => String(s).trim()).filter(Boolean),
+        out_of_scope: form.out_of_scope.map(s => String(s).trim()).filter(Boolean),
+        scope_paths: form.scope_paths.map(s => String(s).trim()).filter(Boolean),
       };
       if (task) await tasksApi.update(task.id, payload);
       else await tasksApi.create(payload);
       onSaved();
-    } catch (e) { setErr(e.response?.data?.error || 'Uložení selhalo'); }
+    } catch (e) {
+      const code = e.response?.data?.error;
+      setErr(
+        code === 'ai_assignee_requires_acceptance_criteria' ? 'Pro Claude úkol musíš zadat alespoň 1 acceptance criterion.'
+        : code === 'ai_assignee_requires_description' ? `Popis je krátký pro AI agenta. Potřebujeme alespoň ${e.response.data.min} znaků kontextu.`
+        : code || 'Uložení selhalo'
+      );
+    }
     finally { setSaving(false); }
   };
 
@@ -583,6 +619,10 @@ function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved })
           <Input label="Termín" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} />
         </div>
         <Input label="Odhad (h)" type="number" value={form.estimated_h} onChange={v => setForm({ ...form, estimated_h: v })} />
+
+        {/* ── AI agent ── */}
+        <AiAgentSection form={form} setForm={setForm} />
+
         {err && <div className="text-red-600 text-xs">{err}</div>}
       </form>
 
@@ -594,5 +634,145 @@ function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved })
         </div>
       )}
     </Modal>
+  );
+}
+
+// ---------- AI Agent sekce v TaskModalu ----------
+// Vizuálně oddělená sekce s vlastním rámečkem a accent barvou. Když je toggle off,
+// ukáže se jen krátké vysvětlení, žádné další pole. Po zapnutí naroste o tři
+// dynamické listy + radio pro execution mode.
+function AiAgentSection({ form, setForm }) {
+  const on = form.ai_assignee;
+  return (
+    <div className={`rounded-lg border ${on ? 'border-accent-300 bg-accent-50/40' : 'border-cream-200 bg-cream-50/60'} p-3 mt-1`}>
+      <label className="flex items-start gap-2.5 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={e => setForm({ ...form, ai_assignee: e.target.checked })}
+          className="mt-0.5 w-4 h-4 accent-accent-500"
+        />
+        <div className="flex-1">
+          <div className="text-sm font-semibold text-ink-800">
+            🤖 Přiřadit Claudovi
+          </div>
+          <div className="text-xs text-ink-500 mt-0.5">
+            AI agent dostane úkol, naplánuje kroky a otevře PR. Vyžaduje jasná
+            acceptance criteria a popis s kontextem (min {AI_DESC_MIN} znaků).
+          </div>
+        </div>
+      </label>
+
+      {on && (
+        <div className="mt-4 space-y-4 pl-6 border-l-2 border-accent-300">
+          <StringList
+            label="Acceptance criteria *"
+            help="Co musí být splněno, aby Claude úkol uzavřel. Buď konkrétní (např. „Tlačítko Smazat funguje a maže přes API“)."
+            value={form.acceptance_criteria}
+            onChange={v => setForm({ ...form, acceptance_criteria: v })}
+            placeholder="např. Test prochází zelený"
+            requireAtLeastOne
+          />
+          <StringList
+            label="Out of scope"
+            help="Co Claude NESMÍ řešit (i kdyby narazil). Drží ho v mantinelech."
+            value={form.out_of_scope}
+            onChange={v => setForm({ ...form, out_of_scope: v })}
+            placeholder="např. Nemigruj databázové schéma"
+          />
+          <StringList
+            label="Scope paths"
+            help="Povolené složky/soubory pro úpravu. Mimo tento seznam nesmí sahat. Necháš-li prázdné, dovolíš celý projekt."
+            value={form.scope_paths}
+            onChange={v => setForm({ ...form, scope_paths: v })}
+            placeholder="např. client/src/components/"
+          />
+          <div>
+            <div className="text-xs font-medium text-slate-600 mb-1.5">Spuštění agenta</div>
+            <div className="space-y-1.5">
+              <RadioOpt
+                checked={form.execution_mode === 'manual'}
+                onChange={() => setForm({ ...form, execution_mode: 'manual' })}
+                label="Čekat na můj souhlas"
+                help="Po uložení úkol skončí ve stavu „idle“. Agenta spustíš ručně později."
+              />
+              <RadioOpt
+                checked={form.execution_mode === 'auto'}
+                onChange={() => setForm({ ...form, execution_mode: 'auto' })}
+                label="Spustit automaticky"
+                help="Jakmile úkol uložíš, agent ho začne řešit. Vhodné pro drobné úkoly s jasnými kritérii."
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Dynamický seznam textových řádků s tlačítkem + Přidat a × pro mazání.
+// Hodnota je vždy pole stringů; uvnitř komponenty udržujeme stejnou strukturu
+// a prázdné stringy se ořežou až při submitu.
+function StringList({ label, help, value, onChange, placeholder, requireAtLeastOne = false }) {
+  const items = value.length === 0 && requireAtLeastOne ? [''] : value;
+
+  const update = (i, v) => {
+    const next = [...items];
+    next[i] = v;
+    onChange(next);
+  };
+  const remove = (i) => {
+    const next = items.filter((_, idx) => idx !== i);
+    onChange(next.length === 0 && requireAtLeastOne ? [''] : next);
+  };
+  const add = () => onChange([...items, '']);
+
+  return (
+    <div>
+      <div className="text-xs font-medium text-slate-600">{label}</div>
+      {help && <div className="text-[11px] text-ink-400 mb-1.5">{help}</div>}
+      <div className="space-y-1.5">
+        {items.map((v, i) => (
+          <div key={i} className="flex items-center gap-1.5">
+            <input
+              type="text"
+              value={v}
+              onChange={(e) => update(i, e.target.value)}
+              placeholder={placeholder}
+              className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-400 focus:border-accent-400"
+            />
+            <button
+              type="button"
+              onClick={() => remove(i)}
+              disabled={requireAtLeastOne && items.length === 1}
+              className="text-ink-400 hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed px-2"
+              title="Smazat řádek"
+            >×</button>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={add}
+        className="mt-1.5 text-xs text-accent-700 hover:text-accent-800 font-medium"
+      >+ Přidat řádek</button>
+    </div>
+  );
+}
+
+function RadioOpt({ checked, onChange, label, help }) {
+  return (
+    <label className="flex items-start gap-2 cursor-pointer text-sm">
+      <input
+        type="radio"
+        checked={checked}
+        onChange={onChange}
+        className="mt-0.5 w-4 h-4 accent-accent-500"
+      />
+      <div className="flex-1">
+        <div className="text-ink-800">{label}</div>
+        {help && <div className="text-[11px] text-ink-500">{help}</div>}
+      </div>
+    </label>
   );
 }
