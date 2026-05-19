@@ -9,6 +9,7 @@
     "dev:server":    "npm run dev --prefix server",
     "dev:client":    "npm run dev --prefix client",
     "seed":          "npm run seed --prefix server",
+    "ai-worker":     "npm run ai-worker --prefix server",
 
     "build":         "npm run build --prefix client",
 "build:render":  "npm install --prefix server --omit=dev && npm install --prefix client --include=dev && npm run build --prefix client",
