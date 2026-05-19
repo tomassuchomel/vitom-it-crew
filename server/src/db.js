@@ -4,6 +4,11 @@
 // Migrace schématu se spustí automaticky při startu serveru.
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const DEFAULT_PASSWORD = 'ITCrew23';
 export const PASSWORD_SALT_ROUNDS = 10;
@@ -221,6 +226,26 @@ export async function migrate() {
   console.log('[db] PostgreSQL schéma připraveno');
 }
 
+// Spustí SQL soubory ze složky `migrations/` v abecedním pořadí (timestamp prefix).
+// Každý soubor musí být sám idempotentní (používáme ADD COLUMN IF NOT EXISTS apod.),
+// takže opakované spuštění je bezpečné. Slouží jako precedent pro budoucí migrace
+// vedle inline ALTER bloků v migrate() výše.
+export async function runFileMigrations() {
+  const dir = path.join(__dirname, 'migrations');
+  if (!fs.existsSync(dir)) return;
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort();
+  for (const f of files) {
+    const sql = fs.readFileSync(path.join(dir, f), 'utf8');
+    try {
+      await pool.query(sql);
+      console.log(`[db] file migration applied: ${f}`);
+    } catch (err) {
+      console.error(`[db] file migration FAILED: ${f}`, err.message);
+      throw err;
+    }
+  }
+}
+
 // Post-migrace: pro existující uživatele bez password_hash / first_name nastav výchozí hodnoty.
 // Idempotentní – běh proběhne při každém startu, ale upraví jen řádky, kde to dává smysl.
 export async function backfillAuth() {
@@ -256,4 +281,4 @@ export async function backfillAuth() {
 }
 
 // Provede migrate při importu (volá se v index.js)
-export default { pool, query, migrate, backfillAuth };
+export default { pool, query, migrate, runFileMigrations, backfillAuth };

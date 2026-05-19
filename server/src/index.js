@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 
-import { migrate, backfillAuth } from './db.js';
+import { migrate, runFileMigrations, backfillAuth } from './db.js';
 import { autoSeedIfEmpty } from './seed.js';
 import { passport, HAS_GOOGLE } from './auth.js';
 
@@ -79,6 +79,9 @@ app.use((err, req, res, next) => {
 async function start() {
   try {
     await migrate();
+    // File-based migrace v server/src/migrations/*.sql (idempotentní). Spouští se po
+    // inline schématu, takže může jen rozšiřovat existující tabulky.
+    await runFileMigrations();
     // Auto-seed: pokud je DB prázdná (po prvním deployi), naplň ukázková data.
     // Lze vypnout proměnnou DISABLE_AUTOSEED=1.
     if (process.env.DISABLE_AUTOSEED !== '1') {
