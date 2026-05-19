@@ -4,6 +4,8 @@ import PageHeader from '../components/PageHeader.jsx';
 import Modal from '../components/Modal.jsx';
 import Avatar from '../components/Avatar.jsx';
 import AskQuestionModal from '../components/AskQuestionModal.jsx';
+import TaskCompletionDialog from '../components/TaskCompletionDialog.jsx';
+import TimeTriad from '../components/TimeTriad.jsx';
 import Attachments from '../components/Attachments.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge } from '../components/TaskStatus.jsx';
 import { Input, Textarea, Select } from './ProjectsList.jsx';
@@ -49,6 +51,7 @@ export default function ProjectDetail() {
   const [loading, setLoading] = useState(true);
   const [taskModal, setTaskModal] = useState(null); // null | { parent_id?, task? }
   const [askModal, setAskModal] = useState(null);   // null | { taskId, taskTitle, defaultToUserId }
+  const [completingTask, setCompletingTask] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
   const [edits, setEdits] = useState([]);
   const [editsLoading, setEditsLoading] = useState(false);
@@ -90,7 +93,17 @@ export default function ProjectDetail() {
   }, {});
 
   const handleStatusChange = async (task, status) => {
+    if (status === 'done' && task.status !== 'done') {
+      setCompletingTask(task);
+      return;
+    }
     await tasksApi.update(task.id, { status });
+    load();
+  };
+  const handleCompletionConfirm = async (actualH) => {
+    if (!completingTask) return;
+    await tasksApi.update(completingTask.id, { status: 'done', actual_h: actualH });
+    setCompletingTask(null);
     load();
   };
   const handleDelete = async (task) => {
@@ -234,6 +247,14 @@ export default function ProjectDetail() {
         defaultToUserId={askModal?.defaultToUserId}
         onCreated={() => setAskModal(null)}
       />
+
+      {completingTask && (
+        <TaskCompletionDialog
+          task={completingTask}
+          onConfirm={handleCompletionConfirm}
+          onCancel={() => setCompletingTask(null)}
+        />
+      )}
 
       <EditProjectModal
         open={editOpen}
@@ -442,11 +463,7 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
                 <span>📅</span>{fmtDate(task.due_date)}
               </span>
             )}
-            {task.estimated_h && (
-              <span className="inline-flex items-center gap-1">
-                <span>⏱</span>{task.estimated_h} h
-              </span>
-            )}
+            <TimeTriad task={task} />
             {task.attachment_count > 0 && (
               <span className="inline-flex items-center gap-1 text-brand-500 font-medium">
                 <span>📎</span>{task.attachment_count}

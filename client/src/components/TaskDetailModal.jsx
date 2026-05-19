@@ -7,6 +7,8 @@ import { useAuth, can, ROLE_LABELS } from '../auth.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge, STATUS_META } from './TaskStatus.jsx';
 import Avatar from './Avatar.jsx';
 import Attachments from './Attachments.jsx';
+import TaskCompletionDialog from './TaskCompletionDialog.jsx';
+import TimeTriad from './TimeTriad.jsx';
 
 const PRIORITY_OPTIONS = [
   { value: 'low',    label: '⬇ Nízká' },
@@ -18,6 +20,7 @@ const PRIORITY_OPTIONS = [
 export default function TaskDetailModal({ task: initialTask, onClose, onChanged }) {
   const { user } = useAuth();
   const [task, setTask] = useState(initialTask);
+  const [completingTask, setCompletingTask] = useState(null);
 
   // Sync, pokud parent dodá nový úkol
   useEffect(() => { setTask(initialTask); }, [initialTask?.id]);
@@ -36,8 +39,20 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
   };
 
   const handleStatusChange = async (_t, newStatus) => {
+    if (newStatus === 'done' && task.status !== 'done') {
+      // Otevři dialog na skutečný čas – PUT se provede až po potvrzení
+      setCompletingTask(task);
+      return;
+    }
     const updated = await tasksApi.update(task.id, { status: newStatus });
     setTask(prev => ({ ...prev, ...updated.task }));
+    refresh();
+  };
+
+  const handleCompletionConfirm = async (actualH) => {
+    const updated = await tasksApi.update(task.id, { status: 'done', actual_h: actualH });
+    setTask(prev => ({ ...prev, ...updated.task }));
+    setCompletingTask(null);
     refresh();
   };
 
@@ -91,6 +106,21 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
             </Section>
           )}
 
+          {/* Časový odhad vs realita – manual + AI + actual na jednom místě */}
+          <Section title="Časový odhad vs realita" subtitle="Manuální odhad zadavatele, odhad AI a skutečný čas po dokončení.">
+            <div className="bg-cream-100 rounded-lg p-3">
+              <TimeTriad task={task} />
+              {task.ai_estimate_note && (
+                <div className="text-[11px] text-ink-500 mt-2 italic">🤖 {task.ai_estimate_note}</div>
+              )}
+              {task.actual_h == null && (
+                <div className="text-[11px] text-ink-400 mt-2">
+                  Skutečný čas se zaznamená automaticky při dokončení úkolu (otevře se dialog).
+                </div>
+              )}
+            </div>
+          </Section>
+
           {/* Poznámka / popis */}
           <NoteSection task={task} canEdit={canEditNote} onSave={handleSave} />
 
@@ -108,6 +138,14 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
           <QuestionsSection task={task} onAsked={refresh} />
         </div>
       </div>
+
+      {completingTask && (
+        <TaskCompletionDialog
+          task={completingTask}
+          onConfirm={handleCompletionConfirm}
+          onCancel={() => setCompletingTask(null)}
+        />
+      )}
     </div>
   );
 }

@@ -1,12 +1,25 @@
 import { Router } from 'express';
 import { requireAuth, can } from '../auth.js';
-import { getAdvice, chat, HAS_AI } from '../ai.js';
+import { getAdvice, chat, computeAccuracy, HAS_AI } from '../ai.js';
 
 const router = Router();
 
 // Status – dostupnost AI
 router.get('/status', requireAuth, (req, res) => {
   res.json({ enabled: HAS_AI });
+});
+
+// Přesnost odhadů per uživatel – datově nezávislé na AI klíči, počítá se z DB.
+// Viditelné jen admin/manager (stejně jako náklady).
+router.get('/accuracy', requireAuth, async (req, res) => {
+  if (!can.seeAllHours(req.user)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    const rows = await computeAccuracy();
+    res.json({ accuracy: rows });
+  } catch (err) {
+    console.error('[ai/accuracy]', err);
+    res.status(500).json({ error: 'server_error', message: err.message });
+  }
 });
 
 // Hlavní analýza projektů a tempa – jen admin/manager

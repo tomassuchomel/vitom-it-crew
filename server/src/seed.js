@@ -1,7 +1,7 @@
 // Naplnění DB ukázkovými daty pro 4-členný tým.
 // Spustit: npm run seed (POZOR – smaže existující data!)
 // Nebo automaticky při startu, pokud je DB prázdná (volá se z index.js).
-import 'dotenv/config';
+import './env.js';
 import bcrypt from 'bcryptjs';
 import { pool, query, migrate, backfillAuth, DEFAULT_PASSWORD, PASSWORD_SALT_ROUNDS } from './db.js';
 

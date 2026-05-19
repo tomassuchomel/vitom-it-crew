@@ -76,7 +76,8 @@ router.get('/:id', requireAuth, async (req, res) => {
       u.name AS assignee_name,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q,
-      (SELECT COUNT(*) FROM attachments a WHERE a.task_id = t.id) AS attachment_count
+      (SELECT COUNT(*) FROM attachments a WHERE a.task_id = t.id) AS attachment_count,
+      (SELECT COALESCE(SUM(te.hours), 0) FROM time_entries te WHERE te.task_id = t.id) AS logged_hours
     FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
     WHERE t.project_id = $1
     ORDER BY COALESCE(t.parent_id, t.id), t.id

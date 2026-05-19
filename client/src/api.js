@@ -46,9 +46,10 @@ export const questions = {
 };
 
 export const ai = {
-  status: () => api.get('/ai/status').then(r => r.data),
-  advice: () => api.get('/ai/advice').then(r => r.data),
-  chat:   (messages) => api.post('/ai/chat', { messages }).then(r => r.data),
+  status:   () => api.get('/ai/status').then(r => r.data),
+  advice:   () => api.get('/ai/advice').then(r => r.data),
+  chat:     (messages) => api.post('/ai/chat', { messages }).then(r => r.data),
+  accuracy: () => api.get('/ai/accuracy').then(r => r.data),
 };
 
 export const attachments = {

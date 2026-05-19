@@ -1,5 +1,6 @@
 // Express entrypoint – VITOM IT Crew
-import 'dotenv/config';
+// MUSÍ být první import: nastaví process.env z .env (s override) ještě před db/auth/ai.
+import './env.js';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';

@@ -49,11 +49,41 @@ export async function buildContext() {
     ORDER BY hours_14d DESC
   `);
 
+  const accuracy = await computeAccuracy();
+
   return {
     today: new Date().toISOString().slice(0, 10),
     projects,
     velocity: velocityR.rows,
+    accuracy,
   };
+}
+
+// Per-uživatel agregace přesnosti odhadu. Bere v úvahu jen dokončené úkoly s actual_h.
+// Vrací: count, sum_manual, sum_ai, sum_actual, ratio_manual (actual/manual), ratio_ai (actual/ai).
+// ratio > 1 = pracoval déle než odhad (podcenil), < 1 = byl rychlejší (přecenil)
+export async function computeAccuracy() {
+  const r = await query(`
+    SELECT
+      u.id, u.name, u.role,
+      COUNT(t.id)::int                                       AS done_count,
+      COALESCE(SUM(t.estimated_h), 0)::float                 AS sum_manual,
+      COALESCE(SUM(t.ai_estimated_h), 0)::float              AS sum_ai,
+      COALESCE(SUM(t.actual_h), 0)::float                    AS sum_actual,
+      COUNT(t.id) FILTER (WHERE t.estimated_h IS NOT NULL)::int    AS with_manual,
+      COUNT(t.id) FILTER (WHERE t.ai_estimated_h IS NOT NULL)::int AS with_ai,
+      COALESCE(AVG(t.actual_h / NULLIF(t.estimated_h, 0)), 0)::float    AS ratio_manual,
+      COALESCE(AVG(t.actual_h / NULLIF(t.ai_estimated_h, 0)), 0)::float AS ratio_ai
+    FROM users u
+    LEFT JOIN tasks t
+      ON t.completed_by = u.id
+      AND t.status = 'done'
+      AND t.actual_h IS NOT NULL
+    WHERE u.active = TRUE
+    GROUP BY u.id
+    ORDER BY done_count DESC, u.name
+  `);
+  return r.rows;
 }
 
 const SYSTEM_PROMPT = `Jsi VITOM IT Crew Coach – AI projektový poradce malého vývojářského týmu (4 lidé).
@@ -68,8 +98,12 @@ TVŮJ ÚKOL:
 1. Posuď, zda tempo (hours_14d × tým) odpovídá zbývající práci a deadlinům.
 2. U každého aktivního projektu odhadni reálnou pracnost zbývajících úkolů (s ohledem na AI urychlení) a porovnej s časem do deadlinu.
 3. Identifikuj rizika (skluz, urgentní úkoly bez assignee, projekty bez aktivity).
-4. Dej max 3-5 konkrétních akčních doporučení (např. "přesuňte X na Y", "spojte úkoly Z do batchu", "vyčleňte den jen na A").
-5. Jednej prakticky a stručně. Žádný corporate buzz. Mluv česky.
+4. **Vyhodnoť přesnost odhadů jednotlivých členů** podle dat v sekci ACCURACY:
+   - ratio_manual = actual_h / estimated_h; ratio_ai = actual_h / ai_estimated_h
+   - <0.75 = nadhodnocuje (je rychlejší než odhady) ; ~1 = trefuje se ; >1.3 = podhodnocuje (jeho odhady jsou krátké)
+   - Z čísel poznáš, čí odhady použít jako kotvu při plánování a komu radit zaúčtovat víc rezervy.
+5. Dej max 3-5 konkrétních akčních doporučení (např. "přesuňte X na Y", "spojte úkoly Z do batchu", "vyčleňte den jen na A").
+6. Jednej prakticky a stručně. Žádný corporate buzz. Mluv česky.
 
 FORMÁT ODPOVĚDI – výhradně validní JSON (nic dalšího okolo):
 {
@@ -94,6 +128,9 @@ ${JSON.stringify(ctx.projects, null, 2)}
 
 TEMPO TÝMU (posledních 14 dní):
 ${JSON.stringify(ctx.velocity, null, 2)}
+
+ACCURACY (přesnost odhadů per uživatel, dokončené úkoly):
+${JSON.stringify(ctx.accuracy, null, 2)}
 
 Posuď stav a vrať JSON podle formátu.`;
 
@@ -211,6 +248,7 @@ DATA, KE KTERÝM MŮŽEŠ ODKAZOVAT (nemůžeš měnit, jen analyzovat):
 DATUM: ${ctx.today}
 PROJEKTY: ${JSON.stringify(ctx.projects)}
 TEMPO: ${JSON.stringify(ctx.velocity)}
+ACCURACY: ${JSON.stringify(ctx.accuracy)}
 
 V chatu odpovídej krátce a věcně, plain text (ne JSON).`;
 

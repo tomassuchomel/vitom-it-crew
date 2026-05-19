@@ -4,6 +4,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
+import TaskCompletionDialog from '../components/TaskCompletionDialog.jsx';
+import TimeTriad from '../components/TimeTriad.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge, STATUS_META } from '../components/TaskStatus.jsx';
 import { tasks as tasksApi } from '../api.js';
 import { useAuth } from '../auth.jsx';
@@ -33,6 +35,7 @@ export default function MyTasks() {
   const [filter, setFilter] = useState('all');
   const [view, setView] = useState(() => localStorage.getItem('myTasks.view') || 'list');
   const [detailTaskId, setDetailTaskId] = useState(null);
+  const [completingTask, setCompletingTask] = useState(null);
 
   useEffect(() => {
     localStorage.setItem('myTasks.view', view);
@@ -60,11 +63,28 @@ export default function MyTasks() {
   }, [tasks]);
 
   const handleStatusChange = async (task, status) => {
+    // Při přechodu na 'done' vyskočí dialog na skutečný čas a teprve potvrzení uloží stav.
+    if (status === 'done' && task.status !== 'done') {
+      setCompletingTask(task);
+      return;
+    }
     // Optimistic update – ihned přesune kartu, pak refetch
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status } : t));
     try {
       await tasksApi.update(task.id, { status });
     } finally {
+      load();
+    }
+  };
+
+  const handleCompletionConfirm = async (actualH) => {
+    if (!completingTask) return;
+    const id = completingTask.id;
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, status: 'done', actual_h: actualH } : t));
+    try {
+      await tasksApi.update(id, { status: 'done', actual_h: actualH });
+    } finally {
+      setCompletingTask(null);
       load();
     }
   };
@@ -126,6 +146,13 @@ export default function MyTasks() {
           task={detailTask}
           onClose={() => setDetailTaskId(null)}
           onChanged={load}
+        />
+      )}
+      {completingTask && (
+        <TaskCompletionDialog
+          task={completingTask}
+          onConfirm={handleCompletionConfirm}
+          onCancel={() => setCompletingTask(null)}
         />
       )}
     </div>
@@ -211,11 +238,7 @@ function ListView({ tasks, filter, onStatusChange, onOpen }) {
                       <span>📅</span>{String(t.due_date).slice(0, 10)}
                     </span>
                   )}
-                  {t.estimated_h && (
-                    <span className="inline-flex items-center gap-1">
-                      <span>⏱</span>{t.estimated_h} h
-                    </span>
-                  )}
+                  <TimeTriad task={t} compact />
                   {t.attachment_count > 0 && (
                     <span className="inline-flex items-center gap-1 text-brand-500 font-medium">
                       <span>📎</span>{t.attachment_count}

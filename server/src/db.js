@@ -154,6 +154,20 @@ export async function migrate() {
                      WHERE table_name='tasks' AND column_name='ai_estimate_at') THEN
         ALTER TABLE tasks ADD COLUMN ai_estimate_at TIMESTAMPTZ;
       END IF;
+      -- Skutečný čas a okamžik dokončení – ukládá se při označení 'done'.
+      -- Spolu s estimated_h (manual) a ai_estimated_h tvoří kompletní triumvirát pro AI Coach analýzu přesnosti.
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='tasks' AND column_name='actual_h') THEN
+        ALTER TABLE tasks ADD COLUMN actual_h REAL;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='tasks' AND column_name='completed_at') THEN
+        ALTER TABLE tasks ADD COLUMN completed_at TIMESTAMPTZ;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='tasks' AND column_name='completed_by') THEN
+        ALTER TABLE tasks ADD COLUMN completed_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      END IF;
     END $$;
 
     -- Odstranění už nepotřebného sloupce client u projektů (stavíme si sami pro sebe)

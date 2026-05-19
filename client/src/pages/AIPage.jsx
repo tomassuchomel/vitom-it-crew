@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
+import Avatar from '../components/Avatar.jsx';
 import { ai as aiApi } from '../api.js';
 
 const STATUS_STYLE = {
@@ -13,6 +14,7 @@ const STATUS_STYLE = {
 export default function AIPage() {
   const [enabled, setEnabled] = useState(null);
   const [advice, setAdvice] = useState(null);
+  const [accuracy, setAccuracy] = useState([]);
   const [err, setErr] = useState(null);
   const [loading, setLoading] = useState(false);
   const [chatLog, setChatLog] = useState([]);
@@ -21,6 +23,8 @@ export default function AIPage() {
   const chatRef = useRef();
 
   useEffect(() => {
+    // Accuracy je nezávislá na AI – načteme vždy, i bez API klíče
+    aiApi.accuracy().then(d => setAccuracy(d.accuracy || [])).catch(() => {});
     aiApi.status().then(d => {
       setEnabled(d.enabled);
       if (d.enabled) loadAdvice();
@@ -75,7 +79,9 @@ export default function AIPage() {
         )}
       />
 
-      <div className="p-8 max-w-4xl">
+      <div className="p-8 max-w-5xl space-y-6">
+        {accuracy.length > 0 && <AccuracyPanel rows={accuracy} />}
+
         {enabled === null ? (
           <div className="text-ink-500">Načítám…</div>
         ) : !enabled ? (
@@ -213,5 +219,72 @@ function SuggestionButton({ onClick, text }) {
       onClick={() => onClick(text)}
       className="block text-left text-xs text-brand-500 hover:text-brand-600 hover:underline"
     >→ {text}</button>
+  );
+}
+
+// ---------- Přesnost odhadů (per uživatel) ----------
+function AccuracyPanel({ rows }) {
+  // Hide users without completed tasks – they have no data to show
+  const data = rows.filter(r => r.done_count > 0);
+  if (data.length === 0) return null;
+
+  return (
+    <div className="bg-white rounded-xl border border-cream-200 p-5">
+      <div className="flex items-baseline justify-between mb-3">
+        <h3 className="font-semibold text-ink-800">📏 Přesnost odhadů</h3>
+        <span className="text-xs text-ink-500">jen dokončené úkoly se zapsanou skutečnou dobou</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="text-xs uppercase text-ink-500 tracking-wide border-b border-cream-200">
+            <tr>
+              <th className="text-left py-2 pr-3">Člen</th>
+              <th className="text-right py-2 px-2" title="Počet dokončených úkolů se zaznamenanou skutečností">Úkolů</th>
+              <th className="text-right py-2 px-2" title="Součet manuálních odhadů">⏱ manual</th>
+              <th className="text-right py-2 px-2" title="Součet AI odhadů">🤖 AI</th>
+              <th className="text-right py-2 px-2" title="Součet skutečně odpracovaných hodin">✅ realita</th>
+              <th className="text-right py-2 px-2" title="Průměrný poměr realita/manuál – <0.75 rychlejší, ~1 přesný, >1.3 podcenil">vs manuál</th>
+              <th className="text-right py-2 px-2" title="Průměrný poměr realita/AI">vs AI</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map(r => (
+              <tr key={r.id} className="border-b border-cream-100 last:border-0">
+                <td className="py-2 pr-3">
+                  <span className="inline-flex items-center gap-2">
+                    <Avatar user={{ id: r.id, name: r.name }} size={24} />
+                    <span className="font-medium text-ink-800">{r.name}</span>
+                  </span>
+                </td>
+                <td className="py-2 px-2 text-right font-semibold">{r.done_count}</td>
+                <td className="py-2 px-2 text-right text-ink-600">{Number(r.sum_manual).toFixed(1)} h</td>
+                <td className="py-2 px-2 text-right text-ink-600">{Number(r.sum_ai).toFixed(1)} h</td>
+                <td className="py-2 px-2 text-right text-ink-800 font-semibold">{Number(r.sum_actual).toFixed(1)} h</td>
+                <td className="py-2 px-2 text-right"><RatioBadge ratio={r.ratio_manual} count={r.with_manual} /></td>
+                <td className="py-2 px-2 text-right"><RatioBadge ratio={r.ratio_ai}     count={r.with_ai} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-[11px] text-ink-400 mt-3 leading-relaxed">
+        Poměr realita/odhad: <span className="text-emerald-600 font-semibold">&lt;0.75</span> = rychlejší než odhad ·
+        <span className="text-amber-600 font-semibold"> ~1</span> = přesné ·
+        <span className="text-red-600 font-semibold"> &gt;1.3</span> = podcenil čas
+      </div>
+    </div>
+  );
+}
+
+function RatioBadge({ ratio, count }) {
+  if (!count || count === 0) return <span className="text-ink-300">—</span>;
+  const r = Number(ratio);
+  let cls = 'bg-amber-50 text-amber-700 border-amber-200';
+  if (r < 0.75)  cls = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  else if (r > 1.3) cls = 'bg-red-50 text-red-700 border-red-200';
+  return (
+    <span className={`inline-block text-xs px-2 py-0.5 rounded-full border font-semibold ${cls}`}>
+      {r.toFixed(2)}×
+    </span>
   );
 }

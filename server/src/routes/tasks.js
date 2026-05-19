@@ -63,7 +63,8 @@ router.get('/mine', requireAuth, async (req, res) => {
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.to_user_id = $1 AND q.status = 'pending') AS pending_questions_for_me,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q,
-      (SELECT COUNT(*) FROM attachments a WHERE a.task_id = t.id)                          AS attachment_count
+      (SELECT COUNT(*) FROM attachments a WHERE a.task_id = t.id)                          AS attachment_count,
+      (SELECT COALESCE(SUM(te.hours), 0) FROM time_entries te WHERE te.task_id = t.id)     AS logged_hours
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
     WHERE t.assignee_id = $2 ${extra}
@@ -95,7 +96,29 @@ router.post('/', requireAuth, async (req, res) => {
   res.json({ task });
 });
 
-// Update – ext.dev jen status na vlastním úkolu
+// Pomocná funkce: spočítá hodnoty completed_at / completed_by / actual_h podle změny stavu.
+// - Přechod na 'done': nastav completed_at = NOW(), completed_by = aktuální user, actual_h = body.actual_h (může být null = "neznámo")
+// - Přechod ZE 'done' jinam (znovuotevření): vynuluj completed_at + completed_by, actual_h ponecháme jako historický záznam
+function completionFields({ curStatus, nextStatus, bodyActualH, userId }) {
+  const goingDone = nextStatus === 'done' && curStatus !== 'done';
+  const leavingDone = curStatus === 'done' && nextStatus !== 'done';
+  const out = {};
+  if (goingDone) {
+    out.actual_h = (bodyActualH === '' || bodyActualH == null) ? null : Number(bodyActualH);
+    out.completed_at = new Date();
+    out.completed_by = userId;
+  } else if (leavingDone) {
+    out.completed_at = null;
+    out.completed_by = null;
+    // actual_h ponecháme – uživatel může nahradit při příštím dokončení
+  } else if (bodyActualH !== undefined) {
+    // Explicitní oprava skutečného času bez změny stavu
+    out.actual_h = (bodyActualH === '' || bodyActualH == null) ? null : Number(bodyActualH);
+  }
+  return out;
+}
+
+// Update – ext.dev jen status / poznámka / actual_h na vlastním úkolu
 router.put('/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const curR = await query('SELECT * FROM tasks WHERE id = $1', [id]);
@@ -103,15 +126,25 @@ router.put('/:id', requireAuth, async (req, res) => {
   if (!cur) return res.status(404).json({ error: 'not_found' });
 
   if (!can.createTasks(req.user)) {
-    // Externí dev / běžný assignee může u VLASTNÍHO úkolu měnit jen status nebo popis (poznámku).
+    // Externí dev / běžný assignee může u VLASTNÍHO úkolu měnit jen status, popis (poznámku) nebo actual_h.
     if (cur.assignee_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
-    const allowed = ['status', 'description'];
+    const allowed = ['status', 'description', 'actual_h'];
     const keys = Object.keys(req.body || {}).filter(k => allowed.includes(k));
     if (keys.length === 0) return res.status(400).json({ error: 'no_allowed_fields' });
+
+    const nextStatus = 'status' in req.body ? req.body.status : cur.status;
+    const comp = completionFields({
+      curStatus: cur.status, nextStatus,
+      bodyActualH: req.body.actual_h, userId: req.user.id,
+    });
+
     const sets = [];
     const params = [];
     if ('status' in req.body) { params.push(req.body.status); sets.push(`status = $${params.length}`); }
     if ('description' in req.body) { params.push(req.body.description ?? null); sets.push(`description = $${params.length}`); }
+    if ('actual_h' in comp)     { params.push(comp.actual_h);     sets.push(`actual_h = $${params.length}`); }
+    if ('completed_at' in comp) { params.push(comp.completed_at); sets.push(`completed_at = $${params.length}`); }
+    if ('completed_by' in comp) { params.push(comp.completed_by); sets.push(`completed_by = $${params.length}`); }
     params.push(id);
     await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
     const r = await query('SELECT * FROM tasks WHERE id = $1', [id]);
@@ -119,14 +152,24 @@ router.put('/:id', requireAuth, async (req, res) => {
   }
 
   const next = { ...cur, ...req.body };
+  const comp = completionFields({
+    curStatus: cur.status, nextStatus: next.status,
+    bodyActualH: req.body.actual_h, userId: req.user.id,
+  });
+  const newActualH    = 'actual_h' in comp     ? comp.actual_h     : cur.actual_h;
+  const newCompletedAt = 'completed_at' in comp ? comp.completed_at : cur.completed_at;
+  const newCompletedBy = 'completed_by' in comp ? comp.completed_by : cur.completed_by;
+
   const r = await query(`
     UPDATE tasks SET
       title = $1, description = $2, assignee_id = $3, status = $4,
-      priority = $5, estimated_h = $6, due_date = $7, parent_id = $8
-    WHERE id = $9
+      priority = $5, estimated_h = $6, due_date = $7, parent_id = $8,
+      actual_h = $9, completed_at = $10, completed_by = $11
+    WHERE id = $12
     RETURNING *
   `, [next.title, next.description, next.assignee_id, next.status,
-      next.priority, next.estimated_h, next.due_date, next.parent_id, id]);
+      next.priority, next.estimated_h, next.due_date, next.parent_id,
+      newActualH, newCompletedAt, newCompletedBy, id]);
 
   // Pokud se změnil název nebo popis, re-spustíme AI odhad
   const titleChanged = req.body.title !== undefined && req.body.title !== cur.title;
