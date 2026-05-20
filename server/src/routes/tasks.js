@@ -248,6 +248,12 @@ router.put('/:id', requireAuth, async (req, res) => {
     };
   }
 
+  // Prázdné stringy z UI převedeme na NULL pro DATE / FK / numeric sloupce.
+  // Bez tohohle PG odmítne s "invalid input syntax for type date" apod.
+  const nullableDate = (v) => (v === '' || v === undefined) ? null : v;
+  const nullableNum  = (v) => (v === '' || v === undefined || v === null) ? null : Number(v);
+  const nullableInt  = (v) => (v === '' || v === undefined || v === null) ? null : Number(v);
+
   const r = await query(`
     UPDATE tasks SET
       title = $1, description = $2, assignee_id = $3, status = $4,
@@ -258,8 +264,8 @@ router.put('/:id', requireAuth, async (req, res) => {
       ai_status = $17
     WHERE id = $18
     RETURNING *
-  `, [next.title, next.description, next.assignee_id, next.status,
-      next.priority, next.estimated_h, next.due_date, next.parent_id,
+  `, [next.title, next.description, nullableInt(next.assignee_id), next.status,
+      next.priority, nullableNum(next.estimated_h), nullableDate(next.due_date), nullableInt(next.parent_id),
       newActualH, newCompletedAt, newCompletedBy,
       newAi.ai_assignee, newAi.execution_mode,
       JSON.stringify(newAi.acceptance_criteria),

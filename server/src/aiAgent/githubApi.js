@@ -7,6 +7,39 @@
 const GITHUB_API = 'https://api.github.com';
 
 /**
+ * H-5: idempotent PR lookup. Vrátí existující open PR pro head→base, nebo null.
+ * Použij PŘED createPullRequest, ať vyhneš se 422 z duplicate create
+ * (pokud worker spadl mezi push a UPDATE tasks SET ai_pr_url).
+ */
+export async function findOpenPullRequest({ token, owner, repo, head, base }) {
+  if (!token) throw new Error('findOpenPullRequest: chybí token');
+  // GitHub vyžaduje head ve formátu `owner:branch`
+  const headQ = head.includes(':') ? head : `${owner}:${head}`;
+  const url = `${GITHUB_API}/repos/${owner}/${repo}/pulls?state=open&head=${encodeURIComponent(headQ)}&base=${encodeURIComponent(base)}`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`GitHub API ${res.status}: ${text.slice(0, 500)}`);
+  }
+  const json = await res.json();
+  if (!Array.isArray(json) || json.length === 0) return null;
+  const pr = json[0];
+  return {
+    number: pr.number,
+    html_url: pr.html_url,
+    title: pr.title,
+    state: pr.state,
+    draft: pr.draft,
+  };
+}
+
+/**
  * @typedef {Object} PullRequest
  * @property {number} number
  * @property {string} html_url

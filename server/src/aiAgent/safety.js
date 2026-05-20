@@ -60,7 +60,7 @@ export function validateScopePaths(paths) {
     if (p.startsWith('~')) {
       return { ok: false, error: 'home_expansion', path: raw, message: 'Cesta začínající „~" není povolena.' };
     }
-    // Path traversal v jakémkoliv segmentu
+    // Path traversal v jakémkoliv segmentu (split podle obou separátorů – L-1)
     const segments = p.split(/[\\/]+/);
     if (segments.includes('..')) {
       return { ok: false, error: 'path_traversal', path: raw, message: 'Cesta obsahuje „..", což otevírá únik mimo repo.' };
@@ -92,8 +92,10 @@ export function validateScopePaths(paths) {
 const round4 = (n) => Math.round(Number(n) * 10000) / 10000;
 
 /**
- * Kolik z denního limitu zbývá? Sumuje ai_cost_usd ze všech tasků, kde
- * completed_at je v dnešním kalendářním dni (UTC start to UTC end + 1 day).
+ * Kolik z denního limitu zbývá? Sumuje cost_usd ze všech activity log
+ * záznamů, které vznikly DNES (UTC). Tím zachytíme i in-progress tasky,
+ * nikoli jen dokončené (H-8 fix – dřív se používalo completed_at, takže
+ * běžící task mohl utratit $X před vyhodnocením, protože completed_at byl null).
  *
  * @param {(sql: string, params?: unknown[]) => Promise<{ rows: any[] }>} query
  * @param {{ maxCostPerDayUsd: number }} config
@@ -106,10 +108,13 @@ export async function checkDailyBudget(query, config, now = new Date()) {
   const dayEnd = new Date(dayStart);
   dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
 
+  // Cost se zapisuje v reálném čase do ai_agent_activity přes log.record(..., costUsd).
+  // Sumujeme přes ai_agent_activity, ne tasks.ai_cost_usd, ať máme aktuální stav
+  // i pro běžící (status != done) tasky.
   const r = await query(
-    `SELECT COALESCE(SUM(ai_cost_usd), 0) AS used
-     FROM tasks
-     WHERE completed_at >= $1 AND completed_at < $2`,
+    `SELECT COALESCE(SUM(cost_usd), 0) AS used
+     FROM ai_agent_activity
+     WHERE created_at >= $1 AND created_at < $2`,
     [dayStart.toISOString(), dayEnd.toISOString()]
   );
   const used = round4(r.rows[0]?.used ?? 0);

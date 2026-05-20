@@ -38,6 +38,7 @@ import { runReviewerAgent, formatReviewComment } from './reviewerAgent.js';
 import {
   createPullRequest, parseGitHubRemote,
   addPrComment, markPrReady, parsePullRequestUrl,
+  findOpenPullRequest,
 } from './githubApi.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -234,18 +235,30 @@ export function createWorker(opts = {}) {
       try {
         const remote = await detectRemote(worktree.worktreePath);
         const { owner, repo } = parseGitHubRemote(remote);
-        const pr = await createPullRequest({
-          token: config.githubToken,
-          owner, repo,
-          head: pushed.branch,
-          base: git.baseBranch,
-          title: `[claude] ${task.title}`,
-          body: buildPrBody(task, agentResult.summary),
-          draft: true,
+
+        // H-5: idempotent PR creation. Pokud worker spadl mezi push a UPDATE
+        // tasks.ai_pr_url, PR už může existovat na GitHubu. Najdi ho přes API
+        // místo abychom POST a dostali 422.
+        let pr = await findOpenPullRequest({
+          token: config.githubToken, owner, repo,
+          head: pushed.branch, base: git.baseBranch,
         });
+        if (pr) {
+          await log.record(task.id, 'pr_already_exists', { pr_url: pr.html_url, number: pr.number });
+        } else {
+          pr = await createPullRequest({
+            token: config.githubToken,
+            owner, repo,
+            head: pushed.branch,
+            base: git.baseBranch,
+            title: `[claude] ${task.title}`,
+            body: buildPrBody(task, agentResult.summary),
+            draft: true,
+          });
+          await log.record(task.id, 'pr_created', { pr_url: pr.html_url, number: pr.number });
+        }
         await query(`UPDATE tasks SET ai_pr_url = $1 WHERE id = $2`, [pr.html_url, task.id]);
         prInfo = { ...pr, owner, repo };
-        await log.record(task.id, 'pr_created', { pr_url: pr.html_url, number: pr.number });
       } catch (err) {
         await log.record(task.id, 'pr_creation_failed', { error: err.message });
         await transitionStatus({ q: query, log }, task.id, 'implementing', 'needs_human', { reason: 'pr_creation_failed' });
@@ -282,6 +295,17 @@ export function createWorker(opts = {}) {
    * rozhodne next state (done / needs_changes → queued / needs_human).
    */
   async function runReviewCycle({ task, worktree, prInfo, currentIteration }) {
+    // H-9: reviewer budget gate – jeden review může utratit až ~$0.70 (Opus 4.7,
+    // 100K vstup + 8K výstup). Pokud daily zbývá < $1, neriskuj.
+    const dailyAfter = await checkDailyBudget(query, config);
+    if (dailyAfter.remainingUsd < 1.0) {
+      await log.record(task.id, 'reviewer_budget_too_low', { remainingUsd: dailyAfter.remainingUsd });
+      await transitionStatus({ q: query, log }, task.id, 'in_review', 'needs_human', {
+        reason: 'budget_too_low_for_review',
+      });
+      return;
+    }
+
     // Sběr inputů pro reviewera
     let diff = '';
     try {
@@ -379,6 +403,15 @@ export function createWorker(opts = {}) {
         await transitionStatus({ q: query, log }, task.id, 'in_review', 'done', {
           iteration: currentIteration + 1,
         });
+        // M-2: cleanup worktree po úspěšném done – PR drží branch na originu,
+        // lokální worktree je už nepotřebná. Failed/needs_human worktree
+        // necháme pro forenziku.
+        try {
+          await git.cleanupWorktree(task.id);
+          await log.record(task.id, 'worktree_cleaned', {});
+        } catch (err) {
+          await log.record(task.id, 'worktree_cleanup_failed', { error: err.message });
+        }
         return;
       }
       case 'request_changes': {
@@ -514,6 +547,37 @@ export function createWorker(opts = {}) {
     await currentTaskPromise;
   }
 
+  /**
+   * H-4: recovery scanner – při startu workeru (a periodicky) přesune tasky
+   * uvíznuté > 15 min v non-terminal stavech do needs_human, ať mohou být
+   * dál řešeny člověkem. Bez tohohle by crash workeru znamenal navždy stuck task.
+   */
+  async function recoverStuckTasks() {
+    const stuckMin = 15;
+    const r = await query(
+      `SELECT id, ai_status, ai_status_updated_at FROM tasks
+       WHERE ai_assignee = TRUE
+         AND ai_status IN ('planning', 'implementing', 'in_review')
+         AND ai_status_updated_at < NOW() - INTERVAL '${stuckMin} minutes'`
+    );
+    for (const t of r.rows) {
+      try {
+        await log.record(t.id, 'stuck_task_detected', {
+          previous_status: t.ai_status,
+          stuck_since: t.ai_status_updated_at,
+        });
+        await transitionStatus({ q: query, log }, t.id, t.ai_status, 'needs_human', {
+          reason: 'stuck_after_crash',
+        });
+      } catch (err) {
+        console.error('[ai-worker] recovery error for task', t.id, err.message);
+      }
+    }
+    if (r.rows.length > 0) {
+      console.log(`[ai-worker] recovery: ${r.rows.length} stuck tasks moved to needs_human`);
+    }
+  }
+
   async function start() {
     if (running) return;
     const v = validateAgentConfig(config);
@@ -526,6 +590,10 @@ export function createWorker(opts = {}) {
     running = true;
     stopRequested = false;
     console.log('[ai-worker] startuje', JSON.stringify(describeAgentConfig(config)));
+
+    // H-4: recovery scanner – uvolnit stuck tasky z předchozího crashe
+    try { await recoverStuckTasks(); }
+    catch (err) { console.error('[ai-worker] recovery scan failed:', err.message); }
 
     while (!stopRequested) {
       try {
