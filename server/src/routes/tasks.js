@@ -62,28 +62,51 @@ function extractAiFields(body, description) {
 //   - když preflight projde, přepneme ai_status idle→queued (worker si task vyzvedne)
 //   - když preflight neprojde, vracíme issues v response, frontend je ukáže banner
 // Vrátí { auto_enqueued: bool, ai_preflight: { issues, can_enqueue } | null }
+//
+// IMPORTANT: NIKDY nesmí throw – save tasku má vždy projít. Když preflight selže
+// (např. chybí migrace projects.repo_url), zalogujeme a vrátíme generic issue,
+// místo aby spadl celý POST/PUT. Express 4 nemá async error catching, takže
+// neošetřená výjimka by request nechala viset = "flicker a nic se nestane".
 async function maybeAutoEnqueue(task, userId) {
   if (!task.ai_assignee) return { auto_enqueued: false, ai_preflight: null };
-  const pf = await preflightTask(task.id);
-  if (pf.status === 404) return { auto_enqueued: false, ai_preflight: null };
-  const result = {
-    auto_enqueued: false,
-    ai_preflight: { can_enqueue: pf.ok, issues: pf.issues },
-  };
-  // Auto-enqueue jen pro execution_mode='auto'. Pro 'manual' user musí kliknout
-  // na „Spustit Claude" – preflight ale vrátíme, aby user viděl případné problémy.
-  if (task.execution_mode !== 'auto') return result;
-  if (!pf.ok) return result;
-  if (task.ai_status !== 'idle') return result;
+  try {
+    const pf = await preflightTask(task.id);
+    if (pf.status === 404) return { auto_enqueued: false, ai_preflight: null };
+    const result = {
+      auto_enqueued: false,
+      ai_preflight: { can_enqueue: pf.ok, issues: pf.issues },
+    };
+    // Auto-enqueue jen pro execution_mode='auto'. Pro 'manual' user musí kliknout
+    // na „Spustit Claude" – preflight ale vrátíme, aby user viděl případné problémy.
+    if (task.execution_mode !== 'auto') return result;
+    if (!pf.ok) return result;
+    if (task.ai_status !== 'idle') return result;
 
-  await query(`UPDATE tasks SET ai_status = 'queued' WHERE id = $1`, [task.id]);
-  await query(
-    `INSERT INTO ai_agent_activity (task_id, action, details)
-     VALUES ($1, 'enqueued_auto', $2::jsonb)`,
-    [task.id, JSON.stringify({ user_id: userId, reason: 'task_saved_with_auto_mode' })]
-  );
-  result.auto_enqueued = true;
-  return result;
+    await query(`UPDATE tasks SET ai_status = 'queued' WHERE id = $1`, [task.id]);
+    await query(
+      `INSERT INTO ai_agent_activity (task_id, action, details)
+       VALUES ($1, 'enqueued_auto', $2::jsonb)`,
+      [task.id, JSON.stringify({ user_id: userId, reason: 'task_saved_with_auto_mode' })]
+    );
+    result.auto_enqueued = true;
+    return result;
+  } catch (err) {
+    // Typicky: migrace 2026-05-20-projects-repo-url.sql ještě neproběhla
+    // (PG: column "repo_url" does not exist). Save tasku ale chceme zachovat,
+    // jen uživateli ukážeme srozumitelné varování.
+    console.error('[maybeAutoEnqueue]', err.message);
+    return {
+      auto_enqueued: false,
+      ai_preflight: {
+        can_enqueue: false,
+        issues: [{
+          severity: 'error',
+          code: 'preflight_internal_error',
+          message: `Preflight kontrola selhala (${err.code === '42703' ? 'chybí migrace projects.repo_url – restartuj server' : err.message}). Úkol byl uložen, ale agent se nespustil.`,
+        }],
+      },
+    };
+  }
 }
 
 const router = Router();

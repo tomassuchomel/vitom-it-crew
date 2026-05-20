@@ -56,11 +56,14 @@ export default function ProjectDetail() {
   const [edits, setEdits] = useState([]);
   const [editsLoading, setEditsLoading] = useState(false);
 
-  const load = () => {
-    setLoading(true);
-    Promise.all([projectsApi.get(id), usersApi.list()])
+  // load() bez argumentu = počáteční load (ukáže "Načítám..." přes celou stránku).
+  // load(true) = silent refresh po save/akci – nezatemní obsah, jen tiše překreslí
+  // novou verzí. Bez tohohle problikne celá stránka při každém uložení úkolu.
+  const load = (silent = false) => {
+    if (!silent) setLoading(true);
+    return Promise.all([projectsApi.get(id), usersApi.list()])
       .then(([d, u]) => { setData(d); setUsers(u.users); })
-      .finally(() => setLoading(false));
+      .finally(() => { if (!silent) setLoading(false); });
   };
   useEffect(() => { load(); }, [id]);
 
@@ -98,18 +101,18 @@ export default function ProjectDetail() {
       return;
     }
     await tasksApi.update(task.id, { status });
-    load();
+    load(true);
   };
   const handleCompletionConfirm = async (actualH) => {
     if (!completingTask) return;
     await tasksApi.update(completingTask.id, { status: 'done', actual_h: actualH });
     setCompletingTask(null);
-    load();
+    load(true);
   };
   const handleDelete = async (task) => {
     if (!confirm(`Smazat úkol „${task.title}"?`)) return;
     await tasksApi.remove(task.id);
-    load();
+    load(true);
   };
   const handleDeleteProject = async () => {
     const msg = `Opravdu smazat projekt „${data.project.name}"?\n\nTato akce je nevratná. Smaže se i:\n• všechny úkoly (${tasks.length}) a jejich podúkoly\n• všechny dotazy a přílohy spojené s tímto projektem\n• zápisy hodin na tento projekt\n• historie změn projektu`;
@@ -242,9 +245,9 @@ export default function ProjectDetail() {
           parentId={taskModal.parent_id}
           task={taskModal.task}
           onSaved={(opts) => {
-            // Pokud má modal zůstat otevřený (ukázat preflight), jen reload listu.
-            // Jinak modal zavři a reload.
-            load();
+            // Silent reload – nezhasne stránku na "Načítám...", jen tiše překreslí.
+            // Pokud má modal zůstat otevřený (ukázat preflight), nezavírat.
+            load(true);
             if (!opts?.keepOpen) setTaskModal(null);
           }}
         />
@@ -272,7 +275,7 @@ export default function ProjectDetail() {
         onClose={() => setEditOpen(false)}
         project={project}
         users={users}
-        onSaved={() => { setEditOpen(false); load(); loadEdits(); }}
+        onSaved={() => { setEditOpen(false); load(true); loadEdits(); }}
       />
     </div>
   );
@@ -556,18 +559,29 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
 // Zrcadli AI_DESCRIPTION_MIN v server/src/routes/tasks.js
 const AI_DESC_MIN = 30;
 
-// Inline preflight banner – ukazuje issues, které brání nebo zpožďují běh AI agenta.
-// Zobrazí se pod sekcí „🤖 Přiřadit Claudovi" hned po uložení tasku, kdy backend vrátil ai_preflight.
-function PreflightIssues({ issues, autoEnqueued }) {
-  if (!issues || issues.length === 0) {
-    if (autoEnqueued) {
-      return (
-        <div className="rounded border border-emerald-300 bg-emerald-50 p-2.5 text-xs text-emerald-800">
-          ✅ Úkol byl zařazen do fronty pro Claude. Sleduj postup v detailu úkolu.
-        </div>
-      );
-    }
-    return null;
+// Inline preflight banner – ukazuje stav AI agenta po uložení úkolu.
+// Tři možnosti:
+//   1) auto_enqueued=true → "Zařazeno do fronty"
+//   2) issues > 0 → vypíše konkrétní problémy (chybí repo_url, agent disabled, …)
+//   3) žádné issues a manual mode → "Úkol uložen, čeká na ruční spuštění"
+//      (jinak by user nevěděl, že musí kliknout „Spustit Claude")
+function PreflightIssues({ issues, autoEnqueued, executionMode }) {
+  if (autoEnqueued) {
+    return (
+      <div className="rounded border border-emerald-300 bg-emerald-50 p-2.5 text-xs text-emerald-800">
+        ✅ Úkol byl zařazen do fronty pro Claude. Worker si ho vyzvedne. Stav uvidíš v detailu úkolu.
+      </div>
+    );
+  }
+  const hasIssues = issues && issues.length > 0;
+  if (!hasIssues) {
+    // Žádné chyby, ale ani auto-enqueue – manual mode čeká na uživatele
+    return (
+      <div className="rounded border border-blue-300 bg-blue-50 p-2.5 text-xs text-blue-800">
+        ℹ️ Úkol je uložen a připraven pro Claude. Spustíš ho v detailu úkolu tlačítkem „Spustit Claude".
+        {executionMode === 'manual' && <> Můžeš taky přepnout na „Spustit automaticky", pak se zařadí hned po uložení.</>}
+      </div>
+    );
   }
   const sevStyle = (s) => s === 'error'
     ? 'border-red-300 bg-red-50 text-red-800'
@@ -577,6 +591,7 @@ function PreflightIssues({ issues, autoEnqueued }) {
   const sevIcon = (s) => s === 'error' ? '⛔' : s === 'warning' ? '⚠️' : 'ℹ️';
   return (
     <div className="space-y-1.5">
+      <div className="text-[11px] uppercase tracking-wide text-ink-500 font-medium">Co je potřeba doplnit:</div>
       {issues.map((i, idx) => (
         <div key={idx} className={`rounded border ${sevStyle(i.severity)} p-2.5 text-xs`}>
           <span className="font-medium mr-1">{sevIcon(i.severity)}</span>{i.message}
@@ -642,14 +657,12 @@ function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved })
         scope_paths: form.scope_paths.map(s => String(s).trim()).filter(Boolean),
       };
       const resp = task ? await tasksApi.update(task.id, payload) : await tasksApi.create(payload);
-      // Pokud byl task AI a backend vrátil preflight, ukážeme ho a zavřeme modal s prodlevou,
-      // aby si user stihl přečíst zprávy. Jinak zavřeme hned.
-      const hasIssues = resp.ai_preflight && resp.ai_preflight.issues && resp.ai_preflight.issues.length > 0;
-      if (hasIssues || resp.auto_enqueued) {
+      // Pro AI úkoly necháme modal vždy otevřený s feedbackem – user musí vidět,
+      // co se stalo (auto-zařazeno / čeká na manuální spuštění / preflight selhal).
+      // Bez toho se modal po save zavřel a user neviděl žádnou reakci → "nic se nestalo".
+      if (form.ai_assignee) {
         setPreflight(resp.ai_preflight);
         setAutoEnqueued(!!resp.auto_enqueued);
-        // Necháme modal otevřený – user si přečte issues a zavře sám.
-        // Parent ale potřebuje obnovit, takže notifikujeme bez zavření.
         onSaved({ keepOpen: true });
       } else {
         onSaved();
@@ -691,9 +704,13 @@ function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved })
         {/* ── AI agent ── */}
         <AiAgentSection form={form} setForm={setForm} />
 
-        {/* Preflight výsledek z posledního save (jen pro AI úkoly) */}
-        {(preflight || autoEnqueued) && form.ai_assignee && (
-          <PreflightIssues issues={preflight?.issues} autoEnqueued={autoEnqueued} />
+        {/* Preflight výsledek z posledního save – ukáže se vždy po save AI úkolu. */}
+        {form.ai_assignee && (preflight !== null || autoEnqueued) && (
+          <PreflightIssues
+            issues={preflight?.issues}
+            autoEnqueued={autoEnqueued}
+            executionMode={form.execution_mode}
+          />
         )}
 
         {err && <div className="text-red-600 text-xs">{err}</div>}
