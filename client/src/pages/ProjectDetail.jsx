@@ -7,6 +7,7 @@ import AskQuestionModal from '../components/AskQuestionModal.jsx';
 import TaskCompletionDialog from '../components/TaskCompletionDialog.jsx';
 import TimeTriad from '../components/TimeTriad.jsx';
 import Attachments from '../components/Attachments.jsx';
+import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge } from '../components/TaskStatus.jsx';
 import { Input, Textarea, Select } from './ProjectsList.jsx';
 import { projects as projectsApi, tasks as tasksApi, users as usersApi } from '../api.js';
@@ -52,6 +53,7 @@ export default function ProjectDetail() {
   const [taskModal, setTaskModal] = useState(null); // null | { parent_id?, task? }
   const [askModal, setAskModal] = useState(null);   // null | { taskId, taskTitle, defaultToUserId }
   const [completingTask, setCompletingTask] = useState(null);
+  const [aiDetailTask, setAiDetailTask] = useState(null);  // null | task – pro TaskDetailModal s AI panelem
   const [editOpen, setEditOpen] = useState(false);
   const [edits, setEdits] = useState([]);
   const [editsLoading, setEditsLoading] = useState(false);
@@ -182,6 +184,7 @@ export default function ProjectDetail() {
                     onEdit={(task) => setTaskModal({ task })}
                     onDelete={handleDelete}
                     onAsk={(task) => setAskModal({ taskId: task.id, taskTitle: task.title, defaultToUserId: task.assignee_id })}
+                    onAiDetail={(task) => setAiDetailTask(task)}
                   />
                 ))}
               </ul>
@@ -277,6 +280,16 @@ export default function ProjectDetail() {
         users={users}
         onSaved={() => { setEditOpen(false); load(true); loadEdits(); }}
       />
+
+      {/* Detail úkolu s AI panelem – otevírá se z TaskRow tlačítkem "🤖 AI detail".
+          Ukazuje stav agenta, "Spustit Claude" tlačítko a živou activity timeline. */}
+      {aiDetailTask && (
+        <TaskDetailModal
+          task={aiDetailTask}
+          onClose={() => setAiDetailTask(null)}
+          onChanged={() => load(true)}
+        />
+      )}
     </div>
   );
 }
@@ -435,7 +448,20 @@ function QuestionBadge({ task }) {
   );
 }
 
-function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, onDelete, onAsk, indent = 0 }) {
+// Lidsky čitelný popisek + barva pro AI status. Zrcadlí AiAgentPanel.jsx.
+const AI_STATUS_BADGE = {
+  idle:                    { label: '🤖 Idle',                cls: 'bg-slate-100 text-slate-700' },
+  queued:                  { label: '🤖 Ve frontě',           cls: 'bg-amber-100 text-amber-800' },
+  running:                 { label: '🤖 Pracuje…',            cls: 'bg-blue-100 text-blue-800 animate-pulse' },
+  awaiting_clarification:  { label: '🤖 ❓ Čeká na odpověď',   cls: 'bg-purple-100 text-purple-800' },
+  in_review:               { label: '🤖 🔍 Review',           cls: 'bg-indigo-100 text-indigo-800' },
+  needs_changes:           { label: '🤖 🔄 Vrátil reviewer',  cls: 'bg-orange-100 text-orange-800' },
+  needs_human:             { label: '🤖 🆘 Potřebuje člověka', cls: 'bg-red-100 text-red-800' },
+  done:                    { label: '🤖 ✅ Hotovo',            cls: 'bg-emerald-100 text-emerald-800' },
+  failed:                  { label: '🤖 ❌ Selhalo',          cls: 'bg-red-100 text-red-800' },
+};
+
+function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, onDelete, onAsk, onAiDetail, indent = 0 }) {
   const canEditFully = can.createTasks(user);
   const canEditStatus = canEditFully || task.assignee_id === user.id;
   const isDone = task.status === 'done';
@@ -501,6 +527,15 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
             )}
             <QuestionBadge task={task} />
             <AIEstimateBadge task={task} />
+            {task.ai_assignee && AI_STATUS_BADGE[task.ai_status] && (
+              <button
+                onClick={() => onAiDetail(task)}
+                className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${AI_STATUS_BADGE[task.ai_status].cls} hover:opacity-80`}
+                title="Otevřít detail AI agenta (stav, akce, aktivity)"
+              >
+                {AI_STATUS_BADGE[task.ai_status].label}
+              </button>
+            )}
           </div>
 
           {/* Inline náhled příloh */}
@@ -516,6 +551,13 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
             {(canEditFully || true) && (
               <>
                 <span className="mx-1 text-ink-200">|</span>
+                {task.ai_assignee && (
+                  <button
+                    onClick={() => onAiDetail(task)}
+                    className="px-2 py-1 text-xs text-accent-700 hover:text-accent-800 hover:bg-accent-50 rounded font-medium"
+                    title="Otevřít AI panel – stav, akce, activity timeline"
+                  >🤖 AI detail</button>
+                )}
                 <button
                   onClick={() => onAsk(task)}
                   className="px-2 py-1 text-xs text-ink-500 hover:text-brand-500 hover:bg-cream-50 rounded"
@@ -546,6 +588,7 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
               onEdit={onEdit}
               onDelete={onDelete}
               onAsk={onAsk}
+              onAiDetail={onAiDetail}
               indent={indent + 1}
             />
           ))}
@@ -678,15 +721,22 @@ function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved })
     finally { setSaving(false); }
   };
 
+  // Po úspěšném save AI úkolu změníme tlačítka – "Zrušit/Uložit" je matoucí
+  // (uživatel by myslel, že "Zrušit" odvolá save). Místo toho ukážeme jen "Zavřít".
+  const savedSuccessfully = preflight !== null || autoEnqueued;
   return (
     <Modal open={open} onClose={onClose}
       title={task ? 'Upravit úkol' : (parentId ? 'Nový podúkol' : 'Nový úkol')}
-      footer={<>
+      footer={savedSuccessfully && form.ai_assignee ? (
+        <button onClick={onClose} className="px-4 py-1.5 text-sm rounded bg-brand-500 text-white hover:bg-brand-600">
+          Zavřít
+        </button>
+      ) : (<>
         <button onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-slate-300">Zrušit</button>
         <button onClick={submit} disabled={saving} className="px-3 py-1.5 text-sm rounded bg-brand-500 text-white disabled:opacity-50">
           {saving ? 'Ukládám…' : 'Uložit'}
         </button>
-      </>}>
+      </>)}>
       <form onSubmit={submit} className="space-y-3 text-sm">
         <Input label="Název *" value={form.title} onChange={v => setForm({ ...form, title: v })} required />
         <Textarea label="Popis" value={form.description} onChange={v => setForm({ ...form, description: v })} />
