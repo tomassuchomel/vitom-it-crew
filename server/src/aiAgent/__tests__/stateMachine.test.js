@@ -48,6 +48,14 @@ test('canTransition: cokoli → idle povoleno (hard reset)', () => {
 
 // ─── canTransition – co povoleno NENÍ ────────────────────────────────────
 
+test('canTransition: in_review → needs_human povoleno (reviewer reject)', () => {
+  assert.equal(canTransition('in_review', 'needs_human'), true);
+});
+
+test('canTransition: needs_changes → queued povoleno (re-run cyklus)', () => {
+  assert.equal(canTransition('needs_changes', 'queued'), true);
+});
+
 test('canTransition: idle → done přímo zakázáno', () => {
   assert.equal(canTransition('idle', 'done'), false);
 });

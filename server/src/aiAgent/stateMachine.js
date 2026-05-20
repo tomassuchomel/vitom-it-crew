@@ -16,8 +16,10 @@ const ALLOWED = {
   queued:        new Set(['planning', 'idle', 'failed']),
   planning:      new Set(['implementing', 'failed', 'needs_human', 'idle']),
   implementing:  new Set(['in_review', 'failed', 'needs_human', 'idle']),
-  in_review:     new Set(['done', 'needs_changes', 'failed', 'idle']),
-  needs_changes: new Set(['implementing', 'failed', 'idle']),
+  // in_review → needs_human přidáno pro 'reject' verdict reviewera (eskalace).
+  in_review:     new Set(['done', 'needs_changes', 'needs_human', 'failed', 'idle']),
+  // needs_changes → queued přidáno pro re-queue cyklus (implementer dostane feedback a zkusí znovu).
+  needs_changes: new Set(['queued', 'implementing', 'failed', 'idle']),
   done:          new Set(['queued', 'idle']),
   failed:        new Set(['queued', 'idle']),
   needs_human:   new Set(['queued', 'idle', 'failed']),

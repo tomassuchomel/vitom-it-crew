@@ -58,6 +58,78 @@ export async function createPullRequest({ token, owner, repo, head, base, title,
 }
 
 /**
+ * Vytáhne číslo PR z jeho html_url. Tolerantní k trailing slash.
+ * @param {string} prUrl  např. "https://github.com/owner/repo/pull/42"
+ * @returns {{ owner: string, repo: string, number: number }}
+ */
+export function parsePullRequestUrl(prUrl) {
+  if (typeof prUrl !== 'string') throw new Error('parsePullRequestUrl: URL musí být string');
+  const m = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+  if (!m) throw new Error(`parsePullRequestUrl: neumím parsovat "${prUrl}"`);
+  return { owner: m[1], repo: m[2], number: Number(m[3]) };
+}
+
+/**
+ * Přidá issue/PR komentář. (GitHub API: PR komentáře jdou přes issues endpoint.)
+ * @param {Object} opts
+ * @param {string} opts.token
+ * @param {string} opts.owner
+ * @param {string} opts.repo
+ * @param {number} opts.issueNumber  číslo PR / issue
+ * @param {string} opts.body         markdown
+ * @returns {Promise<{ id: number, html_url: string }>}
+ */
+export async function addPrComment({ token, owner, repo, issueNumber, body }) {
+  if (!token) throw new Error('addPrComment: chybí token');
+  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/issues/${issueNumber}/comments`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`GitHub API ${res.status}: ${text.slice(0, 500)}`);
+  }
+  const json = await res.json();
+  return { id: json.id, html_url: json.html_url };
+}
+
+/**
+ * Převede draft PR na ready_for_review. Idempotentní – pokud už není draft,
+ * tiše ignoruje (GitHub vrátí ok, jen nic nezmění).
+ * @param {Object} opts
+ * @param {string} opts.token
+ * @param {string} opts.owner
+ * @param {string} opts.repo
+ * @param {number} opts.number
+ */
+export async function markPrReady({ token, owner, repo, number }) {
+  if (!token) throw new Error('markPrReady: chybí token');
+  // GitHub PATCH /pulls/{n} s draft:false převede z draftu na ready
+  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/pulls/${number}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ draft: false }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`GitHub API ${res.status}: ${text.slice(0, 500)}`);
+  }
+  const json = await res.json();
+  return { number: json.number, draft: json.draft, html_url: json.html_url };
+}
+
+/**
  * Vytáhne {owner, repo} z git remote URL.
  * Podporuje:
  *   – https://github.com/owner/repo.git

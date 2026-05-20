@@ -462,8 +462,32 @@ export async function runImplementationAgent(opts) {
   const client = opts.client || new Anthropic({ apiKey });
   const systemPrompt = fillSystemPrompt({ task, worktreePath, branch, maxIterations });
 
-  // Initial user message – krátký kick-off, kontext je v system promptu
-  const userKickoff = `Začni úkolem #${task.id}. Nezapomeň: nejdřív PLAN.md, pak implementace, pak testy, pak \`done\`. Pracovní adresář je ${worktreePath}.`;
+  // Initial user message – krátký kick-off, kontext je v system promptu.
+  // Pokud máme previousReview (= re-run po reviewer's request_changes), vložíme
+  // ho. Reviewer feedback je závazný – implementer musí konkrétní issues opravit,
+  // ne začínat od nuly. Branch má už předchozí commity – stačí inkrementální fix.
+  let userKickoff;
+  if (opts.previousReview) {
+    userKickoff = `Toto je RE-RUN úkolu #${task.id}. Předchozí pokus byl reviewerem odmítnut s požadavkem na změny. Branch už obsahuje commity z minulé iterace.
+
+NEZAČÍNEJ OD NULY. Opraf konkrétně to, co je v review:
+
+---
+${opts.previousReview}
+---
+
+Postup:
+1. Přečti si aktuální stav klíčových souborů (read_file).
+2. Aktualizuj PLAN.md s nově plánovanými změnami (zachovej původní strukturu).
+3. Oprav každé blocker a major issue z review.
+4. Znovu spusť testy přes bash.
+5. git_commit s commit zprávou ve stylu "Address review: ...".
+6. Zavolej done s aktualizovaným strukturovaným výstupem (popiš v "Plán" co ses opravil oproti minulé iteraci).
+
+Pracovní adresář: ${worktreePath}`;
+  } else {
+    userKickoff = `Začni úkolem #${task.id}. Nezapomeň: nejdřív PLAN.md, pak implementace, pak testy, pak \`done\`. Pracovní adresář je ${worktreePath}.`;
+  }
 
   /** @type {Array<object>} */
   const messages = [{ role: 'user', content: userKickoff }];
