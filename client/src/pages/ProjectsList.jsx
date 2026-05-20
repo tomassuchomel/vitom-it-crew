@@ -91,7 +91,7 @@ export default function ProjectsList() {
 }
 
 function CreateProjectModal({ open, onClose, users, onCreated }) {
-  const [form, setForm] = useState({ name: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '' });
+  const [form, setForm] = useState({ name: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '', repo_url: '' });
   const [err, setErr] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -103,10 +103,11 @@ function CreateProjectModal({ open, onClose, users, onCreated }) {
         ...form,
         manager_id: form.manager_id ? Number(form.manager_id) : null,
         budget: form.budget ? Number(form.budget) : null,
+        repo_url: form.repo_url ? form.repo_url.trim() : null,
       });
       onCreated();
-      setForm({ name: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '' });
-    } catch (e) { setErr(e.response?.data?.error || 'Uložení selhalo'); }
+      setForm({ name: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '', repo_url: '' });
+    } catch (e) { setErr(e.response?.data?.message || e.response?.data?.error || 'Uložení selhalo'); }
     finally { setSaving(false); }
   };
 
@@ -128,6 +129,15 @@ function CreateProjectModal({ open, onClose, users, onCreated }) {
         <Select label="Project manager" value={form.manager_id} onChange={v => setForm({ ...form, manager_id: v })}
           options={[{ value: '', label: '—' }, ...users.filter(u => ['admin', 'manager'].includes(u.role)).map(u => ({ value: u.id, label: u.name }))]} />
         <Input label="Rozpočet (Kč)" type="number" value={form.budget} onChange={v => setForm({ ...form, budget: v })} />
+        <div>
+          <Input label="GitHub repo URL (pro AI agenta)"
+            placeholder="https://github.com/owner/repo"
+            value={form.repo_url}
+            onChange={v => setForm({ ...form, repo_url: v })} />
+          <div className="text-[11px] text-slate-500 mt-1">
+            Bez URL nebude AI agent (Claude) pracovat. Lze doplnit i později.
+          </div>
+        </div>
         {err && <div className="text-red-600 text-xs">{err}</div>}
       </form>
     </Modal>

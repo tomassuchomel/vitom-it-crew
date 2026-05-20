@@ -8,6 +8,7 @@ import {
   validateExecutionMode,
   normalizeJsonArray,
 } from '../taskModel.js';
+import { preflightTask } from '../aiAgent/preflight.js';
 
 // Minimální délka popisu, pokud je úkol přiřazen AI agentovi.
 // Bez kontextu agent nemůže rozumně pracovat.
@@ -54,6 +55,35 @@ function extractAiFields(body, description) {
     }
   }
   return { fields: out };
+}
+
+// Po uložení tasku zkusíme spustit AI agenta:
+//   - když je ai_assignee=true && execution_mode='auto' && ai_status='idle'
+//   - když preflight projde, přepneme ai_status idle→queued (worker si task vyzvedne)
+//   - když preflight neprojde, vracíme issues v response, frontend je ukáže banner
+// Vrátí { auto_enqueued: bool, ai_preflight: { issues, can_enqueue } | null }
+async function maybeAutoEnqueue(task, userId) {
+  if (!task.ai_assignee) return { auto_enqueued: false, ai_preflight: null };
+  const pf = await preflightTask(task.id);
+  if (pf.status === 404) return { auto_enqueued: false, ai_preflight: null };
+  const result = {
+    auto_enqueued: false,
+    ai_preflight: { can_enqueue: pf.ok, issues: pf.issues },
+  };
+  // Auto-enqueue jen pro execution_mode='auto'. Pro 'manual' user musí kliknout
+  // na „Spustit Claude" – preflight ale vrátíme, aby user viděl případné problémy.
+  if (task.execution_mode !== 'auto') return result;
+  if (!pf.ok) return result;
+  if (task.ai_status !== 'idle') return result;
+
+  await query(`UPDATE tasks SET ai_status = 'queued' WHERE id = $1`, [task.id]);
+  await query(
+    `INSERT INTO ai_agent_activity (task_id, action, details)
+     VALUES ($1, 'enqueued_auto', $2::jsonb)`,
+    [task.id, JSON.stringify({ user_id: userId, reason: 'task_saved_with_auto_mode' })]
+  );
+  result.auto_enqueued = true;
+  return result;
 }
 
 const router = Router();
@@ -160,7 +190,12 @@ router.post('/', requireAuth, async (req, res) => {
   const task = r.rows[0];
   // AI odhad na pozadí (neblokuje response)
   kickoffAIEstimate(task);
-  res.json({ task });
+
+  // Auto-enqueue + preflight. Pokud něco brání (chybí repo_url, agent disabled, …),
+  // vracíme issues spolu s taskem, frontend zobrazí banner.
+  const { auto_enqueued, ai_preflight } = await maybeAutoEnqueue(task, req.user.id);
+  if (auto_enqueued) task.ai_status = 'queued';
+  res.json({ task, auto_enqueued, ai_preflight });
 });
 
 // Pomocná funkce: spočítá hodnoty completed_at / completed_by / actual_h podle změny stavu.
@@ -281,7 +316,21 @@ router.put('/:id', requireAuth, async (req, res) => {
     kickoffAIEstimate(r.rows[0]);
   }
 
-  res.json({ task: r.rows[0] });
+  // Auto-enqueue + preflight – jen pokud se ai_assignee právě zapnul nebo
+  // ai_status je 'idle' (užitečné, když user opraví popis a chce znovu spustit).
+  const updated = r.rows[0];
+  const aiJustEnabled = !cur.ai_assignee && updated.ai_assignee;
+  const aiIdle = updated.ai_status === 'idle';
+  let auto_enqueued = false;
+  let ai_preflight = null;
+  if (updated.ai_assignee && (aiJustEnabled || aiIdle)) {
+    const r2 = await maybeAutoEnqueue(updated, req.user.id);
+    auto_enqueued = r2.auto_enqueued;
+    ai_preflight = r2.ai_preflight;
+    if (auto_enqueued) updated.ai_status = 'queued';
+  }
+
+  res.json({ task: updated, auto_enqueued, ai_preflight });
 });
 
 // Manuální spuštění AI odhadu pro konkrétní úkol

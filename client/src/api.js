@@ -52,6 +52,21 @@ export const ai = {
   accuracy: () => api.get('/ai/accuracy').then(r => r.data),
 };
 
+// AI agent (Claude vykonává úkoly autonomně)
+// Endpointy obsluhuje server/src/routes/aiAgent.js
+export const aiAgent = {
+  // Globální preflight: vrátí, jestli je AI agent vůbec připraven běžet
+  // (config OK, worker žije). Volá se z dashboardu / globálního banneru.
+  preflight:        () => api.get('/ai-agent/preflight').then(r => r.data),
+  // Per-task preflight – obsahuje issues specifické pro daný úkol
+  // (chybí repo_url, není ai_assignee, špatný stav…).
+  taskPreflight:    (taskId) => api.get(`/ai-agent/preflight/${taskId}`).then(r => r.data),
+  // Zařadí task do fronty pro agenta. Vrátí 400 + issues pokud preflight selže.
+  enqueue:          (taskId) => api.post(`/tasks/${taskId}/enqueue`).then(r => r.data),
+  // Status + activity log pro detail úkolu (poll po enqueue).
+  status:           (taskId) => api.get(`/tasks/${taskId}/ai-status`).then(r => r.data),
+};
+
 export const attachments = {
   list:   (taskId) => api.get(`/attachments/by-task/${taskId}`).then(r => r.data),
   upload: (taskId, files) => {

@@ -5,14 +5,29 @@ import { requireAuth, can } from '../auth.js';
 const router = Router();
 
 // Pole, která logujeme do audit logu (PUT). Manager_id je číslo, name jmenné mapování níže.
-const TRACKED_FIELDS = ['name', 'description', 'start_date', 'due_date', 'status', 'manager_id', 'budget'];
+const TRACKED_FIELDS = ['name', 'description', 'start_date', 'due_date', 'status', 'manager_id', 'budget', 'repo_url'];
 
 // Human-readable popisky polí (pro audit log v UI)
 const FIELD_LABELS = {
   name: 'Název', description: 'Popis',
   start_date: 'Začátek', due_date: 'Termín', status: 'Stav',
   manager_id: 'Manager', budget: 'Rozpočet',
+  repo_url: 'GitHub repo URL',
 };
+
+// Validace repo_url – základní sanitka: HTTPS GitHub URL, žádné podivnosti.
+// Detailnější ověření (existence repa, scope tokenu) řeší až worker při preflight.
+function validateRepoUrl(v) {
+  if (v == null || v === '') return { ok: true, value: null };
+  if (typeof v !== 'string') return { ok: false, error: 'repo_url musí být string' };
+  const trimmed = v.trim();
+  if (trimmed.length > 500) return { ok: false, error: 'repo_url je příliš dlouhý' };
+  // GitHub HTTPS nebo SSH formát
+  const ok = /^https?:\/\/(www\.)?github\.com\/[\w.-]+\/[\w.-]+\/?$/i.test(trimmed)
+    || /^git@github\.com:[\w.-]+\/[\w.-]+\.git$/i.test(trimmed);
+  if (!ok) return { ok: false, error: 'repo_url musí být GitHub URL (https://github.com/owner/repo nebo git@github.com:owner/repo.git)' };
+  return { ok: true, value: trimmed.replace(/\/$/, '') };
+}
 
 // Seznam projektů s agregacemi (+ estimated_h_total pro Timeline)
 //
@@ -106,13 +121,15 @@ router.get('/:id/edits', requireAuth, async (req, res) => {
 // Vytvoření – admin/manager
 router.post('/', requireAuth, async (req, res) => {
   if (!can.manageProjects(req.user)) return res.status(403).json({ error: 'forbidden' });
-  const { name, description, start_date, due_date, manager_id, budget } = req.body || {};
+  const { name, description, start_date, due_date, manager_id, budget, repo_url } = req.body || {};
   if (!name || !start_date) return res.status(400).json({ error: 'missing_fields' });
+  const repoCheck = validateRepoUrl(repo_url);
+  if (!repoCheck.ok) return res.status(400).json({ error: 'invalid_repo_url', message: repoCheck.error });
   const r = await query(`
-    INSERT INTO projects (name, description, start_date, due_date, manager_id, budget)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO projects (name, description, start_date, due_date, manager_id, budget, repo_url)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     RETURNING *
-  `, [name, description || null, start_date, due_date || null, manager_id || req.user.id, budget || null]);
+  `, [name, description || null, start_date, due_date || null, manager_id || req.user.id, budget || null, repoCheck.value]);
   const project = r.rows[0];
   // log create
   await query(`INSERT INTO project_edits (project_id, user_id, action, note) VALUES ($1, $2, 'create', $3)`,
@@ -150,17 +167,25 @@ router.put('/:id', requireAuth, async (req, res) => {
     return res.json({ project: cur, edits: [] });
   }
 
+  // Validace repo_url pokud se mění
+  if ('repo_url' in req.body) {
+    const rc = validateRepoUrl(req.body.repo_url);
+    if (!rc.ok) return res.status(400).json({ error: 'invalid_repo_url', message: rc.error });
+    next.repo_url = rc.value;
+  }
+
   // Update v DB. Prázdný string z UI převedeme na NULL pro DATE / FK sloupce.
   const nullableDate = (v) => (v === '' || v === undefined) ? null : v;
   const nullableNum  = (v) => (v === '' || v === undefined || v === null) ? null : Number(v);
   const r = await query(`
     UPDATE projects SET
       name = $1, description = $2, start_date = $3, due_date = $4,
-      status = $5, manager_id = $6, budget = $7
-    WHERE id = $8
+      status = $5, manager_id = $6, budget = $7, repo_url = $8
+    WHERE id = $9
     RETURNING *
   `, [next.name, next.description, next.start_date, nullableDate(next.due_date),
-      next.status, next.manager_id || null, nullableNum(next.budget), id]);
+      next.status, next.manager_id || null, nullableNum(next.budget),
+      next.repo_url || null, id]);
 
   // Log každé změny zvlášť
   for (const c of changes) {

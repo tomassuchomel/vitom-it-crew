@@ -21,6 +21,7 @@ import reportsRoutes from './routes/reports.js';
 import questionsRoutes from './routes/questions.js';
 import attachmentsRoutes, { uploadsDir } from './routes/attachments.js';
 import aiRoutes from './routes/ai.js';
+import aiAgentRoutes from './routes/aiAgent.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +49,9 @@ app.use('/api/reports', reportsRoutes);
 app.use('/api/questions', questionsRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/ai', aiRoutes);
+// aiAgentRoutes obsluhuje smíšené cesty: /api/ai-agent/preflight* i /api/tasks/:id/enqueue,
+// proto je mountujeme na /api (ne na sub-prefix).
+app.use('/api', aiAgentRoutes);
 
 // Statické přílohy
 app.use('/uploads', express.static(uploadsDir, {

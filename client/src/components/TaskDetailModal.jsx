@@ -9,6 +9,7 @@ import Avatar from './Avatar.jsx';
 import Attachments from './Attachments.jsx';
 import TaskCompletionDialog from './TaskCompletionDialog.jsx';
 import TimeTriad from './TimeTriad.jsx';
+import AiAgentPanel from './AiAgentPanel.jsx';
 
 const PRIORITY_OPTIONS = [
   { value: 'low',    label: '⬇ Nízká' },
@@ -120,6 +121,16 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
               )}
             </div>
           </Section>
+
+          {/* AI agent – ukáže se jen pokud má úkol ai_assignee=true */}
+          {task.ai_assignee && (
+            <Section
+              title="🤖 AI agent (Claude)"
+              subtitle="Stav agenta, akce a aktivity. Pokud není připraven, ukáže se, co je třeba dodat."
+            >
+              <AiAgentPanel task={task} />
+            </Section>
+          )}
 
           {/* Poznámka / popis */}
           <NoteSection task={task} canEdit={canEditNote} onSave={handleSave} />

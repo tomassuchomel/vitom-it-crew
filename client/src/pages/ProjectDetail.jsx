@@ -209,6 +209,12 @@ export default function ProjectDetail() {
             {can.seeCosts(user) && project.budget && (
               <Row label="Rozpočet" value={`${Number(project.budget).toLocaleString('cs-CZ')} Kč`} />
             )}
+            <Row
+              label="GitHub repo"
+              value={project.repo_url
+                ? <a href={project.repo_url} target="_blank" rel="noreferrer" className="text-brand-500 hover:underline break-all">{project.repo_url.replace(/^https?:\/\//, '')}</a>
+                : <span className="text-red-500 text-xs">není nastaveno (Claude nemůže pracovat)</span>}
+            />
           </div>
 
           {/* Historie změn */}
@@ -235,7 +241,12 @@ export default function ProjectDetail() {
           projectId={project.id}
           parentId={taskModal.parent_id}
           task={taskModal.task}
-          onSaved={() => { setTaskModal(null); load(); }}
+          onSaved={(opts) => {
+            // Pokud má modal zůstat otevřený (ukázat preflight), jen reload listu.
+            // Jinak modal zavři a reload.
+            load();
+            if (!opts?.keepOpen) setTaskModal(null);
+          }}
         />
       )}
 
@@ -272,7 +283,7 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
   const [form, setForm] = useState({
     name: '', description: '',
     start_date: '', due_date: '',
-    status: 'active', manager_id: '', budget: '',
+    status: 'active', manager_id: '', budget: '', repo_url: '',
   });
   const [err, setErr] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -287,6 +298,7 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
         status: project.status || 'active',
         manager_id: project.manager_id || '',
         budget: project.budget != null ? String(project.budget) : '',
+        repo_url: project.repo_url || '',
       });
       setErr(null);
     }
@@ -300,10 +312,11 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
         ...form,
         manager_id: form.manager_id ? Number(form.manager_id) : null,
         budget: form.budget ? Number(form.budget) : null,
+        repo_url: form.repo_url ? form.repo_url.trim() : null,
       });
       onSaved();
     } catch (er) {
-      setErr(er.response?.data?.error || 'Uložení selhalo');
+      setErr(er.response?.data?.message || er.response?.data?.error || 'Uložení selhalo');
     } finally {
       setSaving(false);
     }
@@ -334,6 +347,15 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
             options={[{ value: '', label: '—' }, ...users.filter(u => ['admin', 'manager'].includes(u.role)).map(u => ({ value: u.id, label: u.name }))]} />
         </div>
         <Input label="Rozpočet (Kč)" type="number" value={form.budget} onChange={v => setForm({ ...form, budget: v })} />
+        <div>
+          <Input label="GitHub repo URL (pro AI agenta)"
+            placeholder="https://github.com/owner/repo"
+            value={form.repo_url}
+            onChange={v => setForm({ ...form, repo_url: v })} />
+          <div className="text-[11px] text-slate-500 mt-1">
+            Bez URL nebude AI agent (Claude) na tomto projektu pracovat.
+          </div>
+        </div>
         {err && <div className="text-red-600 text-xs">{err}</div>}
         <div className="text-xs text-ink-400">Změny se zaznamenají do historie projektu.</div>
       </form>
@@ -534,6 +556,36 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
 // Zrcadli AI_DESCRIPTION_MIN v server/src/routes/tasks.js
 const AI_DESC_MIN = 30;
 
+// Inline preflight banner – ukazuje issues, které brání nebo zpožďují běh AI agenta.
+// Zobrazí se pod sekcí „🤖 Přiřadit Claudovi" hned po uložení tasku, kdy backend vrátil ai_preflight.
+function PreflightIssues({ issues, autoEnqueued }) {
+  if (!issues || issues.length === 0) {
+    if (autoEnqueued) {
+      return (
+        <div className="rounded border border-emerald-300 bg-emerald-50 p-2.5 text-xs text-emerald-800">
+          ✅ Úkol byl zařazen do fronty pro Claude. Sleduj postup v detailu úkolu.
+        </div>
+      );
+    }
+    return null;
+  }
+  const sevStyle = (s) => s === 'error'
+    ? 'border-red-300 bg-red-50 text-red-800'
+    : s === 'warning'
+      ? 'border-amber-300 bg-amber-50 text-amber-800'
+      : 'border-slate-200 bg-slate-50 text-slate-700';
+  const sevIcon = (s) => s === 'error' ? '⛔' : s === 'warning' ? '⚠️' : 'ℹ️';
+  return (
+    <div className="space-y-1.5">
+      {issues.map((i, idx) => (
+        <div key={idx} className={`rounded border ${sevStyle(i.severity)} p-2.5 text-xs`}>
+          <span className="font-medium mr-1">{sevIcon(i.severity)}</span>{i.message}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved }) {
   const [form, setForm] = useState({
     title: task?.title || '',
@@ -552,6 +604,10 @@ function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved })
   });
   const [err, setErr] = useState(null);
   const [saving, setSaving] = useState(false);
+  // Preflight z odpovědi serveru po uložení – zobrazí se inline.
+  // null = ještě se neukládalo (nebo preflight neproběhl, např. ai_assignee=false).
+  const [preflight, setPreflight] = useState(null);
+  const [autoEnqueued, setAutoEnqueued] = useState(false);
 
   // Klientská validace – vrátí null pokud OK, jinak chybový string.
   // Backend dělá identickou kontrolu, ale tady chytíme chybu před zbytečným kolečkem.
@@ -568,6 +624,8 @@ function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved })
   const submit = async (e) => {
     e.preventDefault();
     setErr(null);
+    setPreflight(null);
+    setAutoEnqueued(false);
     const cErr = clientValidate();
     if (cErr) { setErr(cErr); return; }
     setSaving(true);
@@ -583,9 +641,19 @@ function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved })
         out_of_scope: form.out_of_scope.map(s => String(s).trim()).filter(Boolean),
         scope_paths: form.scope_paths.map(s => String(s).trim()).filter(Boolean),
       };
-      if (task) await tasksApi.update(task.id, payload);
-      else await tasksApi.create(payload);
-      onSaved();
+      const resp = task ? await tasksApi.update(task.id, payload) : await tasksApi.create(payload);
+      // Pokud byl task AI a backend vrátil preflight, ukážeme ho a zavřeme modal s prodlevou,
+      // aby si user stihl přečíst zprávy. Jinak zavřeme hned.
+      const hasIssues = resp.ai_preflight && resp.ai_preflight.issues && resp.ai_preflight.issues.length > 0;
+      if (hasIssues || resp.auto_enqueued) {
+        setPreflight(resp.ai_preflight);
+        setAutoEnqueued(!!resp.auto_enqueued);
+        // Necháme modal otevřený – user si přečte issues a zavře sám.
+        // Parent ale potřebuje obnovit, takže notifikujeme bez zavření.
+        onSaved({ keepOpen: true });
+      } else {
+        onSaved();
+      }
     } catch (e) {
       const code = e.response?.data?.error;
       setErr(
@@ -622,6 +690,11 @@ function TaskModal({ open, onClose, users, projectId, parentId, task, onSaved })
 
         {/* ── AI agent ── */}
         <AiAgentSection form={form} setForm={setForm} />
+
+        {/* Preflight výsledek z posledního save (jen pro AI úkoly) */}
+        {(preflight || autoEnqueued) && form.ai_assignee && (
+          <PreflightIssues issues={preflight?.issues} autoEnqueued={autoEnqueued} />
+        )}
 
         {err && <div className="text-red-600 text-xs">{err}</div>}
       </form>
