@@ -1,5 +1,6 @@
 // Sdílené komponenty pro stav úkolu a akční tlačítka.
 // Vizuálně oddělené: STATUS = velký barevný badge (informuje), AKCE = malé outlined tlačítko (mění stav).
+import { useState } from 'react';
 
 export const STATUS_META = {
   todo:        { label: 'Čeká',     icon: '🕐', bg: 'bg-amber-100',    text: 'text-amber-800',     border: 'border-amber-300', dot: 'bg-amber-500' },
@@ -88,8 +89,12 @@ export function StatusActions({ task, onChange, compact = false, canChange = tru
   return null;
 }
 
-// AI Estimate Badge – ukazuje status AI odhadu (pending/done/error)
+// AI Estimate Badge – ukazuje status AI odhadu (pending/done/error).
+// Při kliku na 'error' state ukáže plný text chyby (na mobilu tooltip nefunguje).
 export function AIEstimateBadge({ task }) {
+  const [showErr, setShowErr] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+
   if (task.ai_estimate_status === 'pending') {
     return (
       <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-brand-50 text-brand-600 rounded border border-brand-200">
@@ -98,11 +103,53 @@ export function AIEstimateBadge({ task }) {
     );
   }
   if (task.ai_estimate_status === 'error') {
+    const retry = async (e) => {
+      e.stopPropagation();
+      setRetrying(true);
+      try {
+        // Manuální spuštění odhadu na backendu – stejné API jako automatický kickoff.
+        const { api } = await import('../api.js');
+        await api.post(`/tasks/${task.id}/estimate`);
+        // Po retry zavřeme overlay, parent stránka si odhad načte při dalším refreshi.
+        setShowErr(false);
+      } catch (err) {
+        // Necháme overlay otevřený – zobrazí původní chybu, retry se pokusí ještě jednou
+      } finally {
+        setRetrying(false);
+      }
+    };
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-red-50 text-red-600 rounded border border-red-200"
-        title={task.ai_estimate_note}>
-        ⚠ AI odhad selhal
-      </span>
+      <>
+        <button
+          onClick={(e) => { e.stopPropagation(); setShowErr(true); }}
+          className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-red-50 text-red-600 rounded border border-red-200 hover:bg-red-100"
+          title={task.ai_estimate_note || 'Klikni pro detail'}
+        >
+          ⚠ AI odhad selhal
+        </button>
+        {showErr && (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowErr(false)}>
+            <div className="bg-white rounded-lg max-w-lg w-full p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-start justify-between mb-3">
+                <h3 className="font-semibold text-ink-800">⚠ AI odhad selhal</h3>
+                <button onClick={() => setShowErr(false)} className="text-ink-400 hover:text-ink-700 text-xl leading-none">×</button>
+              </div>
+              <div className="text-xs text-ink-500 mb-1">Důvod chyby:</div>
+              <pre className="text-xs bg-red-50 border border-red-200 rounded p-3 whitespace-pre-wrap break-words text-red-800 max-h-64 overflow-y-auto">
+                {task.ai_estimate_note || '(žádný detail – podívej se do Render Logs na řádek „[ai estimate]")'}
+              </pre>
+              <div className="flex items-center gap-2 mt-4">
+                <button
+                  onClick={retry}
+                  disabled={retrying}
+                  className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50"
+                >{retrying ? 'Spouštím…' : '🔄 Zkusit znovu'}</button>
+                <button onClick={() => setShowErr(false)} className="px-3 py-1.5 text-sm text-ink-500 hover:text-ink-700">Zavřít</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
     );
   }
   if (task.ai_estimated_h != null) {
