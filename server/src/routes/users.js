@@ -35,15 +35,50 @@ function publicUser(u, { includeRate = false } = {}) {
   return out;
 }
 
-// Seznam uživatelů – sazby vidí jen admin/manager
+// Seznam uživatelů.
+// Default chování (a všude v běžné app): jen členové aktuálního teamu –
+// assignee dropdowny, manager dropdowny, Team page atd. ukazují relevantní lidi.
+//
+// `?scope=all` (jen admin): všichni useři + jejich team membership.
+// Používá se v `/admin` pro globální správu napříč teamy.
+//
+// Sazby (hourly_rate) vidí jen admin/manager (can.seeCosts).
 router.get('/', requireAuth, async (req, res) => {
   const showRates = can.seeCosts(req.user);
+  const scopeAll = req.query.scope === 'all';
+
+  // scope=all = admin přehled napříč teamy
+  if (scopeAll) {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
+    const r = await query(
+      `SELECT u.id, u.email, u.name, u.first_name, u.last_name, u.role, u.hourly_rate, u.active,
+              u.must_change_password, u.avatar_updated_at,
+              COALESCE(
+                (SELECT json_agg(json_build_object('team_id', tm.team_id, 'team_role', tm.team_role, 'team_name', t.name, 'team_slug', t.slug)
+                                 ORDER BY tm.team_id)
+                 FROM team_members tm JOIN teams t ON t.id = tm.team_id
+                 WHERE tm.user_id = u.id),
+                '[]'::json
+              ) AS teams
+       FROM users u
+       ORDER BY u.id`
+    );
+    return res.json({ users: r.rows.map(u => ({ ...publicUser(u, { includeRate: showRates }), teams: u.teams })) });
+  }
+
+  // Default: jen členové current teamu. Bez team kontextu vrátíme prázdno.
+  if (!req.team_id) return res.json({ users: [] });
   const r = await query(
-    `SELECT id, email, name, first_name, last_name, role, hourly_rate, active,
-            must_change_password, avatar_updated_at
-     FROM users ORDER BY id`
+    `SELECT u.id, u.email, u.name, u.first_name, u.last_name, u.role, u.hourly_rate, u.active,
+            u.must_change_password, u.avatar_updated_at,
+            tm.team_role AS current_team_role
+     FROM users u
+     JOIN team_members tm ON tm.user_id = u.id
+     WHERE tm.team_id = $1 AND u.active = TRUE
+     ORDER BY u.name`,
+    [req.team_id]
   );
-  res.json({ users: r.rows.map(u => publicUser(u, { includeRate: showRates })) });
+  res.json({ users: r.rows.map(u => ({ ...publicUser(u, { includeRate: showRates }), team_role: u.current_team_role })) });
 });
 
 // Avatar – binární endpoint. Veřejný v rámci přihlášených uživatelů.

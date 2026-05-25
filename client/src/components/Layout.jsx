@@ -17,6 +17,7 @@ const NAV = [
   { to: '/reports',   label: 'Reporty',            icon: '📊', requireSeeAll: true },
   { to: '/ai',        label: 'AI Coach',           icon: '🤖', requireSeeAll: true },
   { to: '/team',      label: 'Tým',                icon: '👥' },
+  { to: '/admin',     label: 'Admin',              icon: '⚙️', requireAdmin: true },
 ];
 
 export default function Layout({ children }) {
@@ -65,7 +66,8 @@ export default function Layout({ children }) {
         <nav className="flex-1 py-4">
           {NAV.filter(n =>
             (!n.requireSeeAll || can.seeAllHours(user)) &&
-            (!n.requireManager || can.manageProjects(user))
+            (!n.requireManager || can.manageProjects(user)) &&
+            (!n.requireAdmin || user?.role === 'admin')
           ).map(item => {
             const badgeNum = item.badge ? counts[item.badge] : 0;
             return (

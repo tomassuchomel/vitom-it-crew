@@ -118,7 +118,11 @@ export const time = {
 };
 
 export const users = {
+  // Default: team-scoped (jen členové current teamu).
   list:    () => api.get('/users').then(r => r.data),
+  // Admin-only: všichni useři + jejich team membership v poli `teams`.
+  // Použij v /admin sekci pro globální správu napříč teamy.
+  listAll: () => api.get('/users', { params: { scope: 'all' } }).then(r => r.data),
   create:  (data) => api.post('/users', data).then(r => r.data),
   update:  (id, data) => api.put(`/users/${id}`, data).then(r => r.data),
   remove:  (id) => api.delete(`/users/${id}`).then(r => r.data),
