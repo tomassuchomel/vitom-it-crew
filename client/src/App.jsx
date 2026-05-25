@@ -9,6 +9,7 @@ import TimeTracking from './pages/TimeTracking.jsx';
 import Reports from './pages/Reports.jsx';
 import TeamPage from './pages/Team.jsx';
 import MyTasks from './pages/MyTasks.jsx';
+import Review from './pages/Review.jsx';
 import Questions from './pages/Questions.jsx';
 import AIPage from './pages/AIPage.jsx';
 import Profile from './pages/Profile.jsx';
@@ -37,6 +38,7 @@ function ProtectedRoutes() {
         <Route path="/projects" element={<ProjectsList />} />
         <Route path="/projects/:id" element={<ProjectDetail />} />
         <Route path="/my-tasks" element={<MyTasks />} />
+        <Route path="/review" element={<Review />} />
         <Route path="/questions" element={<Questions />} />
         <Route path="/time" element={<TimeTracking />} />
         <Route path="/reports" element={<Reports />} />

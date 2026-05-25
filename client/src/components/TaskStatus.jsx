@@ -3,10 +3,11 @@
 import { useState } from 'react';
 
 export const STATUS_META = {
-  todo:        { label: 'Čeká',     icon: '🕐', bg: 'bg-amber-100',    text: 'text-amber-800',     border: 'border-amber-300', dot: 'bg-amber-500' },
-  in_progress: { label: 'Pracuje se', icon: '⚙️', bg: 'bg-blue-100',     text: 'text-blue-800',      border: 'border-blue-300',  dot: 'bg-blue-500 animate-pulse' },
-  review:      { label: 'Review',   icon: '👀', bg: 'bg-accent-100',   text: 'text-accent-800',    border: 'border-accent-300',dot: 'bg-accent-500' },
-  done:        { label: 'Hotovo',   icon: '✅', bg: 'bg-emerald-100',  text: 'text-emerald-800',   border: 'border-emerald-400',dot: 'bg-emerald-500' },
+  todo:        { label: 'Čeká',         icon: '🕐', bg: 'bg-amber-100',    text: 'text-amber-800',     border: 'border-amber-300',  dot: 'bg-amber-500' },
+  in_progress: { label: 'Pracuje se',   icon: '⚙️', bg: 'bg-blue-100',     text: 'text-blue-800',      border: 'border-blue-300',   dot: 'bg-blue-500 animate-pulse' },
+  review:      { label: 'Čeká na review', icon: '👀', bg: 'bg-accent-100', text: 'text-accent-800',    border: 'border-accent-300', dot: 'bg-accent-500' },
+  needs_fix:   { label: 'K opravě',     icon: '🔄', bg: 'bg-orange-100',  text: 'text-orange-800',    border: 'border-orange-300', dot: 'bg-orange-500 animate-pulse' },
+  done:        { label: 'Hotovo',       icon: '✅', bg: 'bg-emerald-100', text: 'text-emerald-800',   border: 'border-emerald-400',dot: 'bg-emerald-500' },
 };
 
 // Velký status badge – primárně INFORMUJE o stavu (ne tlačítko)
@@ -26,60 +27,92 @@ export function StatusBadge({ status, size = 'normal' }) {
   );
 }
 
-// Akční tlačítka pro PŘECHOD mezi stavy. Vizuálně outline, jasně jako "akce".
-// Stav je v badge oddělen; tato tlačítka jen mění stav.
-export function StatusActions({ task, onChange, compact = false, canChange = true }) {
-  if (!canChange) return null;
+// Akční tlačítka pro PŘECHOD mezi stavy.
+//
+// Workflow:
+//   todo        → in_progress         (kdokoli s právem)
+//   in_progress → review              ("Předat k review" – nahrazuje přímé „Dokončit")
+//   needs_fix   → in_progress         ("Začít opravu" – po vrácení od managera)
+//   review      → done/needs_fix      (jen manager projektu nebo admin, akce z reviewQueue)
+//
+// Props:
+//   - task: aktuální task
+//   - onChange(task, status): pro standardní statusové přechody (in_progress, review, needs_fix)
+//   - onReview(task, verdict): otevřít approve/reject flow (jen pro manager/admin v review stavu)
+//   - canReview: zda current user má právo review-ovat tenhle task
+//   - canChange: zda current user může vůbec měnit status (assignee nebo createTasks)
+export function StatusActions({ task, onChange, onReview, compact = false, canChange = true, canReview = false }) {
+  if (!canChange && !canReview) return null;
   const sz = compact ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-xs';
   const baseBtn = 'inline-flex items-center gap-1 rounded-md border bg-white font-medium transition hover:shadow-sm';
-
-  // Tlačítka pro každý stav: kam se může pokračovat
   const fromStatus = task.status;
 
-  // Pomocná tlačítka – outline, decentní
-  const Btn = ({ targetStatus, label, color = 'ink' }) => {
-    const palette = {
-      ink:      'border-ink-300 text-ink-700 hover:border-ink-500 hover:bg-cream-50',
-      blue:     'border-blue-300 text-blue-700 hover:bg-blue-50',
-      accent:   'border-accent-300 text-accent-700 hover:bg-accent-50',
-      emerald:  'border-emerald-300 text-emerald-700 hover:bg-emerald-50',
-      red:      'border-red-300 text-red-700 hover:bg-red-50',
-    };
-    return (
-      <button
-        onClick={() => onChange(task, targetStatus)}
-        className={`${baseBtn} ${sz} ${palette[color]}`}
-        title={`Změnit stav: ${STATUS_META[targetStatus].label}`}
-      >→ {label}</button>
-    );
+  const palette = {
+    ink:      'border-ink-300 text-ink-700 hover:border-ink-500 hover:bg-cream-50',
+    blue:     'border-blue-300 text-blue-700 hover:bg-blue-50',
+    accent:   'border-accent-300 text-accent-700 hover:bg-accent-50',
+    emerald:  'border-emerald-300 text-emerald-700 hover:bg-emerald-50',
+    orange:   'border-orange-300 text-orange-700 hover:bg-orange-50',
+    red:      'border-red-300 text-red-700 hover:bg-red-50',
   };
 
-  if (fromStatus === 'todo') {
+  // Tlačítko pro PŘECHOD statusu (in_progress, review, needs_fix, …)
+  const Btn = ({ targetStatus, label, color = 'ink' }) => (
+    <button
+      onClick={() => onChange(task, targetStatus)}
+      className={`${baseBtn} ${sz} ${palette[color]}`}
+      title={`Změnit stav: ${STATUS_META[targetStatus]?.label || targetStatus}`}
+    >→ {label}</button>
+  );
+
+  // Tlačítko pro REVIEW akci (approve/reject) – volá onReview místo onChange
+  const ReviewBtn = ({ verdict, label, color }) => (
+    <button
+      onClick={() => onReview && onReview(task, verdict)}
+      className={`${baseBtn} ${sz} ${palette[color]}`}
+      title={verdict === 'approved' ? 'Schválit a označit jako hotové' : 'Vrátit programátorovi k opravě'}
+    >{label}</button>
+  );
+
+  if (fromStatus === 'todo' && canChange) {
     return (
       <div className="flex items-center gap-1">
         <Btn targetStatus="in_progress" label="Začít pracovat" color="blue" />
-        <Btn targetStatus="done" label="Dokončit" color="emerald" />
       </div>
     );
   }
-  if (fromStatus === 'in_progress') {
+  if (fromStatus === 'in_progress' && canChange) {
     return (
       <div className="flex items-center gap-1">
-        <Btn targetStatus="review" label="Do review" color="accent" />
-        <Btn targetStatus="done" label="Dokončit" color="emerald" />
+        <Btn targetStatus="review" label="Předat k review" color="emerald" />
         <Btn targetStatus="todo" label="Pozastavit" color="ink" />
       </div>
     );
   }
   if (fromStatus === 'review') {
+    if (canReview) {
+      return (
+        <div className="flex items-center gap-1">
+          <ReviewBtn verdict="approved" label="✅ Schválit & dokončit" color="emerald" />
+          <ReviewBtn verdict="rejected" label="🔄 Vrátit k opravě" color="orange" />
+        </div>
+      );
+    }
+    // Programátor čeká na review – ukáže info text místo tlačítek
     return (
-      <div className="flex items-center gap-1">
-        <Btn targetStatus="done" label="Schválit & dokončit" color="emerald" />
-        <Btn targetStatus="in_progress" label="Vrátit do práce" color="blue" />
+      <div className="text-[11px] text-ink-400 italic px-1">
+        Čeká na schválení vedoucího projektu…
       </div>
     );
   }
-  if (fromStatus === 'done') {
+  if (fromStatus === 'needs_fix' && canChange) {
+    return (
+      <div className="flex items-center gap-1">
+        <Btn targetStatus="in_progress" label="Začít opravu" color="blue" />
+      </div>
+    );
+  }
+  if (fromStatus === 'done' && canChange) {
     return (
       <div className="flex items-center gap-1">
         <Btn targetStatus="todo" label="Otevřít znovu" color="ink" />

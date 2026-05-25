@@ -89,6 +89,7 @@ router.get('/:id', requireAuth, async (req, res) => {
   const tR = await query(`
     SELECT t.*,
       u.name AS assignee_name,
+      $2::int AS project_manager_id,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q,
       (SELECT COUNT(*) FROM attachments a WHERE a.task_id = t.id) AS attachment_count,
@@ -96,7 +97,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
     WHERE t.project_id = $1
     ORDER BY COALESCE(t.parent_id, t.id), t.id
-  `, [id]);
+  `, [id, project.manager_id]);
 
   if (!can.seeCosts(req.user)) { delete project.budget; }
   res.json({ project, tasks: tR.rows });

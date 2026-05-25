@@ -11,7 +11,10 @@
 
 import { query as defaultQuery } from '../db.js';
 
-const PRIORITY_ORDER = `CASE t.priority
+// Pozn.: bez aliasu `t.` – tabulku tasks v query nealiasujeme.
+// (Předtím tu byla `t.priority` ale FROM nemá alias → PG error
+// "missing FROM-clause entry for table 't'".)
+const PRIORITY_ORDER = `CASE priority
   WHEN 'urgent' THEN 0
   WHEN 'high'   THEN 1
   WHEN 'normal' THEN 2

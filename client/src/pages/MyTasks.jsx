@@ -11,7 +11,8 @@ import { tasks as tasksApi } from '../api.js';
 import { useAuth } from '../auth.jsx';
 
 const STATUS = STATUS_META;
-const PIPELINE_ORDER = ['todo', 'in_progress', 'review', 'done'];
+// needs_fix patří doprostřed – je to "vráceno k opravě, hned to vyřeš".
+const PIPELINE_ORDER = ['todo', 'needs_fix', 'in_progress', 'review', 'done'];
 
 const PRIORITY = {
   urgent: { label: '🔥 Urgent', color: 'text-red-600' },
@@ -21,11 +22,12 @@ const PRIORITY = {
 };
 
 const STATUS_TABS = [
-  { value: 'all',        label: 'Vše' },
-  { value: 'todo',       label: 'Čeká' },
-  { value: 'in_progress',label: 'V práci' },
-  { value: 'review',     label: 'Review' },
-  { value: 'done',       label: 'Hotovo' },
+  { value: 'all',         label: 'Vše' },
+  { value: 'todo',        label: 'Čeká' },
+  { value: 'needs_fix',   label: 'K opravě' },
+  { value: 'in_progress', label: 'V práci' },
+  { value: 'review',      label: 'Review' },
+  { value: 'done',        label: 'Hotovo' },
 ];
 
 export default function MyTasks() {
@@ -57,18 +59,18 @@ export default function MyTasks() {
   }, [tasks, filter, view]);
 
   const counts = useMemo(() => {
-    const c = { all: tasks.length, todo: 0, in_progress: 0, review: 0, done: 0 };
+    const c = { all: tasks.length, todo: 0, in_progress: 0, review: 0, needs_fix: 0, done: 0 };
     for (const t of tasks) { if (c[t.status] !== undefined) c[t.status]++; }
     return c;
   }, [tasks]);
 
   const handleStatusChange = async (task, status) => {
-    // Při přechodu na 'done' vyskočí dialog na skutečný čas a teprve potvrzení uloží stav.
-    if (status === 'done' && task.status !== 'done') {
-      setCompletingTask(task);
+    // Předání k review – vyskočí dialog na skutečný čas (programátor zaznamenává spotřebovaný čas).
+    if (status === 'review' && task.status !== 'review') {
+      setCompletingTask({ ...task, _targetStatus: 'review' });
       return;
     }
-    // Optimistic update – ihned přesune kartu, pak refetch
+    // 'done' přímo už nejde (backend blokuje pro assignee). Ostatní stavy projdou normálně.
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status } : t));
     try {
       await tasksApi.update(task.id, { status });
@@ -80,9 +82,11 @@ export default function MyTasks() {
   const handleCompletionConfirm = async (actualH) => {
     if (!completingTask) return;
     const id = completingTask.id;
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, status: 'done', actual_h: actualH } : t));
+    // _targetStatus rozhoduje – nový workflow používá 'review', legacy fallback 'done'
+    const target = completingTask._targetStatus || 'done';
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, status: target, actual_h: actualH } : t));
     try {
-      await tasksApi.update(id, { status: 'done', actual_h: actualH });
+      await tasksApi.update(id, { status: target, actual_h: actualH });
     } finally {
       setCompletingTask(null);
       load();

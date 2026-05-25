@@ -54,6 +54,10 @@ export const can = {
   seeAllHours:    (u) => ['admin', 'manager'].includes(u.role),
   seeCosts:       (u) => ['admin', 'manager'].includes(u.role),
   manageUsers:    (u) => u.role === 'admin',
+  // Review task (schválit/vrátit z review do done/needs_fix):
+  // smí vedoucí projektu daného úkolu NEBO admin. Vyžaduje project objekt
+  // (s manager_id) – kontrola se dělá per-task v API endpointu.
+  reviewTask:     (u, project) => u.role === 'admin' || (project && project.manager_id === u.id),
 };
 
 // ---------- Google OAuth (volitelný) ----------

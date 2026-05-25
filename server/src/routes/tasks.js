@@ -166,6 +166,7 @@ router.get('/mine', requireAuth, async (req, res) => {
     SELECT t.*,
       p.name AS project_name,
       p.due_date AS project_due_date,
+      p.manager_id AS project_manager_id,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.to_user_id = $1 AND q.status = 'pending') AS pending_questions_for_me,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q,
@@ -256,6 +257,12 @@ router.put('/:id', requireAuth, async (req, res) => {
     const allowed = ['status', 'description', 'actual_h'];
     const keys = Object.keys(req.body || {}).filter(k => allowed.includes(k));
     if (keys.length === 0) return res.status(400).json({ error: 'no_allowed_fields' });
+
+    // Assignee NEMŮŽE označit úkol jako 'done' přímo – musí přes review workflow.
+    // Místo toho posílá in_progress → review. Schválit/vrátit pak manager.
+    if ('status' in req.body && req.body.status === 'done') {
+      return res.status(403).json({ error: 'must_go_via_review', message: 'Úkol nelze ukončit přímo. Předej ho k review tlačítkem „Předat k review", manager ho schválí.' });
+    }
 
     const nextStatus = 'status' in req.body ? req.body.status : cur.status;
     const comp = completionFields({

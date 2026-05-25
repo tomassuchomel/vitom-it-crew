@@ -10,6 +10,8 @@ import Attachments from './Attachments.jsx';
 import TaskCompletionDialog from './TaskCompletionDialog.jsx';
 import TimeTriad from './TimeTriad.jsx';
 import AiAgentPanel from './AiAgentPanel.jsx';
+import ReviewTaskDialog from './ReviewTaskDialog.jsx';
+import ReviewHistory from './ReviewHistory.jsx';
 
 const PRIORITY_OPTIONS = [
   { value: 'low',    label: '⬇ Nízká' },
@@ -22,6 +24,8 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
   const { user } = useAuth();
   const [task, setTask] = useState(initialTask);
   const [completingTask, setCompletingTask] = useState(null);
+  // null | { task, verdict } – pro ReviewTaskDialog (manager schvaluje/vrací)
+  const [reviewing, setReviewing] = useState(null);
 
   // Sync, pokud parent dodá nový úkol
   useEffect(() => { setTask(initialTask); }, [initialTask?.id]);
@@ -32,6 +36,7 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
   const isMyTask      = task.assignee_id === user.id;
   const canEditNote   = canEditFull || isMyTask;          // assignee může psát poznámku
   const canChangeStatus = canEditFull || isMyTask;
+  const canReview     = can.reviewTask(user, task);
 
   const refresh = async () => {
     // Server nemá GET single task, ale můžeme znovu načíst seznam mých úkolů
@@ -40,9 +45,10 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
   };
 
   const handleStatusChange = async (_t, newStatus) => {
-    if (newStatus === 'done' && task.status !== 'done') {
-      // Otevři dialog na skutečný čas – PUT se provede až po potvrzení
-      setCompletingTask(task);
+    // Při in_progress → review se zeptáme na actual_h (programátor zaznamenává čas).
+    // Done přímo už nejde (backend blokuje pro assignee, manager používá ReviewTaskDialog).
+    if (newStatus === 'review' && task.status !== 'review') {
+      setCompletingTask({ ...task, _targetStatus: 'review' });
       return;
     }
     const updated = await tasksApi.update(task.id, { status: newStatus });
@@ -51,10 +57,21 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
   };
 
   const handleCompletionConfirm = async (actualH) => {
-    const updated = await tasksApi.update(task.id, { status: 'done', actual_h: actualH });
+    // _targetStatus rozhoduje, jestli jdeme do 'review' (nový workflow)
+    // nebo 'done' (legacy fallback pro admin/manager kteří mají právo přímo dokončit).
+    const target = completingTask?._targetStatus || 'done';
+    const updated = await tasksApi.update(task.id, { status: target, actual_h: actualH });
     setTask(prev => ({ ...prev, ...updated.task }));
     setCompletingTask(null);
     refresh();
+  };
+
+  // Manager klikne Schválit/Vrátit – otevřeme ReviewTaskDialog.
+  const handleReview = (_t, verdict) => setReviewing({ task, verdict });
+  const handleReviewDone = async () => {
+    setReviewing(null);
+    // Reload tasku přes parent – server vrátil změněný status
+    onChanged?.();
   };
 
   const handleSave = async (patch) => {
@@ -100,11 +117,22 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
 
         {/* Tělo – scrollable */}
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
-          {/* Akce stavu */}
-          {canChangeStatus && (
+          {/* Akce stavu – běžný workflow + review akce pro manager/admin */}
+          {(canChangeStatus || canReview) && (
             <Section title="Stav úkolu">
-              <StatusActions task={task} onChange={handleStatusChange} />
+              <StatusActions
+                task={task}
+                onChange={handleStatusChange}
+                onReview={handleReview}
+                canChange={canChangeStatus}
+                canReview={canReview}
+              />
             </Section>
+          )}
+
+          {/* Historie reviews – uvidí všichni, ale relevantní hlavně pro needs_fix */}
+          {(task.status === 'needs_fix' || task.status === 'review' || task.status === 'done') && (
+            <ReviewHistory taskId={task.id} />
           )}
 
           {/* Časový odhad vs realita – manual + AI + actual na jednom místě */}
@@ -149,6 +177,16 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
           <QuestionsSection task={task} onAsked={refresh} />
         </div>
       </div>
+
+      {/* Manager schvaluje/vrací – přílohy nahraje uvnitř dialogu */}
+      {reviewing && (
+        <ReviewTaskDialog
+          task={reviewing.task}
+          verdict={reviewing.verdict}
+          onClose={() => setReviewing(null)}
+          onDone={handleReviewDone}
+        />
+      )}
 
       {completingTask && (
         <TaskCompletionDialog

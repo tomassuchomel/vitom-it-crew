@@ -22,6 +22,7 @@ import questionsRoutes from './routes/questions.js';
 import attachmentsRoutes, { uploadsDir } from './routes/attachments.js';
 import aiRoutes from './routes/ai.js';
 import aiAgentRoutes from './routes/aiAgent.js';
+import reviewsRoutes from './routes/reviews.js';
 import { agentConfig, describeAgentConfig, validateAgentConfig } from './aiAgent/config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -46,7 +47,10 @@ app.use('/api/users', usersRoutes);
 app.use('/api/projects', projectsRoutes);
 // aiAgentRoutes obsluhuje smíšené cesty: /api/ai-agent/preflight* i /api/tasks/:id/enqueue,
 // MUSÍ být před tasksRoutes – statická cesta "enqueue" by jinak kolidovala s /:id.
+// reviewsRoutes definuje /api/tasks/review-queue, /api/tasks/:id/review, /api/tasks/:id/reviews,
+// taky před tasksRoutes (statická "review-queue" cesta).
 app.use('/api', aiAgentRoutes);
+app.use('/api', reviewsRoutes);
 app.use('/api/tasks', tasksRoutes);
 app.use('/api/time', timeRoutes);
 app.use('/api/reports', reportsRoutes);

@@ -8,6 +8,7 @@ import TaskCompletionDialog from '../components/TaskCompletionDialog.jsx';
 import TimeTriad from '../components/TimeTriad.jsx';
 import Attachments from '../components/Attachments.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
+import ReviewTaskDialog from '../components/ReviewTaskDialog.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge } from '../components/TaskStatus.jsx';
 import { Input, Textarea, Select } from './ProjectsList.jsx';
 import { projects as projectsApi, tasks as tasksApi, users as usersApi } from '../api.js';
@@ -55,6 +56,7 @@ export default function ProjectDetail() {
   const [completingTask, setCompletingTask] = useState(null);
   const [aiDetailTask, setAiDetailTask] = useState(null);  // null | task – pro TaskDetailModal s AI panelem
   const [editOpen, setEditOpen] = useState(false);
+  const [reviewing, setReviewing] = useState(null);    // null | { task, verdict } pro ReviewTaskDialog
   const [edits, setEdits] = useState([]);
   const [editsLoading, setEditsLoading] = useState(false);
 
@@ -98,8 +100,15 @@ export default function ProjectDetail() {
   }, {});
 
   const handleStatusChange = async (task, status) => {
+    // Předání k review (in_progress → review) vyžaduje actual_h – otevři dialog
+    if (status === 'review' && task.status !== 'review') {
+      setCompletingTask({ ...task, _targetStatus: 'review' });
+      return;
+    }
+    // Manager/admin používá review endpoint pro 'done'. Senior_dev s createTasks
+    // může přímo na 'done' (legacy fallback) – v UI se nabízí ale jen v badge "Otevřít znovu".
     if (status === 'done' && task.status !== 'done') {
-      setCompletingTask(task);
+      setCompletingTask({ ...task, _targetStatus: 'done' });
       return;
     }
     await tasksApi.update(task.id, { status });
@@ -107,10 +116,14 @@ export default function ProjectDetail() {
   };
   const handleCompletionConfirm = async (actualH) => {
     if (!completingTask) return;
-    await tasksApi.update(completingTask.id, { status: 'done', actual_h: actualH });
+    const target = completingTask._targetStatus || 'done';
+    await tasksApi.update(completingTask.id, { status: target, actual_h: actualH });
     setCompletingTask(null);
     load(true);
   };
+  // Manager schvaluje/vrací z ProjectDetail (otevře ReviewTaskDialog)
+  const handleReview = (task, verdict) => setReviewing({ task, verdict });
+  const handleReviewDone = () => { setReviewing(null); load(true); };
   const handleDelete = async (task) => {
     if (!confirm(`Smazat úkol „${task.title}"?`)) return;
     await tasksApi.remove(task.id);
@@ -180,6 +193,7 @@ export default function ProjectDetail() {
                     children={childMap[t.id] || []}
                     user={user}
                     onStatusChange={handleStatusChange}
+                    onReview={handleReview}
                     onAddSubtask={(pid) => setTaskModal({ parent_id: pid })}
                     onEdit={(task) => setTaskModal({ task })}
                     onDelete={handleDelete}
@@ -288,6 +302,16 @@ export default function ProjectDetail() {
           task={aiDetailTask}
           onClose={() => setAiDetailTask(null)}
           onChanged={() => load(true)}
+        />
+      )}
+
+      {/* Schválit / vrátit z review – jen pro manager projektu nebo admin */}
+      {reviewing && (
+        <ReviewTaskDialog
+          task={reviewing.task}
+          verdict={reviewing.verdict}
+          onClose={() => setReviewing(null)}
+          onDone={handleReviewDone}
         />
       )}
     </div>
@@ -461,9 +485,10 @@ const AI_STATUS_BADGE = {
   failed:                  { label: '🤖 ❌ Selhalo',          cls: 'bg-red-100 text-red-800' },
 };
 
-function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, onDelete, onAsk, onAiDetail, indent = 0 }) {
+function TaskRow({ task, children, user, onStatusChange, onReview, onAddSubtask, onEdit, onDelete, onAsk, onAiDetail, indent = 0 }) {
   const canEditFully = can.createTasks(user);
   const canEditStatus = canEditFully || task.assignee_id === user.id;
+  const canReview     = can.reviewTask(user, task);
   const isDone = task.status === 'done';
   const isSubtask = indent > 0;
 
@@ -547,7 +572,13 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
 
           {/* Akční tlačítka */}
           <div className="mt-2 flex items-center gap-1 flex-wrap">
-            <StatusActions task={task} onChange={onStatusChange} canChange={canEditStatus} />
+            <StatusActions
+              task={task}
+              onChange={onStatusChange}
+              onReview={onReview}
+              canChange={canEditStatus}
+              canReview={canReview}
+            />
             {(canEditFully || true) && (
               <>
                 <span className="mx-1 text-ink-200">|</span>
@@ -584,6 +615,7 @@ function TaskRow({ task, children, user, onStatusChange, onAddSubtask, onEdit, o
               children={[]}
               user={user}
               onStatusChange={onStatusChange}
+              onReview={onReview}
               onAddSubtask={onAddSubtask}
               onEdit={onEdit}
               onDelete={onDelete}

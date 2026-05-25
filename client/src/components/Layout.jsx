@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth, can, ROLE_LABELS } from '../auth.jsx';
-import { questions as questionsApi } from '../api.js';
+import { questions as questionsApi, reviews as reviewsApi } from '../api.js';
 import VitomLogo from './VitomLogo.jsx';
 import Avatar from './Avatar.jsx';
 import AIAdvisor from './AIAdvisor.jsx';
@@ -10,6 +10,7 @@ const NAV = [
   { to: '/',          label: 'Timeline',           icon: '📅' },
   { to: '/projects',  label: 'Projekty',           icon: '📁' },
   { to: '/my-tasks',  label: 'Moje úkoly',         icon: '✅' },
+  { to: '/review',    label: 'Review k dokončení', icon: '👀', badge: 'reviewQueue', requireManager: true },
   { to: '/questions', label: 'Dotazy k vyřešení',  icon: '💬', badge: 'inboxPending' },
   { to: '/time',      label: 'Hodiny',             icon: '⏱️' },
   { to: '/reports',   label: 'Reporty',            icon: '📊', requireSeeAll: true },
@@ -21,18 +22,25 @@ export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
-  const [counts, setCounts] = useState({ inboxPending: 0, sentPending: 0 });
+  const [counts, setCounts] = useState({ inboxPending: 0, sentPending: 0, reviewQueue: 0 });
 
-  // Načítáme počet nevyřízených dotazů – periodicky a při změně stránky
+  // Načítáme počet nevyřízených dotazů + review fronty.
+  // Periodicky (30s) a při změně stránky, ať badge svítí aktuální číslo.
   useEffect(() => {
     let mounted = true;
-    const refresh = () => questionsApi.counts()
-      .then(d => { if (mounted) setCounts(d); })
-      .catch(() => {});
+    const refresh = async () => {
+      try {
+        const [q, r] = await Promise.all([
+          questionsApi.counts(),
+          can.manageProjects(user) ? reviewsApi.queue().catch(() => ({ tasks: [] })) : Promise.resolve({ tasks: [] }),
+        ]);
+        if (mounted) setCounts({ ...q, reviewQueue: r.tasks?.length || 0 });
+      } catch {/* ignore */}
+    };
     refresh();
     const t = setInterval(refresh, 30_000);
     return () => { mounted = false; clearInterval(t); };
-  }, [location.pathname]);
+  }, [location.pathname, user]);
 
   const handleLogout = async () => {
     await logout();
@@ -56,7 +64,10 @@ export default function Layout({ children }) {
           </div>
         </div>
         <nav className="flex-1 py-4">
-          {NAV.filter(n => !n.requireSeeAll || can.seeAllHours(user)).map(item => {
+          {NAV.filter(n =>
+            (!n.requireSeeAll || can.seeAllHours(user)) &&
+            (!n.requireManager || can.manageProjects(user))
+          ).map(item => {
             const badgeNum = item.badge ? counts[item.badge] : 0;
             return (
               <NavLink

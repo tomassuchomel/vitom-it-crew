@@ -68,6 +68,9 @@ export const can = {
   seeCosts:       (u) => u && ['admin', 'manager'].includes(u.role),
   manageUsers:    (u) => u && u.role === 'admin',
   deleteUsers:    (u) => u && ['admin', 'manager'].includes(u.role),
+  // Review tasku: admin vidí vše, manager jen své projekty.
+  // Vyžaduje task obsahuje project_manager_id (vrací API tasks/mine, projects/:id, review-queue).
+  reviewTask:     (u, task) => u && (u.role === 'admin' || (task && task.project_manager_id === u.id)),
 };
 
 export const ROLE_LABELS = {

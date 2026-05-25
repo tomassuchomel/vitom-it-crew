@@ -178,6 +178,28 @@ export function createWorker(opts = {}) {
       return;
     }
 
+    // Ulož detailní stopu kroků agenta (tool_use, api_response, …) do DB,
+    // ať uživatel v UI vidí, co Claude konkrétně dělal. Bez tohoto je logika
+    // agenta neviditelná – jen finalní "úspěch / selhání".
+    for (const ev of (agentResult.log || [])) {
+      if (ev.event === 'tool_use') {
+        await log.record(task.id, 'tool_use', {
+          iteration: ev.iteration,
+          tool: ev.name,
+          input: ev.input_summary,
+        });
+      } else if (ev.event === 'api_response') {
+        await log.record(task.id, 'api_response', {
+          iteration: ev.iteration,
+          stop_reason: ev.stop_reason,
+          input_tokens: ev.usage?.input_tokens,
+          output_tokens: ev.usage?.output_tokens,
+        }, ev.cost);
+      } else if (ev.event === 'end_turn_without_done' || ev.event === 'unexpected_stop' || ev.event === 'api_error') {
+        await log.record(task.id, 'agent_'+ev.event, ev);
+      }
+    }
+
     await log.record(
       task.id,
       'agent_run_complete',
