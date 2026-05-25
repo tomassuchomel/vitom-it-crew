@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import { projects as projectsApi, reports as reportsApi } from '../api.js';
+import { useFeature } from '../teams.jsx';
 import Avatar from '../components/Avatar.jsx';
 
 const PROJECT_COLORS = ['#0c363e', '#e72b78', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4'];
@@ -55,6 +56,9 @@ export default function Timeline() {
   const [doneBy, setDoneBy] = useState([]);
   const [loading, setLoading] = useState(true);
   const [zoom, setZoom] = useState(1);   // 1 = default; 0.5 = oddálené; 2 = přiblížené
+  // Forecast linka „od dneška + zbývající odhad" – zapnutá jen pro teamy s feature flag
+  // timeline_forecast (default: IT team). Ukazuje overcommit, když odhad přesahuje deadline.
+  const forecastEnabled = useFeature('timeline_forecast');
 
   useEffect(() => {
     Promise.all([projectsApi.list(), reportsApi.who(), reportsApi.done({ days: 14 })])
@@ -96,7 +100,11 @@ export default function Timeline() {
         ) : (
           <>
             {projects.filter(p => p.effective_due_date).length > 0 && (
-              <GanttChart projects={projects.filter(p => p.effective_due_date)} zoom={zoom} />
+              <GanttChart
+                projects={projects.filter(p => p.effective_due_date)}
+                zoom={zoom}
+                forecastEnabled={forecastEnabled}
+              />
             )}
             {projects.filter(p => !p.effective_due_date).length > 0 && (
               <UndatedProjects projects={projects.filter(p => !p.effective_due_date)} />
@@ -132,7 +140,7 @@ export default function Timeline() {
 }
 
 // ---------- Gantt ----------
-function GanttChart({ projects, zoom }) {
+function GanttChart({ projects, zoom, forecastEnabled }) {
   const today = todayMid();
   const scrollRef = useRef(null);
 
@@ -221,6 +229,7 @@ function GanttChart({ projects, zoom }) {
                   project={p}
                   layout={layout}
                   colorIdx={idx}
+                  forecastEnabled={forecastEnabled}
                 />
               ))}
             </div>
@@ -291,8 +300,8 @@ function TimeAxis({ marks, pxPerDay }) {
   );
 }
 
-// ---------- Řádek projektu (hlavní bar + tenká linka odhadu) ----------
-function ProjectRow({ project, layout, colorIdx }) {
+// ---------- Řádek projektu (hlavní bar + linka odhadu + případně forecast linka) ----------
+function ProjectRow({ project, layout, colorIdx, forecastEnabled }) {
   const today = todayMid();
   const start = parseDate(project.start_date);
   const due = parseDate(project.effective_due_date);
@@ -305,14 +314,30 @@ function ProjectRow({ project, layout, colorIdx }) {
   const cd = countdown(project.effective_due_date);
   const isDone = project.status === 'done';
 
-  // Tenká linka odhadu práce
+  // Linka 1: odhad práce v rámci plánu (od start_date)
   const estH = Number(project.estimated_h_total || project.estimated_h_remaining || 0);
   const estDays = estH / HOURS_PER_DAY;
   const estWidth = estDays * layout.pxPerDay;
   const estLabel = workdaysLabel(estH);
 
+  // Linka 2: forecast „od dneška + zbývající odhad" – jen pro teamy s timeline_forecast feature.
+  // Pokud délka přesahuje deadline, zbarví se červeně (overcommit).
+  // Když je projekt hotový nebo nemá zbývající odhad, nezobrazujeme.
+  const remH = Number(project.estimated_h_remaining || 0);
+  const showForecast = forecastEnabled && !isDone && remH > 0;
+  const todayLeft = daysBetween(layout.min, today) * layout.pxPerDay;
+  const forecastLeft = Math.max(todayLeft, left);  // začíná dneškem, nebo startem (cokoliv pozdější)
+  const forecastDays = remH / HOURS_PER_DAY;
+  const forecastWidthRaw = forecastDays * layout.pxPerDay;
+  const forecastWidth = Math.max(4, Math.min(forecastWidthRaw, layout.totalWidth - forecastLeft));
+  // Detekce overcommit: dneška + odhad > deadline projektu
+  const forecastEndDate = new Date(today.getTime() + forecastDays * dayMs);
+  const overcommit = forecastEndDate > due;
+  const forecastLabel = workdaysLabel(remH);
+  const projectedDateLabel = fmtCs(forecastEndDate);
+
   return (
-    <div className="relative border-b border-cream-100 hover:bg-cream-50/50 transition" style={{ height: 64 }}>
+    <div className="relative border-b border-cream-100 hover:bg-cream-50/50 transition" style={{ height: showForecast ? 82 : 64 }}>
       {/* Hlavní bar */}
       <div
         className="absolute rounded-lg shadow-sm flex items-center px-2 text-xs text-white overflow-hidden"
@@ -335,7 +360,7 @@ function ProjectRow({ project, layout, colorIdx }) {
         )}
       </div>
 
-      {/* Tenká linka – odhad pracovních dní */}
+      {/* Tenká linka – odhad pracovních dní (od plánovaného startu) */}
       {estH > 0 && (
         <div
           className="absolute"
@@ -347,7 +372,28 @@ function ProjectRow({ project, layout, colorIdx }) {
           />
           {estLabel && estWidth > 50 && (
             <div className="text-[9px] text-accent-700 font-medium mt-0.5 whitespace-nowrap">
-              odhad: {estLabel} ({estH} h)
+              odhad celkem: {estLabel} ({estH} h)
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Forecast linka – od dneška + zbývající odhad. Červená když přesahuje deadline. */}
+      {showForecast && (
+        <div
+          className="absolute"
+          style={{ left: forecastLeft, top: 62, height: 12 }}
+          title={overcommit
+            ? `Overcommit: pokud začneš dnes, zbývající ${remH} h (${forecastLabel}) skončí ${projectedDateLabel} — po deadlinu ${fmtCs(due)}`
+            : `Pokud začneš dnes, zbývajících ${remH} h (${forecastLabel}) skončí ${projectedDateLabel} — v termínu`}
+        >
+          <div
+            className={`rounded-full h-1.5 shadow-sm ${overcommit ? 'bg-red-500' : 'bg-blue-500/80'}`}
+            style={{ width: forecastWidth, minWidth: 4 }}
+          />
+          {forecastLabel && forecastWidth > 60 && (
+            <div className={`text-[9px] font-medium mt-0.5 whitespace-nowrap ${overcommit ? 'text-red-700' : 'text-blue-700'}`}>
+              {overcommit ? '⚠ ' : ''}od dnes: {forecastLabel} → {projectedDateLabel}
             </div>
           )}
         </div>

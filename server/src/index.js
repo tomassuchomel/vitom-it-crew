@@ -24,6 +24,7 @@ import aiRoutes from './routes/ai.js';
 import aiAgentRoutes from './routes/aiAgent.js';
 import reviewsRoutes from './routes/reviews.js';
 import teamsRoutes from './routes/teams.js';
+import scoreboardRoutes from './routes/scoreboard.js';
 import { agentConfig, describeAgentConfig, validateAgentConfig } from './aiAgent/config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -46,6 +47,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true, googleAuth: HAS_GOOGLE
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/teams', teamsRoutes);
+app.use('/api/scoreboard', scoreboardRoutes);
 app.use('/api/projects', projectsRoutes);
 // aiAgentRoutes obsluhuje smíšené cesty: /api/ai-agent/preflight* i /api/tasks/:id/enqueue,
 // MUSÍ být před tasksRoutes – statická cesta "enqueue" by jinak kolidovala s /:id.

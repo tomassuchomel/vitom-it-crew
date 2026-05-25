@@ -49,6 +49,7 @@ export const projects = {
 
 export const tasks = {
   mine:    (params) => api.get('/tasks/mine', { params }).then(r => r.data),
+  get:     (id) => api.get(`/tasks/${id}`).then(r => r.data),
   create:  (data) => api.post('/tasks', data).then(r => r.data),
   update:  (id, data) => api.put(`/tasks/${id}`, data).then(r => r.data),
   remove:  (id) => api.delete(`/tasks/${id}`).then(r => r.data),
@@ -80,6 +81,12 @@ export const ai = {
   advice:   () => api.get('/ai/advice').then(r => r.data),
   chat:     (messages) => api.post('/ai/chat', { messages }).then(r => r.data),
   accuracy: () => api.get('/ai/accuracy').then(r => r.data),
+};
+
+// Scoreboard – per-user task completion stats v rámci current teamu.
+// Server filtruje by req.team_id, takže klient nemusí nic specifikovat.
+export const scoreboard = {
+  list: () => api.get('/scoreboard').then(r => r.data),
 };
 
 // AI agent (Claude vykonává úkoly autonomně)

@@ -1,9 +1,10 @@
 // Stránka dotazů – záložky: Vše moje (default) | Příchozí | Odeslané | Všechny (admin)
 import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
-import { questions as questionsApi } from '../api.js';
+import TaskDetailModal from '../components/TaskDetailModal.jsx';
+import { questions as questionsApi, tasks as tasksApi } from '../api.js';
 import { useAuth, can } from '../auth.jsx';
 
 const TABS = [
@@ -29,6 +30,23 @@ export default function Questions() {
   const [loading, setLoading] = useState(true);
   const [answering, setAnswering] = useState(null);
   const [answerText, setAnswerText] = useState('');
+  // null | task — pro inline TaskDetailModal po kliku na zdrojový úkol.
+  // Místo Linkem na /projects/:id (kde si user musel hledat) otevřeme modal přímo tady.
+  const [openedTask, setOpenedTask] = useState(null);
+  const [loadingTask, setLoadingTask] = useState(false);
+
+  const openTaskDetail = async (taskId) => {
+    if (!taskId) return;
+    setLoadingTask(true);
+    try {
+      const d = await tasksApi.get(taskId);
+      setOpenedTask(d.task);
+    } catch (e) {
+      alert(e.response?.data?.message || 'Úkol se nepodařilo načíst (možná není v aktuálním teamu).');
+    } finally {
+      setLoadingTask(false);
+    }
+  };
 
   // Synchronizace box/status do URL
   useEffect(() => {
@@ -165,9 +183,14 @@ export default function Questions() {
                     {q.task_title && (
                       <div className="text-xs text-ink-500 mb-1">
                         K úkolu:{' '}
-                        <Link to={`/projects/${q.project_id}`} className="text-brand-500 hover:underline">
+                        <button
+                          onClick={() => openTaskDetail(q.task_id)}
+                          disabled={loadingTask}
+                          className="text-brand-500 hover:underline disabled:opacity-50 disabled:cursor-wait"
+                          title="Otevřít detail úkolu inline"
+                        >
                           {q.task_title}
-                        </Link>
+                        </button>
                         {q.project_name && <span> · {q.project_name}</span>}
                       </div>
                     )}
@@ -232,6 +255,16 @@ export default function Questions() {
           </ul>
         )}
       </div>
+
+      {/* Inline detail úkolu z otevřeného dotazu. Po zavření refreshneme dotazy
+          – mohlo se změnit jeho stav (např. user odpoví na otázku z TaskDetailModalu). */}
+      {openedTask && (
+        <TaskDetailModal
+          task={openedTask}
+          onClose={() => setOpenedTask(null)}
+          onChanged={() => load()}
+        />
+      )}
     </div>
   );
 }

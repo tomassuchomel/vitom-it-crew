@@ -2,6 +2,10 @@ import { useEffect, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth, can, ROLE_LABELS } from '../auth.jsx';
 import { useTeams } from '../teams.jsx';
+// Helper – nav item s feature flag dependency je viditelný jen když current team má flag
+// zapnut. Funkce useFeature() z teams.jsx by potřebovala flag jako argument; tady to
+// uděláme inline přes currentTeam.features.
+const teamHasFeature = (team, key) => !!team?.features?.[key];
 import { questions as questionsApi, reviews as reviewsApi } from '../api.js';
 import VitomLogo from './VitomLogo.jsx';
 import Avatar from './Avatar.jsx';
@@ -17,6 +21,7 @@ const NAV = [
   { to: '/reports',   label: 'Reporty',            icon: '📊', requireSeeAll: true },
   { to: '/ai',        label: 'AI Coach',           icon: '🤖', requireSeeAll: true },
   { to: '/team',      label: 'Tým',                icon: '👥' },
+  { to: '/scoreboard',label: 'Skóre',              icon: '🏆', requireFeature: 'success_metrics' },
   { to: '/admin',     label: 'Admin',              icon: '⚙️', requireAdmin: true },
 ];
 
@@ -24,6 +29,7 @@ export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
+  const { currentTeam } = useTeams();
   const [counts, setCounts] = useState({ inboxPending: 0, sentPending: 0, reviewQueue: 0 });
 
   // Načítáme počet nevyřízených dotazů + review fronty.
@@ -67,7 +73,8 @@ export default function Layout({ children }) {
           {NAV.filter(n =>
             (!n.requireSeeAll || can.seeAllHours(user)) &&
             (!n.requireManager || can.manageProjects(user)) &&
-            (!n.requireAdmin || user?.role === 'admin')
+            (!n.requireAdmin || user?.role === 'admin') &&
+            (!n.requireFeature || teamHasFeature(currentTeam, n.requireFeature))
           ).map(item => {
             const badgeNum = item.badge ? counts[item.badge] : 0;
             return (

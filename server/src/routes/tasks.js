@@ -189,6 +189,38 @@ router.get('/mine', requireAuth, async (req, res) => {
   res.json({ tasks: r.rows });
 });
 
+// GET /api/tasks/:id – detail jednoho úkolu s computed fields jako u /mine.
+// Používá Questions (klik na zdrojový úkol otevře TaskDetailModal inline).
+// Cross-team check: admin vidí všechno, jinak musí být task v current teamu.
+router.get('/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_id' });
+  const r = await query(`
+    SELECT t.*,
+      p.name AS project_name,
+      p.due_date AS project_due_date,
+      p.manager_id AS project_manager_id,
+      p.team_id AS project_team_id,
+      u.name AS assignee_name,
+      (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.to_user_id = $1 AND q.status = 'pending') AS pending_questions_for_me,
+      (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
+      (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q,
+      (SELECT COUNT(*) FROM attachments a WHERE a.task_id = t.id) AS attachment_count,
+      (SELECT COALESCE(SUM(te.hours), 0) FROM time_entries te WHERE te.task_id = t.id) AS logged_hours
+    FROM tasks t
+    JOIN projects p ON p.id = t.project_id
+    LEFT JOIN users u ON u.id = t.assignee_id
+    WHERE t.id = $2
+  `, [req.user.id, id]);
+  const task = r.rows[0];
+  if (!task) return res.status(404).json({ error: 'not_found' });
+  // Cross-team protection: jen admin nebo členové teamu projektu.
+  if (req.user.role !== 'admin' && task.project_team_id !== req.team_id) {
+    return res.status(403).json({ error: 'forbidden', message: 'Úkol patří do jiného teamu' });
+  }
+  res.json({ task });
+});
+
 // Vytvoření úkolu nebo podúkolu
 router.post('/', requireAuth, async (req, res) => {
   if (!can.createTasks(req.user)) return res.status(403).json({ error: 'forbidden' });
