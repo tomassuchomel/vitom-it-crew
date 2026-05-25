@@ -16,7 +16,14 @@ export function signToken(user) {
   );
 }
 
-// Express middleware – ověří cookie, nahraje req.user
+// Express middleware – ověří cookie, nahraje req.user + req.team_id + req.team_role.
+//
+// Team kontext:
+//   1. Pokud klient pošle X-Team-Id header, ověříme, že user je členem daného teamu,
+//      a nastavíme req.team_id + req.team_role na hodnotu z team_members.
+//   2. Pokud header chybí nebo user není v teamu, default: první team (ORDER BY team_id ASC).
+//   3. Pokud user není členem ŽÁDNÉHO teamu (nemělo by se stávat po migraci),
+//      req.team_id zůstane undefined a routes se zachovají podle starého chování.
 export async function requireAuth(req, res, next) {
   const token = req.cookies?.tf_token;
   if (!token) return res.status(401).json({ error: 'unauthorized' });
@@ -32,6 +39,30 @@ export async function requireAuth(req, res, next) {
     const user = r.rows[0];
     if (!user || !user.active) return res.status(401).json({ error: 'unauthorized' });
     req.user = user;
+
+    // Načti team kontext – nejdřív zkus X-Team-Id z hlavičky.
+    const requestedTeamId = Number(req.header('X-Team-Id'));
+    if (Number.isInteger(requestedTeamId) && requestedTeamId > 0) {
+      const tm = await query(
+        `SELECT team_id, team_role FROM team_members WHERE team_id = $1 AND user_id = $2`,
+        [requestedTeamId, user.id]
+      );
+      if (tm.rows[0]) {
+        req.team_id   = tm.rows[0].team_id;
+        req.team_role = tm.rows[0].team_role;
+      }
+    }
+    // Fallback: první team uživatele
+    if (!req.team_id) {
+      const tm = await query(
+        `SELECT team_id, team_role FROM team_members WHERE user_id = $1 ORDER BY team_id ASC LIMIT 1`,
+        [user.id]
+      );
+      if (tm.rows[0]) {
+        req.team_id   = tm.rows[0].team_id;
+        req.team_role = tm.rows[0].team_role;
+      }
+    }
     next();
   } catch (err) {
     return res.status(401).json({ error: 'invalid_token' });

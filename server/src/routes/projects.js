@@ -36,6 +36,8 @@ function validateRepoUrl(v) {
 // termín se zase ztratí a projekt spadne na konec seznamu.
 router.get('/', requireAuth, async (req, res) => {
   const showCosts = can.seeCosts(req.user);
+  // Filter na current team. Bez team kontextu (user není v žádném teamu) vrátíme prázdno.
+  if (!req.team_id) return res.json({ projects: [] });
   const r = await query(`
     SELECT p.*,
       COALESCE(p.due_date,
@@ -58,8 +60,9 @@ router.get('/', requireAuth, async (req, res) => {
       mu.name AS manager_name
     FROM projects p
     LEFT JOIN users mu ON mu.id = p.manager_id
+    WHERE p.team_id = $1
     ORDER BY effective_due_date NULLS LAST, p.created_at DESC
-  `);
+  `, [req.team_id]);
   const projects = r.rows;
   if (!showCosts) projects.forEach(p => { delete p.cost_so_far; delete p.budget; });
   res.json({ projects });
@@ -85,6 +88,11 @@ router.get('/:id', requireAuth, async (req, res) => {
   `, [id]);
   const project = pR.rows[0];
   if (!project) return res.status(404).json({ error: 'not_found' });
+  // Cross-team access: user musí být členem teamu, do kterého projekt patří.
+  // Admin (globální) může všechno, jinak vyžadujeme team membership.
+  if (req.user.role !== 'admin' && project.team_id !== req.team_id) {
+    return res.status(403).json({ error: 'forbidden', message: 'Projekt patří do jiného teamu' });
+  }
 
   const tR = await query(`
     SELECT t.*,
@@ -119,18 +127,19 @@ router.get('/:id/edits', requireAuth, async (req, res) => {
   res.json({ edits });
 });
 
-// Vytvoření – admin/manager
+// Vytvoření – admin/manager. Projekt vznikne v aktuálně přepnutém teamu (req.team_id).
 router.post('/', requireAuth, async (req, res) => {
   if (!can.manageProjects(req.user)) return res.status(403).json({ error: 'forbidden' });
+  if (!req.team_id) return res.status(400).json({ error: 'no_team_context', message: 'Pro vytvoření projektu musíš být členem nějakého teamu.' });
   const { name, description, start_date, due_date, manager_id, budget, repo_url } = req.body || {};
   if (!name || !start_date) return res.status(400).json({ error: 'missing_fields' });
   const repoCheck = validateRepoUrl(repo_url);
   if (!repoCheck.ok) return res.status(400).json({ error: 'invalid_repo_url', message: repoCheck.error });
   const r = await query(`
-    INSERT INTO projects (name, description, start_date, due_date, manager_id, budget, repo_url)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO projects (name, description, start_date, due_date, manager_id, budget, repo_url, team_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     RETURNING *
-  `, [name, description || null, start_date, due_date || null, manager_id || req.user.id, budget || null, repoCheck.value]);
+  `, [name, description || null, start_date, due_date || null, manager_id || req.user.id, budget || null, repoCheck.value, req.team_id]);
   const project = r.rows[0];
   // log create
   await query(`INSERT INTO project_edits (project_id, user_id, action, note) VALUES ($1, $2, 'create', $3)`,
@@ -145,6 +154,10 @@ router.put('/:id', requireAuth, async (req, res) => {
   const curR = await query('SELECT * FROM projects WHERE id = $1', [id]);
   const cur = curR.rows[0];
   if (!cur) return res.status(404).json({ error: 'not_found' });
+  // Cross-team protection: jen admin nebo členové teamu projektu.
+  if (req.user.role !== 'admin' && cur.team_id !== req.team_id) {
+    return res.status(403).json({ error: 'forbidden', message: 'Projekt patří do jiného teamu' });
+  }
 
   // Detekce změněných polí
   const next = { ...cur };
@@ -199,10 +212,16 @@ router.put('/:id', requireAuth, async (req, res) => {
   res.json({ project: r.rows[0], changes });
 });
 
-// Smazání – admin/manager
+// Smazání – admin/manager + jen v rámci current teamu (nebo admin globálně)
 router.delete('/:id', requireAuth, async (req, res) => {
   if (!can.manageProjects(req.user)) return res.status(403).json({ error: 'forbidden' });
-  await query('DELETE FROM projects WHERE id = $1', [Number(req.params.id)]);
+  const id = Number(req.params.id);
+  const r = await query('SELECT team_id FROM projects WHERE id = $1', [id]);
+  if (!r.rows[0]) return res.status(404).json({ error: 'not_found' });
+  if (req.user.role !== 'admin' && r.rows[0].team_id !== req.team_id) {
+    return res.status(403).json({ error: 'forbidden', message: 'Projekt patří do jiného teamu' });
+  }
+  await query('DELETE FROM projects WHERE id = $1', [id]);
   res.json({ ok: true });
 });
 

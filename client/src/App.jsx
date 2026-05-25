@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth.jsx';
+import { TeamProvider } from './teams.jsx';
 import Layout from './components/Layout.jsx';
 import Login from './pages/Login.jsx';
 import Timeline from './pages/Timeline.jsx';
@@ -54,10 +55,12 @@ function ProtectedRoutes() {
 export default function App() {
   return (
     <AuthProvider>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/*" element={<ProtectedRoutes />} />
-      </Routes>
+      <TeamProvider>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/*" element={<ProtectedRoutes />} />
+        </Routes>
+      </TeamProvider>
     </AuthProvider>
   );
 }

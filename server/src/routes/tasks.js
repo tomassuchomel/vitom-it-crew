@@ -160,13 +160,19 @@ router.get('/mine', requireAuth, async (req, res) => {
   let extra = '';
   if (status) {
     params.push(status);
-    extra = ` AND t.status = $${params.length}`;
+    extra += ` AND t.status = $${params.length}`;
   }
+  // Filter na current team – „Moje úkoly" ukazuje jen tasky z teamu, ve kterém právě jsem.
+  // Pokud user není v žádném teamu (req.team_id chybí), vrátíme prázdno.
+  if (!req.team_id) return res.json({ tasks: [] });
+  params.push(req.team_id);
+  const teamFilter = ` AND p.team_id = $${params.length}`;
   const r = await query(`
     SELECT t.*,
       p.name AS project_name,
       p.due_date AS project_due_date,
       p.manager_id AS project_manager_id,
+      p.team_id AS project_team_id,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.to_user_id = $1 AND q.status = 'pending') AS pending_questions_for_me,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q,
@@ -174,7 +180,7 @@ router.get('/mine', requireAuth, async (req, res) => {
       (SELECT COALESCE(SUM(te.hours), 0) FROM time_entries te WHERE te.task_id = t.id)     AS logged_hours
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
-    WHERE t.assignee_id = $2 ${extra}
+    WHERE t.assignee_id = $2 ${extra}${teamFilter}
     ORDER BY
       CASE t.status WHEN 'in_progress' THEN 0 WHEN 'review' THEN 1 WHEN 'todo' THEN 2 WHEN 'done' THEN 3 END,
       CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 END,

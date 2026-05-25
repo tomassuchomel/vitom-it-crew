@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth, can, ROLE_LABELS } from '../auth.jsx';
+import { useTeams } from '../teams.jsx';
 import { questions as questionsApi, reviews as reviewsApi } from '../api.js';
 import VitomLogo from './VitomLogo.jsx';
 import Avatar from './Avatar.jsx';
@@ -54,13 +55,11 @@ export default function Layout({ children }) {
           <div className="text-cream-50">
             <VitomLogo size={40} color="currentColor" />
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <div className="text-xl font-bold tracking-tight text-cream-50 leading-tight">
               VITOM
             </div>
-            <div className="text-[10px] uppercase tracking-[0.25em] text-accent-400 leading-tight mt-0.5">
-              IT Crew
-            </div>
+            <TeamSwitcher />
           </div>
         </div>
         <nav className="flex-1 py-4">
@@ -111,5 +110,40 @@ export default function Layout({ children }) {
       {/* Vždy viditelný AI poradce – jen pro admin/manager */}
       <AIAdvisor />
     </div>
+  );
+}
+
+// TeamSwitcher – dropdown pod logem v sidebaru. Pokud má user 1 team, jen ho zobrazí
+// jako label (žádné menu, není co přepínat). U 2+ teamů ukáže select.
+// Po výběru zavolá switchTeam() z TeamContextu, který uloží do localStorage a reloadne.
+function TeamSwitcher() {
+  const { teams, currentTeam, switchTeam, loading } = useTeams();
+
+  if (loading) {
+    return <div className="text-[10px] uppercase tracking-[0.25em] text-accent-400 leading-tight mt-0.5">…</div>;
+  }
+  if (!teams.length) {
+    return <div className="text-[10px] uppercase tracking-[0.25em] text-accent-400 leading-tight mt-0.5">no team</div>;
+  }
+  if (teams.length === 1) {
+    return (
+      <div className="text-[10px] uppercase tracking-[0.25em] text-accent-400 leading-tight mt-0.5">
+        {currentTeam?.name || teams[0].name}
+      </div>
+    );
+  }
+  return (
+    <select
+      value={currentTeam?.id || teams[0].id}
+      onChange={(e) => switchTeam(Number(e.target.value))}
+      className="mt-0.5 bg-transparent text-[10px] uppercase tracking-[0.18em] text-accent-400 border border-accent-400/40 rounded px-1 py-0.5 hover:border-accent-400 focus:outline-none cursor-pointer w-full"
+      title="Přepnout team"
+    >
+      {teams.map(t => (
+        <option key={t.id} value={t.id} className="bg-brand-700 text-cream-100">
+          {t.name}
+        </option>
+      ))}
+    </select>
   );
 }

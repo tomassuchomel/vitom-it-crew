@@ -7,6 +7,25 @@ export const api = axios.create({
   withCredentials: true,
 });
 
+// X-Team-Id header je posílaný s každým requestem, aby backend věděl, do kterého
+// teamu právě uživatel "kouká". Hodnota je uložena v localStorage (přežije reload).
+// Změna probíhá přes TeamContext (setCurrentTeam) – samotný interceptor je read-only.
+api.interceptors.request.use((config) => {
+  const teamId = localStorage.getItem('current_team_id');
+  if (teamId) config.headers['X-Team-Id'] = teamId;
+  return config;
+});
+
+// API klient pro multi-team. Endpointy obsluhuje server/src/routes/teams.js.
+export const teams = {
+  list:        () => api.get('/teams').then(r => r.data),
+  get:         (id) => api.get(`/teams/${id}`).then(r => r.data),
+  create:      (data) => api.post('/teams', data).then(r => r.data),
+  update:      (id, data) => api.put(`/teams/${id}`, data).then(r => r.data),
+  addMember:   (id, data) => api.post(`/teams/${id}/members`, data).then(r => r.data),
+  removeMember:(id, userId) => api.delete(`/teams/${id}/members/${userId}`).then(r => r.data),
+};
+
 // Pomocné helpery pro běžné akce
 export const auth = {
   me:        () => api.get('/auth/me').then(r => r.data),
