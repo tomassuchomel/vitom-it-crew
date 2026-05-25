@@ -22,6 +22,8 @@ import questionsRoutes from './routes/questions.js';
 import attachmentsRoutes, { uploadsDir } from './routes/attachments.js';
 import aiRoutes from './routes/ai.js';
 import aiAgentRoutes from './routes/aiAgent.js';
+import reviewsRoutes from './routes/reviews.js';
+import { agentConfig, describeAgentConfig, validateAgentConfig } from './aiAgent/config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,15 +45,18 @@ app.get('/api/health', (req, res) => res.json({ ok: true, googleAuth: HAS_GOOGLE
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/projects', projectsRoutes);
+// reviewsRoutes definuje /api/tasks/:id/review, /api/tasks/review-queue, /api/tasks/:id/reviews.
+// MUSÍ být před tasksRoutes – staticka cesta "review-queue" by jinak mohla kolidovat s /:id.
+app.use('/api', reviewsRoutes);
+// aiAgentRoutes obsluhuje smíšené cesty: /api/ai-agent/preflight* i /api/tasks/:id/enqueue,
+// taky před tasksRoutes ze stejného důvodu.
+app.use('/api', aiAgentRoutes);
 app.use('/api/tasks', tasksRoutes);
 app.use('/api/time', timeRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/questions', questionsRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/ai', aiRoutes);
-// aiAgentRoutes obsluhuje smíšené cesty: /api/ai-agent/preflight* i /api/tasks/:id/enqueue,
-// proto je mountujeme na /api (ne na sub-prefix).
-app.use('/api', aiAgentRoutes);
 
 // Statické přílohy
 app.use('/uploads', express.static(uploadsDir, {
@@ -102,6 +107,25 @@ async function start() {
     console.log(`   Frontend očekáván na: ${CLIENT_URL}`);
     console.log(`   Google OAuth: ${HAS_GOOGLE ? 'ENABLED ✅' : 'DISABLED (jen dev login)'}`);
     console.log(`   Prostředí: ${IS_PROD ? 'production' : 'development'}`);
+
+    // AI agent config – jen booleany, nikdy hodnoty klíčů.
+    // Pomáhá ověřit po deployi, jestli jsou ENV proměnné správně načtené.
+    const cfgDesc = describeAgentConfig(agentConfig);
+    const v = validateAgentConfig(agentConfig);
+    console.log(`\n   AI agent config:`);
+    console.log(`     enabled:           ${cfgDesc.enabled ? '✅' : '❌'}`);
+    console.log(`     ANTHROPIC_API_KEY: ${cfgDesc.has_anthropic_key ? '✅' : '❌ chybí'}`);
+    console.log(`     GITHUB_TOKEN:      ${cfgDesc.has_github_token ? '✅' : '❌ chybí'}`);
+    console.log(`     AI_AGENT_WORKDIR:  ${cfgDesc.work_dir_set ? '✅' : '❌ chybí'}`);
+    console.log(`     branch_prefix:     ${cfgDesc.branch_prefix}`);
+    console.log(`     limit/task:        $${cfgDesc.max_cost_per_task_usd}`);
+    console.log(`     limit/day:         $${cfgDesc.max_cost_per_day_usd}`);
+    if (cfgDesc.enabled && !v.ok) {
+      console.log(`     ⚠ validation errors:`);
+      v.errors.forEach(e => console.log(`       - ${e}`));
+    } else if (cfgDesc.enabled && v.ok) {
+      console.log(`     → web preflight: ready ✅ (worker musí běžet samostatně)`);
+    }
   });
 }
 start();
