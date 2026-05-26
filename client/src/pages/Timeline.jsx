@@ -99,16 +99,28 @@ export default function Timeline() {
           </div>
         ) : (
           <>
-            {projects.filter(p => p.effective_due_date).length > 0 && (
-              <GanttChart
-                projects={projects.filter(p => p.effective_due_date)}
-                zoom={zoom}
-                forecastEnabled={forecastEnabled}
-              />
-            )}
-            {projects.filter(p => !p.effective_due_date).length > 0 && (
-              <UndatedProjects projects={projects.filter(p => !p.effective_due_date)} />
-            )}
+            {(() => {
+              // Filtr projekty: vyhodit ty, které mají hidden_from_timeline=true.
+              // Zbylé rozdělit na timeline (mají termín) vs undated (no_timeline nebo bez data).
+              const visible = projects.filter(p => !p.hidden_from_timeline);
+              // Projekty s no_timeline nikdy nejdou na Gantt — patří do "běží bez termínu" sekce.
+              const timeline = visible.filter(p => !p.no_timeline && p.effective_due_date);
+              const undated  = visible.filter(p =>  p.no_timeline || !p.effective_due_date);
+              return (
+                <>
+                  {timeline.length > 0 && (
+                    <GanttChart
+                      projects={timeline}
+                      zoom={zoom}
+                      forecastEnabled={forecastEnabled}
+                    />
+                  )}
+                  {undated.length > 0 && (
+                    <UndatedProjects projects={undated} />
+                  )}
+                </>
+              );
+            })()}
           </>
         )}
 
@@ -486,7 +498,9 @@ function UndatedProjects({ projects }) {
     <div>
       <h2 className="text-lg font-semibold text-ink-800 mb-3">
         Bez pevného termínu
-        <span className="text-xs text-ink-400 font-normal ml-2">běží na pozadí, objeví se v Gantt grafu, jakmile dostanou aktivní úkol s termínem</span>
+        <span className="text-xs text-ink-400 font-normal ml-2">
+          ongoing projekty (bez OD–DO ohraničení) nebo ještě bez termínu — jen součet hodin
+        </span>
       </h2>
       <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
         {projects.map(p => (

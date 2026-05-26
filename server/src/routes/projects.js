@@ -5,7 +5,8 @@ import { requireAuth, can } from '../auth.js';
 const router = Router();
 
 // Pole, která logujeme do audit logu (PUT). Manager_id je číslo, name jmenné mapování níže.
-const TRACKED_FIELDS = ['name', 'description', 'start_date', 'due_date', 'status', 'manager_id', 'budget', 'repo_url'];
+const TRACKED_FIELDS = ['name', 'description', 'start_date', 'due_date', 'status', 'manager_id',
+                        'budget', 'repo_url', 'no_timeline', 'hidden_from_timeline'];
 
 // Human-readable popisky polí (pro audit log v UI)
 const FIELD_LABELS = {
@@ -13,6 +14,8 @@ const FIELD_LABELS = {
   start_date: 'Začátek', due_date: 'Termín', status: 'Stav',
   manager_id: 'Manager', budget: 'Rozpočet',
   repo_url: 'GitHub repo URL',
+  no_timeline: 'Bez časového ohraničení',
+  hidden_from_timeline: 'Skryto v Timeline',
 };
 
 // Validace repo_url – základní sanitka: HTTPS GitHub URL, žádné podivnosti.
@@ -131,15 +134,31 @@ router.get('/:id/edits', requireAuth, async (req, res) => {
 router.post('/', requireAuth, async (req, res) => {
   if (!can.manageProjects(req.user)) return res.status(403).json({ error: 'forbidden' });
   if (!req.team_id) return res.status(400).json({ error: 'no_team_context', message: 'Pro vytvoření projektu musíš být členem nějakého teamu.' });
-  const { name, description, start_date, due_date, manager_id, budget, repo_url } = req.body || {};
-  if (!name || !start_date) return res.status(400).json({ error: 'missing_fields' });
+  const {
+    name, description, start_date, due_date, manager_id, budget, repo_url,
+    no_timeline, hidden_from_timeline,
+  } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'missing_fields' });
+  // start_date je povinné JEN pokud projekt má časové ohraničení (no_timeline = false).
+  const noTimeline = !!no_timeline;
+  if (!noTimeline && !start_date) {
+    return res.status(400).json({ error: 'missing_start_date', message: 'Projekt s časovým ohraničením musí mít začátek.' });
+  }
   const repoCheck = validateRepoUrl(repo_url);
   if (!repoCheck.ok) return res.status(400).json({ error: 'invalid_repo_url', message: repoCheck.error });
   const r = await query(`
-    INSERT INTO projects (name, description, start_date, due_date, manager_id, budget, repo_url, team_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    INSERT INTO projects (name, description, start_date, due_date, manager_id, budget, repo_url, team_id,
+                          no_timeline, hidden_from_timeline)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     RETURNING *
-  `, [name, description || null, start_date, due_date || null, manager_id || req.user.id, budget || null, repoCheck.value, req.team_id]);
+  `, [
+    name, description || null,
+    // Pokud no_timeline, start/due ignorujeme (uložíme NULL)
+    noTimeline ? null : start_date,
+    noTimeline ? null : (due_date || null),
+    manager_id || req.user.id, budget || null, repoCheck.value, req.team_id,
+    noTimeline, !!hidden_from_timeline,
+  ]);
   const project = r.rows[0];
   // log create
   await query(`INSERT INTO project_edits (project_id, user_id, action, note) VALUES ($1, $2, 'create', $3)`,
@@ -191,15 +210,24 @@ router.put('/:id', requireAuth, async (req, res) => {
   // Update v DB. Prázdný string z UI převedeme na NULL pro DATE / FK sloupce.
   const nullableDate = (v) => (v === '' || v === undefined) ? null : v;
   const nullableNum  = (v) => (v === '' || v === undefined || v === null) ? null : Number(v);
+
+  // Pokud projekt teď nemá časové ohraničení (no_timeline = true), nulujeme
+  // start_date i due_date — drží nás to v konzistentním stavu (jinak by tam
+  // mohlo zůstat staré datum z dřívější editace).
+  const noTimeline = !!next.no_timeline;
+  const finalStartDate = noTimeline ? null : nullableDate(next.start_date);
+  const finalDueDate   = noTimeline ? null : nullableDate(next.due_date);
+
   const r = await query(`
     UPDATE projects SET
       name = $1, description = $2, start_date = $3, due_date = $4,
-      status = $5, manager_id = $6, budget = $7, repo_url = $8
-    WHERE id = $9
+      status = $5, manager_id = $6, budget = $7, repo_url = $8,
+      no_timeline = $9, hidden_from_timeline = $10
+    WHERE id = $11
     RETURNING *
-  `, [next.name, next.description, next.start_date, nullableDate(next.due_date),
+  `, [next.name, next.description, finalStartDate, finalDueDate,
       next.status, next.manager_id || null, nullableNum(next.budget),
-      next.repo_url || null, id]);
+      next.repo_url || null, noTimeline, !!next.hidden_from_timeline, id]);
 
   // Log každé změny zvlášť
   for (const c of changes) {

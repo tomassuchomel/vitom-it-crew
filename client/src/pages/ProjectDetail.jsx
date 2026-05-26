@@ -10,7 +10,7 @@ import Attachments from '../components/Attachments.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import ReviewTaskDialog from '../components/ReviewTaskDialog.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge } from '../components/TaskStatus.jsx';
-import { Input, Textarea, Select } from './ProjectsList.jsx';
+import { Input, Textarea, Select, TimelineFlags } from './ProjectsList.jsx';
 import { projects as projectsApi, tasks as tasksApi, users as usersApi } from '../api.js';
 import { useAuth, can } from '../auth.jsx';
 
@@ -324,6 +324,7 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
     name: '', description: '',
     start_date: '', due_date: '',
     status: 'active', manager_id: '', budget: '', repo_url: '',
+    no_timeline: false, hidden_from_timeline: false,
   });
   const [err, setErr] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -333,12 +334,14 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
       setForm({
         name: project.name || '',
         description: project.description || '',
-        start_date: fmtDate(project.start_date),
-        due_date: fmtDate(project.due_date),
+        start_date: project.start_date ? fmtDate(project.start_date) : '',
+        due_date:   project.due_date   ? fmtDate(project.due_date)   : '',
         status: project.status || 'active',
         manager_id: project.manager_id || '',
         budget: project.budget != null ? String(project.budget) : '',
         repo_url: project.repo_url || '',
+        no_timeline: !!project.no_timeline,
+        hidden_from_timeline: !!project.hidden_from_timeline,
       });
       setErr(null);
     }
@@ -373,10 +376,13 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
       <form onSubmit={submit} className="space-y-3 text-sm">
         <Input label="Název *" value={form.name} onChange={v => setForm({ ...form, name: v })} required />
         <Textarea label="Popis" value={form.description} onChange={v => setForm({ ...form, description: v })} />
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Začátek *" type="date" value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} required />
-          <Input label="Termín (nepovinné)" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} />
-        </div>
+        <TimelineFlags form={form} setForm={setForm} />
+        {!form.no_timeline && (
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Začátek *" type="date" value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} required={!form.no_timeline} />
+            <Input label="Termín (nepovinné)" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} />
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <Select label="Stav" value={form.status} onChange={v => setForm({ ...form, status: v })} options={[
             { value: 'active', label: 'Aktivní' },

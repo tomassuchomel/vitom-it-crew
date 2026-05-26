@@ -91,7 +91,11 @@ export default function ProjectsList() {
 }
 
 function CreateProjectModal({ open, onClose, users, onCreated }) {
-  const [form, setForm] = useState({ name: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '', repo_url: '' });
+  const empty = {
+    name: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '', repo_url: '',
+    no_timeline: false, hidden_from_timeline: false,
+  };
+  const [form, setForm] = useState(empty);
   const [err, setErr] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -106,7 +110,7 @@ function CreateProjectModal({ open, onClose, users, onCreated }) {
         repo_url: form.repo_url ? form.repo_url.trim() : null,
       });
       onCreated();
-      setForm({ name: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '', repo_url: '' });
+      setForm(empty);
     } catch (e) { setErr(e.response?.data?.message || e.response?.data?.error || 'Uložení selhalo'); }
     finally { setSaving(false); }
   };
@@ -122,10 +126,14 @@ function CreateProjectModal({ open, onClose, users, onCreated }) {
       <form onSubmit={submit} className="space-y-3 text-sm">
         <Input label="Název *" value={form.name} onChange={v => setForm({ ...form, name: v })} required />
         <Textarea label="Popis" value={form.description} onChange={v => setForm({ ...form, description: v })} />
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Začátek *" type="date" value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} required />
-          <Input label="Termín (nepovinné)" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} />
-        </div>
+        <TimelineFlags form={form} setForm={setForm} />
+        {/* Datumy schované, když projekt nemá časové ohraničení */}
+        {!form.no_timeline && (
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Začátek *" type="date" value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} required={!form.no_timeline} />
+            <Input label="Termín (nepovinné)" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} />
+          </div>
+        )}
         <Select label="Project manager" value={form.manager_id} onChange={v => setForm({ ...form, manager_id: v })}
           options={[{ value: '', label: '—' }, ...users.filter(u => ['admin', 'manager'].includes(u.role)).map(u => ({ value: u.id, label: u.name }))]} />
         <Input label="Rozpočet (Kč)" type="number" value={form.budget} onChange={v => setForm({ ...form, budget: v })} />
@@ -141,6 +149,46 @@ function CreateProjectModal({ open, onClose, users, onCreated }) {
         {err && <div className="text-red-600 text-xs">{err}</div>}
       </form>
     </Modal>
+  );
+}
+
+// Sdílené checkbox pole pro Create i Edit modal. Dvě nastavení Timeline chování:
+//   - no_timeline: projekt nemá termín OD-DO (datumy se schovají, Timeline ho ukáže
+//                  v sekci "běží bez termínu" – jen součet hodin)
+//   - hidden_from_timeline: projekt se v Timeline vůbec nezobrazí (archivní, šablona)
+export function TimelineFlags({ form, setForm }) {
+  return (
+    <div className="bg-cream-50 border border-cream-200 rounded p-2.5 space-y-1.5">
+      <label className="flex items-start gap-2 cursor-pointer text-xs">
+        <input
+          type="checkbox"
+          checked={!!form.no_timeline}
+          onChange={(e) => setForm({ ...form, no_timeline: e.target.checked })}
+          className="mt-0.5"
+        />
+        <div className="flex-1">
+          <div className="font-medium text-ink-700">Projekt nemá časové ohraničení OD–DO</div>
+          <div className="text-[11px] text-ink-500">
+            Žádný začátek ani termín, Timeline ho ukáže v sekci „běží bez termínu" jen se součtem hodin.
+          </div>
+        </div>
+      </label>
+      <label className="flex items-start gap-2 cursor-pointer text-xs">
+        <input
+          type="checkbox"
+          checked={!!form.hidden_from_timeline}
+          onChange={(e) => setForm({ ...form, hidden_from_timeline: e.target.checked })}
+          className="mt-0.5"
+        />
+        <div className="flex-1">
+          <div className="font-medium text-ink-700">Nezobrazovat v Timeline</div>
+          <div className="text-[11px] text-ink-500">
+            Projekt zůstává v seznamu Projekty, ale v hlavním Timeline dashboardu se nezobrazí
+            (archivní/šablonové/neaktivní).
+          </div>
+        </div>
+      </label>
+    </div>
   );
 }
 
