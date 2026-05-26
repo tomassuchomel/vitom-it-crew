@@ -51,6 +51,20 @@ router.get('/', requireAuth, async (req, res) => {
     filters.push(`q.status = $${params.length}`);
   }
 
+  // Team scope – dotaz patří do current teamu, pokud je navázán na projekt/úkol
+  // toho teamu. Bez teamu (req.team_id chybí) vrátíme prázdno.
+  // taskId override (filtr na konkrétní úkol) tuto filtraci nemusí potřebovat
+  // protože GET /api/tasks/:id už ověřuje team membership.
+  if (!taskId) {
+    if (!req.team_id) return res.json({ questions: [] });
+    params.push(req.team_id);
+    filters.push(`(
+      EXISTS (SELECT 1 FROM projects pp WHERE pp.id = q.project_id AND pp.team_id = $${params.length})
+      OR
+      EXISTS (SELECT 1 FROM tasks tt JOIN projects pp2 ON pp2.id = tt.project_id WHERE tt.id = q.task_id AND pp2.team_id = $${params.length})
+    )`);
+  }
+
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   const r = await query(`${SELECT_FULL} ${where} ORDER BY q.status ASC, q.created_at DESC`, params);
   res.json({ questions: r.rows });

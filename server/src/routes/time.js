@@ -23,6 +23,12 @@ router.get('/', requireAuth, async (req, res) => {
   if (req.query.from) { params.push(req.query.from); filters.push(`te.date >= $${params.length}`); }
   if (req.query.to)   { params.push(req.query.to);   filters.push(`te.date <= $${params.length}`); }
 
+  // Team scope – time_entries patří k projektu, projekt do teamu.
+  // Filtruje cross-team: v Mgmt nevidíme IT hodiny apod.
+  if (!req.team_id) return res.json({ entries: [] });
+  params.push(req.team_id);
+  filters.push(`p.team_id = $${params.length}`);
+
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   const showCosts = can.seeCosts(req.user);
 
