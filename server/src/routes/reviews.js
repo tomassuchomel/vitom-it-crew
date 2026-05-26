@@ -86,6 +86,52 @@ router.post('/tasks/:id/review', requireAuth, async (req, res) => {
 });
 
 /**
+ * Vrátí seznam úkolů ve stavu 'needs_fix', kde je aktuální uživatel
+ * asignee (vlastník úkolu) a úkol je v rámci current teamu.
+ *
+ * Symetrie k /tasks/review-queue: tam manager vidí, co má reviewnout;
+ * tady programátor vidí, co mu manager vrátil k opravě.
+ *
+ * Vrátí task + nejnovější rejected review (komentář + reviewer + datum)
+ * + počet příloh (často obsahují screenshot toho, co je špatně).
+ */
+router.get('/tasks/needs-fix', requireAuth, async (req, res) => {
+  if (!req.team_id) return res.json({ tasks: [] });
+
+  const r = await query(`
+    SELECT t.*,
+      p.name AS project_name,
+      p.due_date AS project_due_date,
+      p.manager_id AS project_manager_id,
+      p.team_id AS project_team_id,
+      tr.comment AS latest_review_comment,
+      tr.created_at AS latest_review_at,
+      ru.name AS latest_reviewer_name,
+      (SELECT COUNT(*) FROM attachments a WHERE a.task_id = t.id) AS attachment_count,
+      (SELECT COUNT(*) FROM task_reviews trr WHERE trr.task_id = t.id) AS total_reviews
+    FROM tasks t
+    JOIN projects p ON p.id = t.project_id
+    LEFT JOIN LATERAL (
+      SELECT tr.*
+      FROM task_reviews tr
+      WHERE tr.task_id = t.id AND tr.verdict = 'rejected'
+      ORDER BY tr.created_at DESC
+      LIMIT 1
+    ) tr ON TRUE
+    LEFT JOIN users ru ON ru.id = tr.reviewer_id
+    WHERE t.assignee_id = $1
+      AND t.status = 'needs_fix'
+      AND p.team_id = $2
+    ORDER BY
+      CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 END,
+      t.due_date NULLS LAST,
+      tr.created_at DESC NULLS LAST,
+      t.id
+  `, [req.user.id, req.team_id]);
+  res.json({ tasks: r.rows });
+});
+
+/**
  * Vrátí seznam úkolů ve stavu 'review', kde aktuální uživatel
  * – je managerem projektu (project.manager_id = user.id)
  * – NEBO je admin (vidí všechny)

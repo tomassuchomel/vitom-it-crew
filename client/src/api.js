@@ -59,12 +59,16 @@ export const tasks = {
 // Review workflow – schvalování a vrácení úkolů. Endpointy obsluhuje
 // server/src/routes/reviews.js. Jen manager projektu nebo admin smí review.
 export const reviews = {
-  queue:   () => api.get('/tasks/review-queue').then(r => r.data),
+  queue:    () => api.get('/tasks/review-queue').then(r => r.data),
+  // Programátorův pohled: úkoly vrácené k opravě (status='needs_fix') přiřazené
+  // aktuálnímu uživateli, scoped na current team. Obsahuje latest_review_comment
+  // + reviewer + počet příloh.
+  needsFix: () => api.get('/tasks/needs-fix').then(r => r.data),
   // verdict: 'approved' | 'rejected'; pro rejected je comment povinný.
-  decide:  (taskId, verdict, comment) =>
+  decide:   (taskId, verdict, comment) =>
     api.post(`/tasks/${taskId}/review`, { verdict, comment }).then(r => r.data),
   // Historie všech rozhodnutí pro task – pro programátora, aby viděl, co bylo vráceno.
-  history: (taskId) => api.get(`/tasks/${taskId}/reviews`).then(r => r.data),
+  history:  (taskId) => api.get(`/tasks/${taskId}/reviews`).then(r => r.data),
 };
 
 export const questions = {

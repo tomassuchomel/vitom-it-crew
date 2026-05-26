@@ -15,6 +15,7 @@ const NAV = [
   { to: '/',          label: 'Timeline',           icon: '📅' },
   { to: '/projects',  label: 'Projekty',           icon: '📁' },
   { to: '/my-tasks',  label: 'Moje úkoly',         icon: '✅' },
+  { to: '/needs-fix', label: 'Vrácené k opravě',   icon: '🔄', badge: 'needsFix' },
   { to: '/review',    label: 'Review k dokončení', icon: '👀', badge: 'reviewQueue', requireManager: true },
   { to: '/questions', label: 'Dotazy k vyřešení',  icon: '💬', badge: 'inboxPending' },
   { to: '/time',      label: 'Hodiny',             icon: '⏱️' },
@@ -30,19 +31,24 @@ export default function Layout({ children }) {
   const nav = useNavigate();
   const location = useLocation();
   const { currentTeam } = useTeams();
-  const [counts, setCounts] = useState({ inboxPending: 0, sentPending: 0, reviewQueue: 0 });
+  const [counts, setCounts] = useState({ inboxPending: 0, sentPending: 0, reviewQueue: 0, needsFix: 0 });
 
-  // Načítáme počet nevyřízených dotazů + review fronty.
+  // Načítáme počet nevyřízených dotazů + review fronty + vrácených úkolů.
   // Periodicky (30s) a při změně stránky, ať badge svítí aktuální číslo.
   useEffect(() => {
     let mounted = true;
     const refresh = async () => {
       try {
-        const [q, r] = await Promise.all([
+        const [q, r, nf] = await Promise.all([
           questionsApi.counts(),
           can.manageProjects(user) ? reviewsApi.queue().catch(() => ({ tasks: [] })) : Promise.resolve({ tasks: [] }),
+          reviewsApi.needsFix().catch(() => ({ tasks: [] })),
         ]);
-        if (mounted) setCounts({ ...q, reviewQueue: r.tasks?.length || 0 });
+        if (mounted) setCounts({
+          ...q,
+          reviewQueue: r.tasks?.length || 0,
+          needsFix: nf.tasks?.length || 0,
+        });
       } catch {/* ignore */}
     };
     refresh();
