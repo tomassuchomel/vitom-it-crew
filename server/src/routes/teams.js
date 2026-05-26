@@ -139,6 +139,9 @@ router.put('/:id', requireAuth, async (req, res) => {
 /**
  * Přidat člena do teamu. Jen globální admin nebo team_role='admin' v daném teamu.
  * Tělo: { user_id, team_role }
+ *
+ * Validace team_role: pokud team má features.team_roles definované (povolený
+ * seznam rolí), `team_role` musí být klíč v tomhle seznamu. Jinak 400.
  */
 router.post('/:id/members', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
@@ -150,6 +153,18 @@ router.post('/:id/members', requireAuth, async (req, res) => {
   if (!isGlobalAdmin) {
     const r = await query(`SELECT team_role FROM team_members WHERE team_id = $1 AND user_id = $2`, [id, req.user.id]);
     if (r.rows[0]?.team_role !== 'admin') return res.status(403).json({ error: 'forbidden' });
+  }
+
+  // Validace team_role proti seznamu povolených rolí v team.features.team_roles
+  const teamR = await query(`SELECT features FROM teams WHERE id = $1`, [id]);
+  if (!teamR.rows[0]) return res.status(404).json({ error: 'team_not_found' });
+  const allowedRoles = teamR.rows[0].features?.team_roles;
+  if (allowedRoles && Object.keys(allowedRoles).length > 0 && !(team_role in allowedRoles)) {
+    return res.status(400).json({
+      error: 'invalid_team_role',
+      message: `Tento team povoluje role: ${Object.keys(allowedRoles).join(', ')}. Dostal jsem "${team_role}".`,
+      allowed: Object.keys(allowedRoles),
+    });
   }
 
   const r = await query(`

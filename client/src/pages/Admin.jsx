@@ -242,12 +242,11 @@ function EditTeamModal({ teamId, onClose, onSaved }) {
   const memberIds = new Set(data.members.map(m => m.user_id));
   const nonMembers = allUsers.filter(u => !memberIds.has(u.id));
 
-  // Default role pro nového člena – per team konvence
-  const defaultRoleForTeam = (slug) => {
-    if (slug === 'management') return 'manager';
-    if (slug === 'it') return 'dev';
-    return 'member';
-  };
+  // Povolené role v tomto teamu (z features.team_roles).
+  // Když team nemá nastaveno, vrátíme prázdný objekt → fallback na free text.
+  const allowedRoles = data.team.features?.team_roles || {};
+  const roleKeys = Object.keys(allowedRoles);
+  const defaultRole = roleKeys[0] || 'member';
 
   return (
     <Modal open={true} onClose={onClose} title={`Team: ${data.team.name} (${data.team.slug})`}
@@ -301,13 +300,31 @@ function EditTeamModal({ teamId, onClose, onSaved }) {
                   <div className="text-sm text-ink-800 truncate">{m.name}</div>
                   <div className="text-[11px] text-ink-500 truncate">{m.email}</div>
                 </div>
-                <input
-                  type="text"
-                  defaultValue={m.team_role}
-                  onBlur={(e) => { if (e.target.value !== m.team_role) changeRole(m.user_id, e.target.value); }}
-                  className="w-28 text-xs border border-ink-200 rounded px-1.5 py-0.5"
-                  placeholder="team_role"
-                />
+                {/* Když má team definované team_roles, použijeme dropdown.
+                    Fallback na text input jen pokud team nemá vůbec roles nakonfigurované. */}
+                {roleKeys.length > 0 ? (
+                  <select
+                    value={m.team_role}
+                    onChange={(e) => { if (e.target.value !== m.team_role) changeRole(m.user_id, e.target.value); }}
+                    className="text-xs border border-ink-200 rounded px-1.5 py-1 bg-white"
+                  >
+                    {/* Pokud current role není v povolených (legacy), ukážeme ji s ⚠ */}
+                    {!(m.team_role in allowedRoles) && (
+                      <option value={m.team_role} disabled>⚠ {m.team_role} (legacy)</option>
+                    )}
+                    {Object.entries(allowedRoles).map(([k, label]) => (
+                      <option key={k} value={k}>{label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    defaultValue={m.team_role}
+                    onBlur={(e) => { if (e.target.value !== m.team_role) changeRole(m.user_id, e.target.value); }}
+                    className="w-28 text-xs border border-ink-200 rounded px-1.5 py-0.5"
+                    placeholder="team_role"
+                  />
+                )}
                 <button onClick={() => removeMember(m.user_id)} className="text-ink-400 hover:text-red-600 px-1" title="Odebrat">×</button>
               </li>
             ))}
@@ -319,29 +336,76 @@ function EditTeamModal({ teamId, onClose, onSaved }) {
 
         {/* Přidat nového člena */}
         {nonMembers.length > 0 && (
-          <div className="space-y-2">
-            <div className="text-xs font-bold uppercase tracking-wide text-ink-500">Přidat člena</div>
-            <select
-              onChange={(e) => {
-                const userId = Number(e.target.value);
-                if (userId) addMember(userId, defaultRoleForTeam(data.team.slug));
-                e.target.value = '';
-              }}
-              defaultValue=""
-              className="w-full border border-ink-300 rounded px-2 py-1.5 text-sm"
-            >
-              <option value="" disabled>— Vyber uživatele —</option>
-              {nonMembers.map(u => (
-                <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
-              ))}
-            </select>
-            <div className="text-[11px] text-ink-400">
-              Default role: <code>{defaultRoleForTeam(data.team.slug)}</code>. Po přidání ji můžeš změnit přímo v seznamu výše.
-            </div>
-          </div>
+          <AddMemberPicker
+            nonMembers={nonMembers}
+            allowedRoles={allowedRoles}
+            defaultRole={defaultRole}
+            onAdd={addMember}
+          />
         )}
       </div>
     </Modal>
+  );
+}
+
+// Pomocná komponenta v EditTeamModal — výběr člena + role pro přidání do teamu.
+// Uživatel vidí user dropdown + role dropdown a teprve potom přidává.
+function AddMemberPicker({ nonMembers, allowedRoles, defaultRole, onAdd }) {
+  const [userId, setUserId] = useState('');
+  const [role, setRole] = useState(defaultRole);
+  const roleKeys = Object.keys(allowedRoles || {});
+
+  const submit = () => {
+    if (!userId) return;
+    onAdd(Number(userId), role);
+    setUserId('');
+    setRole(defaultRole);
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-bold uppercase tracking-wide text-ink-500">Přidat člena</div>
+      <div className="grid grid-cols-[1fr_auto_auto] gap-2">
+        <select
+          value={userId}
+          onChange={(e) => setUserId(e.target.value)}
+          className="border border-ink-300 rounded px-2 py-1.5 text-sm"
+        >
+          <option value="">— Vyber uživatele —</option>
+          {nonMembers.map(u => (
+            <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
+          ))}
+        </select>
+        {roleKeys.length > 0 ? (
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className="border border-ink-300 rounded px-2 py-1.5 text-sm bg-white"
+            title="Týmová role"
+          >
+            {Object.entries(allowedRoles).map(([k, label]) => (
+              <option key={k} value={k}>{label}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            placeholder="role"
+            className="w-32 border border-ink-300 rounded px-2 py-1.5 text-sm"
+          />
+        )}
+        <button
+          onClick={submit}
+          disabled={!userId}
+          className="px-3 py-1.5 bg-brand-500 text-white rounded text-sm disabled:opacity-40"
+        >Přidat</button>
+      </div>
+      <div className="text-[11px] text-ink-400">
+        Tento team povoluje role: {roleKeys.length > 0 ? roleKeys.join(', ') : '(neomezeno)'}.
+      </div>
+    </div>
   );
 }
 
@@ -655,21 +719,42 @@ function EditUserModal({ userId, users, onClose, onSaved }) {
             <div className="text-[11px] text-ink-400 italic">— uživatel není v žádném teamu</div>
           ) : (
             <ul className="bg-cream-50 border border-cream-200 rounded divide-y divide-cream-200">
-              {userTeams.map(t => (
-                <li key={t.team_id} className="flex items-center gap-3 p-2">
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-ink-800">{t.team_name}</div>
-                    <div className="text-[10px] text-ink-500 font-mono">{t.team_slug}</div>
-                  </div>
-                  <input
-                    type="text"
-                    defaultValue={t.team_role}
-                    onBlur={(e) => { if (e.target.value !== t.team_role) changeTeamRole(t.team_id, e.target.value); }}
-                    className="w-28 text-xs border border-ink-200 rounded px-1.5 py-0.5"
-                  />
-                  <button onClick={() => removeFromTeam(t.team_id)} className="text-ink-400 hover:text-red-600 px-1">×</button>
-                </li>
-              ))}
+              {userTeams.map(t => {
+                // Najdi povolené role z allTeams (které mají features.team_roles)
+                const fullTeam = allTeams.find(at => at.id === t.team_id);
+                const allowedRoles = fullTeam?.features?.team_roles || {};
+                const hasEnum = Object.keys(allowedRoles).length > 0;
+                return (
+                  <li key={t.team_id} className="flex items-center gap-3 p-2">
+                    <div className="flex-1">
+                      <div className="text-sm font-medium text-ink-800">{t.team_name}</div>
+                      <div className="text-[10px] text-ink-500 font-mono">{t.team_slug}</div>
+                    </div>
+                    {hasEnum ? (
+                      <select
+                        value={t.team_role}
+                        onChange={(e) => { if (e.target.value !== t.team_role) changeTeamRole(t.team_id, e.target.value); }}
+                        className="text-xs border border-ink-200 rounded px-1.5 py-1 bg-white"
+                      >
+                        {!(t.team_role in allowedRoles) && (
+                          <option value={t.team_role} disabled>⚠ {t.team_role} (legacy)</option>
+                        )}
+                        {Object.entries(allowedRoles).map(([k, label]) => (
+                          <option key={k} value={k}>{label}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        defaultValue={t.team_role}
+                        onBlur={(e) => { if (e.target.value !== t.team_role) changeTeamRole(t.team_id, e.target.value); }}
+                        className="w-28 text-xs border border-ink-200 rounded px-1.5 py-0.5"
+                      />
+                    )}
+                    <button onClick={() => removeFromTeam(t.team_id)} className="text-ink-400 hover:text-red-600 px-1">×</button>
+                  </li>
+                );
+              })}
             </ul>
           )}
           {nonUserTeams.length > 0 && (
@@ -679,7 +764,9 @@ function EditUserModal({ userId, users, onClose, onSaved }) {
                   const teamId = Number(e.target.value);
                   if (teamId) {
                     const team = allTeams.find(t => t.id === teamId);
-                    const defaultRole = team?.slug === 'management' ? 'manager' : team?.slug === 'it' ? 'dev' : 'member';
+                    // Default role = první role v features.team_roles, jinak 'member'
+                    const allowedRoles = team?.features?.team_roles || {};
+                    const defaultRole = Object.keys(allowedRoles)[0] || 'member';
                     addToTeam(teamId, defaultRole);
                   }
                   e.target.value = '';
@@ -690,6 +777,9 @@ function EditUserModal({ userId, users, onClose, onSaved }) {
                 <option value="" disabled>+ Přidat do teamu…</option>
                 {nonUserTeams.map(t => <option key={t.id} value={t.id}>{t.name} ({t.slug})</option>)}
               </select>
+              <div className="text-[11px] text-ink-400 mt-1">
+                Po přidání můžeš změnit roli v dropdown výše. Každý team má svoje povolené role.
+              </div>
             </div>
           )}
         </div>

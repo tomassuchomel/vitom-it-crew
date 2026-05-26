@@ -53,7 +53,11 @@ BEGIN
   -- Stávající projekty bez teamu → IT
   UPDATE projects SET team_id = it_id WHERE team_id IS NULL;
 
-  -- Všichni stávající useři → členové IT teamu.
+  -- Stávající useři BEZ teamového členství → členové IT teamu.
+  -- Bez podmínky NOT EXISTS by se na re-run migrace přidávali do IT i noví
+  -- uživatelé, kteří už byli explicitně přiřazeni do jiného teamu (např.
+  -- Management). Bug-fix: omezeno na orphany.
+  --
   -- Mapování globální role na týmovou roli v IT teamu:
   --   admin       → admin
   --   manager     → manager
@@ -70,6 +74,7 @@ BEGIN
     END
   FROM users u
   WHERE u.active = TRUE
+    AND NOT EXISTS (SELECT 1 FROM team_members tm WHERE tm.user_id = u.id)
   ON CONFLICT (team_id, user_id) DO NOTHING;
 END $$;
 
