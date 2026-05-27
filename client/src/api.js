@@ -118,7 +118,11 @@ export const attachments = {
     }).then(r => r.data);
   },
   remove: (id) => api.delete(`/attachments/${id}`).then(r => r.data),
-  url:    (a) => `/uploads/${a.filename}`,
+  // Binární data se streamují z DB přes BYTEA endpoint. Předtím to byly
+  // statické soubory v /uploads/, ale Render free tier nemá persistent disk
+  // a po deployi se ztrácely. Tady cache-bust nepotřebujeme — id je
+  // immutable a Cache-Control: private max-age=86400 je v pohodě.
+  url:    (a) => `/api/attachments/${a.id}/file`,
 };
 
 export const time = {

@@ -105,7 +105,7 @@ export default function Attachments({ taskId, canEdit = true, compact = false })
               ))}
             </div>
           )}
-          {/* Ostatní – linky */}
+          {/* Ostatní – linky. Endpoint /api/attachments/:id/file streamuje data z DB. */}
           {others.length > 0 && (
             <ul className="text-xs text-ink-600">
               {others.map(a => (
@@ -133,18 +133,33 @@ export default function Attachments({ taskId, canEdit = true, compact = false })
 }
 
 function Thumbnail({ attachment: a, onClick, onDelete }) {
+  const [broken, setBroken] = useState(false);
+  // Click je na CELÉM parent div — i kdyby obrázek nešel načíst (legacy
+  // záznam s ephemerální disk pryč), klikatelná zóna stále funguje a
+  // Lightbox se otevře s error stavem.
   return (
-    <div className="relative group aspect-square overflow-hidden rounded-lg border border-cream-200 bg-cream-100">
-      <img
-        src={`/uploads/${a.filename}`}
-        alt={a.original_name}
-        className="w-full h-full object-cover cursor-zoom-in"
-        onClick={onClick}
-        loading="lazy"
-      />
+    <div
+      onClick={onClick}
+      className="relative group aspect-square overflow-hidden rounded-lg border border-cream-200 bg-cream-100 cursor-zoom-in"
+    >
+      {broken ? (
+        <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center bg-red-50">
+          <div className="text-2xl">🖼</div>
+          <div className="text-[10px] text-red-700 font-medium mt-1">Soubor chybí</div>
+          <div className="text-[9px] text-red-600 truncate max-w-full mt-0.5">{a.original_name}</div>
+        </div>
+      ) : (
+        <img
+          src={attApi.url(a)}
+          alt={a.original_name}
+          className="w-full h-full object-cover"
+          loading="lazy"
+          onError={() => setBroken(true)}
+        />
+      )}
       {onDelete && (
         <button
-          onClick={onDelete}
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
           className="absolute top-1 right-1 bg-black/60 text-white rounded w-6 h-6 text-xs opacity-0 group-hover:opacity-100 transition"
           title="Smazat"
         >×</button>
@@ -154,26 +169,61 @@ function Thumbnail({ attachment: a, onClick, onDelete }) {
 }
 
 function VideoCard({ attachment: a, onClick, onDelete }) {
+  const [broken, setBroken] = useState(false);
   return (
     <div className="relative group rounded-lg border border-cream-200 overflow-hidden bg-black">
-      <video
-        src={`/uploads/${a.filename}`}
-        className="w-full max-h-64 object-contain cursor-zoom-in"
-        controls
-        preload="metadata"
-        onClick={onClick}
-      />
-      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent text-white text-xs px-2 py-1 truncate">
+      {broken ? (
+        <div
+          onClick={onClick}
+          className="w-full h-32 flex flex-col items-center justify-center p-2 text-center bg-red-50 cursor-pointer"
+        >
+          <div className="text-2xl">🎬</div>
+          <div className="text-xs text-red-700 font-medium mt-1">Video chybí</div>
+          <div className="text-[10px] text-red-600 truncate max-w-full mt-0.5">{a.original_name}</div>
+        </div>
+      ) : (
+        <video
+          src={attApi.url(a)}
+          className="w-full max-h-64 object-contain cursor-zoom-in"
+          controls
+          preload="metadata"
+          onClick={onClick}
+          onError={() => setBroken(true)}
+        />
+      )}
+      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent text-white text-xs px-2 py-1 truncate pointer-events-none">
         🎬 {a.original_name}
       </div>
       {onDelete && (
         <button
-          onClick={onDelete}
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
           className="absolute top-1 right-1 bg-black/60 text-white rounded w-6 h-6 text-xs opacity-0 group-hover:opacity-100 transition"
           title="Smazat"
         >×</button>
       )}
     </div>
+  );
+}
+
+// Subkomponenta Lightboxu pro image s error fallbackem
+function LightboxImage({ src, alt }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) {
+    return (
+      <div className="text-white text-center p-8">
+        <div className="text-6xl mb-3">🖼</div>
+        <div className="text-lg font-medium">Soubor není dostupný</div>
+        <div className="text-sm text-cream-200 mt-2">
+          Soubor byl pravděpodobně ztracen při restartu serveru (Render free tier).
+          <br />Stará verze app ukládala soubory na ephemerální disk; nově jdou rovnou do DB.
+          <br />Pokud je tahle příloha důležitá, požádej autora o opětovné nahrání.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <img src={src} alt={alt} className="max-w-full max-h-[90vh] object-contain"
+         onError={() => setBroken(true)} />
   );
 }
 
@@ -210,11 +260,11 @@ function Lightbox({ items, index, onClose, onPrev, onNext }) {
       )}
       <div onClick={(e) => e.stopPropagation()} className="max-w-[90vw] max-h-[90vh]">
         {a.kind === 'image' ? (
-          <img src={`/uploads/${a.filename}`} alt={a.original_name} className="max-w-full max-h-[90vh] object-contain" />
+          <LightboxImage src={attApi.url(a)} alt={a.original_name} />
         ) : a.kind === 'video' ? (
-          <video src={`/uploads/${a.filename}`} controls autoPlay className="max-w-full max-h-[90vh]" />
+          <video src={attApi.url(a)} controls autoPlay className="max-w-full max-h-[90vh]" />
         ) : (
-          <a href={`/uploads/${a.filename}`} download className="text-white underline">{a.original_name}</a>
+          <a href={attApi.url(a)} download className="text-white underline">{a.original_name}</a>
         )}
         <div className="text-cream-200 text-sm mt-2 text-center">{a.original_name}</div>
       </div>
