@@ -12,36 +12,80 @@
 import { Router } from 'express';
 import { query } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { askTeamAssistant, HAS_AI } from '../ai.js';
 
 const router = Router();
 
+// AI asistent – odpovídá na otázky nad poznámkami + daty týmu.
+// Body: { question, history?: [{role, content}] }. Team scope z req.team_id.
+router.post('/ai-ask', requireAuth, async (req, res) => {
+  if (!req.team_id) return res.status(400).json({ error: 'no_team_context' });
+  if (!HAS_AI) return res.status(503).json({ error: 'no_api_key', message: 'AI není nakonfigurované (ANTHROPIC_API_KEY).' });
+  const { question, history } = req.body || {};
+  try {
+    const result = await askTeamAssistant({ question, history, teamId: req.team_id, userId: req.user.id });
+    if (result.error) return res.status(result.error === 'api_error' ? 502 : 400).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('[notes/ai-ask]', err);
+    res.status(500).json({ error: 'server_error', message: err.message });
+  }
+});
+
 // List – celý strom current teamu jako flat array (FE poskládá hierarchii).
+//
+// ?scope=team|personal:
+//   - team (default):  visibility='team' – vidí všichni v teamu
+//   - personal:        visibility='personal' AND user_id=me – jen moje soukromé
+//
 // Řazení: parent (NULLS first = top-level), pak position, pak created_at.
 router.get('/', requireAuth, async (req, res) => {
   if (!req.team_id) return res.json({ notes: [] });
+  const scope = req.query.scope === 'personal' ? 'personal' : 'team';
+
+  let where, params;
+  if (scope === 'personal') {
+    where = `n.team_id = $1 AND n.visibility = 'personal' AND n.user_id = $2`;
+    params = [req.team_id, req.user.id];
+  } else {
+    where = `n.team_id = $1 AND n.visibility = 'team'`;
+    params = [req.team_id];
+  }
+
   const r = await query(`
     SELECT n.id, n.team_id, n.parent_id, n.user_id, n.title, n.content,
-           n.position, n.ai_processed_at, n.created_at, n.updated_at,
+           n.position, n.visibility, n.ai_processed_at, n.created_at, n.updated_at,
            u.name AS author_name
     FROM notes n
     LEFT JOIN users u ON u.id = n.user_id
-    WHERE n.team_id = $1
+    WHERE ${where}
     ORDER BY n.parent_id NULLS FIRST, n.position ASC, n.created_at ASC
-  `, [req.team_id]);
-  res.json({ notes: r.rows });
+  `, params);
+  res.json({ notes: r.rows, scope });
 });
 
 // Create – v current teamu. parent_id volitelné (podpoznámka).
+// visibility: 'team' (default) | 'personal'. Pokud má rodiče, DĚDÍ jeho
+// visibility (strom je celý týmový nebo celý osobní – nemícháme).
 router.post('/', requireAuth, async (req, res) => {
   if (!req.team_id) return res.status(400).json({ error: 'no_team_context' });
   const { title, content, parent_id } = req.body || {};
+  let visibility = req.body.visibility === 'personal' ? 'personal' : 'team';
 
-  // Validace parent_id – musí být poznámka ze stejného teamu
+  // Validace parent_id – musí být poznámka ze stejného teamu; dědí visibility
   let parentId = null;
   if (parent_id) {
-    const p = await query(`SELECT id FROM notes WHERE id = $1 AND team_id = $2`, [Number(parent_id), req.team_id]);
+    const p = await query(
+      `SELECT id, visibility, user_id FROM notes WHERE id = $1 AND team_id = $2`,
+      [Number(parent_id), req.team_id]
+    );
     if (!p.rows[0]) return res.status(400).json({ error: 'invalid_parent' });
+    // Osobní strom smí rozšiřovat jen jeho autor
+    if (p.rows[0].visibility === 'personal' && p.rows[0].user_id !== req.user.id) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
     parentId = Number(parent_id);
+    visibility = p.rows[0].visibility; // dědění
   }
 
   // position = max+1 mezi sourozenci
@@ -53,10 +97,10 @@ router.post('/', requireAuth, async (req, res) => {
   const position = posR.rows[0].next_pos;
 
   const r = await query(`
-    INSERT INTO notes (team_id, parent_id, user_id, title, content, position)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO notes (team_id, parent_id, user_id, title, content, position, visibility)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     RETURNING *
-  `, [req.team_id, parentId, req.user.id, (title || 'Nová poznámka').slice(0, 300), content || null, position]);
+  `, [req.team_id, parentId, req.user.id, (title || 'Nová poznámka').slice(0, 300), content || null, position, visibility]);
   res.json({ note: r.rows[0] });
 });
 
@@ -66,9 +110,7 @@ router.put('/:id', requireAuth, async (req, res) => {
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_id' });
   const cur = (await query(`SELECT * FROM notes WHERE id = $1`, [id])).rows[0];
   if (!cur) return res.status(404).json({ error: 'not_found' });
-  if (req.user.role !== 'admin' && cur.team_id !== req.team_id) {
-    return res.status(403).json({ error: 'forbidden' });
-  }
+  if (!canTouchNote(req, cur)) return res.status(403).json({ error: 'forbidden' });
 
   // Reparent – validuj že nový rodič je ve stejném teamu a není to potomek (cyklus).
   let nextParent = cur.parent_id;
@@ -105,14 +147,22 @@ router.put('/:id', requireAuth, async (req, res) => {
 // Smazat – kaskáda na podpoznámky (FK ON DELETE CASCADE).
 router.delete('/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
-  const cur = (await query(`SELECT team_id FROM notes WHERE id = $1`, [id])).rows[0];
+  const cur = (await query(`SELECT team_id, visibility, user_id FROM notes WHERE id = $1`, [id])).rows[0];
   if (!cur) return res.status(404).json({ error: 'not_found' });
-  if (req.user.role !== 'admin' && cur.team_id !== req.team_id) {
-    return res.status(403).json({ error: 'forbidden' });
-  }
+  if (!canTouchNote(req, cur)) return res.status(403).json({ error: 'forbidden' });
   await query(`DELETE FROM notes WHERE id = $1`, [id]);
   res.json({ ok: true });
 });
+
+// Oprávnění na poznámku:
+//   - osobní poznámka: jen autor (ani admin nečte cizí soukromé)
+//   - týmová poznámka: člen teamu (cur.team_id == req.team_id) nebo admin
+function canTouchNote(req, note) {
+  if (note.visibility === 'personal') {
+    return note.user_id === req.user.id;
+  }
+  return req.user.role === 'admin' || note.team_id === req.team_id;
+}
 
 // Pomocná: vrátí Set všech ID potomků dané poznámky (rekurzivně) – pro cyklus check.
 async function collectDescendantIds(rootId) {

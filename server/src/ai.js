@@ -237,6 +237,117 @@ Odhadni čas v hodinách s ohledem na AI urychlení.`;
   }
 }
 
+// ----------- AI asistent týmu (poznámky + data) -----------
+// Čte: týmové poznámky, osobní poznámky uživatele, aktivní + nedávno dokončené
+// úkoly, projekty, členy teamu. Odpovídá na analytické otázky ("co tým dělal
+// tento týden", "jaké jsou priority", "na čem se shodli").
+
+async function buildTeamAssistantContext(teamId, userId) {
+  const team = (await query(`SELECT id, name, slug, description FROM teams WHERE id = $1`, [teamId])).rows[0];
+
+  const members = (await query(`
+    SELECT u.name, tm.team_role
+    FROM team_members tm JOIN users u ON u.id = tm.user_id
+    WHERE tm.team_id = $1 AND u.active = TRUE
+    ORDER BY u.name
+  `, [teamId])).rows;
+
+  const projects = (await query(`
+    SELECT name, status, start_date, due_date, no_timeline
+    FROM projects WHERE team_id = $1 ORDER BY due_date NULLS LAST
+  `, [teamId])).rows;
+
+  // Aktivní úkoly + dokončené za posledních 14 dní (kontext "co se dělo")
+  const tasks = (await query(`
+    SELECT t.title, t.status, t.priority, t.due_date, t.completed_at, t.estimated_h,
+           u.name AS assignee, p.name AS project
+    FROM tasks t
+    JOIN projects p ON p.id = t.project_id
+    LEFT JOIN users u ON u.id = t.assignee_id
+    WHERE p.team_id = $1
+      AND (t.status != 'done' OR t.completed_at >= NOW() - INTERVAL '14 days')
+    ORDER BY
+      CASE t.status WHEN 'in_progress' THEN 0 WHEN 'review' THEN 1 WHEN 'needs_fix' THEN 2 WHEN 'todo' THEN 3 ELSE 4 END,
+      t.due_date NULLS LAST
+    LIMIT 200
+  `, [teamId])).rows;
+
+  // Týmové poznámky (celý strom)
+  const teamNotes = (await query(`
+    SELECT id, parent_id, title, content, position
+    FROM notes WHERE team_id = $1 AND visibility = 'team'
+    ORDER BY parent_id NULLS FIRST, position
+  `, [teamId])).rows;
+
+  // Osobní poznámky uživatele
+  const personalNotes = (await query(`
+    SELECT id, parent_id, title, content, position
+    FROM notes WHERE team_id = $1 AND visibility = 'personal' AND user_id = $2
+    ORDER BY parent_id NULLS FIRST, position
+  `, [teamId, userId])).rows;
+
+  return { team, members, projects, tasks, teamNotes, personalNotes };
+}
+
+export async function askTeamAssistant({ question, history = [], teamId, userId }) {
+  if (!HAS_AI) {
+    return { error: 'no_api_key', message: 'Anthropic API klíč není nastaven (ANTHROPIC_API_KEY).' };
+  }
+  if (!question || !String(question).trim()) {
+    return { error: 'empty_question' };
+  }
+  const ctx = await buildTeamAssistantContext(teamId, userId);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const system = `Jsi AI asistent týmu „${ctx.team?.name}". Pomáháš členům týmu zorientovat se v tom,
+co se v týmu děje – na čem se pracuje, co se dokončilo, jaké jsou priority, co je v poznámkách.
+
+Odpovídáš česky, věcně a stručně. Když se tě někdo zeptá "co jsme tento týden dělali",
+shrň dokončené i rozpracované úkoly. Když se ptá na priority, koukni na urgentní/vysoké úkoly
+a blížící se termíny. Když odkazuje na poznámky, vyhledej v nich.
+
+Máš k dispozici DATA NÍŽE. Nemůžeš je měnit, jen z nich čerpat. Když odpověď v datech není,
+řekni to – nevymýšlej si. Datum dnes: ${today}.
+
+ČLENOVÉ TÝMU:
+${JSON.stringify(ctx.members)}
+
+PROJEKTY:
+${JSON.stringify(ctx.projects)}
+
+ÚKOLY (aktivní + dokončené za 14 dní):
+${JSON.stringify(ctx.tasks)}
+
+TÝMOVÉ POZNÁMKY (strom; parent_id udává hierarchii):
+${JSON.stringify(ctx.teamNotes)}
+
+OSOBNÍ POZNÁMKY UŽIVATELE (vidí jen on):
+${JSON.stringify(ctx.personalNotes)}
+
+Odpovídej plain textem (ne JSON), klidně s odrážkami. Buď konkrétní – jména, projekty, termíny.`;
+
+  // Sestavení konverzace: historie + nová otázka
+  const safeHistory = Array.isArray(history)
+    ? history.filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string').slice(-10)
+    : [];
+  const messages = [...safeHistory, { role: 'user', content: String(question).slice(0, 4000) }];
+
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({ model: MODEL, max_tokens: 1500, system, messages }),
+  });
+  if (!res.ok) {
+    return { error: 'api_error', status: res.status, message: (await res.text()).slice(0, 500) };
+  }
+  const data = await res.json();
+  return { reply: data.content?.[0]?.text || '', usage: data.usage };
+}
+
 export async function chat(messages) {
   if (!HAS_AI) {
     return { error: 'no_api_key', message: 'Anthropic API klíč není nastaven.' };

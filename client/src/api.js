@@ -90,10 +90,13 @@ export const ai = {
 // Poznámky – hierarchický strom (množina/podmnožina), team-scoped.
 // Backend server/src/routes/notes.js. Do budoucna čteno AI agentem.
 export const notes = {
-  list:   () => api.get('/notes').then(r => r.data),
+  // scope: 'team' (default) | 'personal'
+  list:   (scope = 'team') => api.get('/notes', { params: { scope } }).then(r => r.data),
   create: (data) => api.post('/notes', data).then(r => r.data),
   update: (id, data) => api.put(`/notes/${id}`, data).then(r => r.data),
   remove: (id) => api.delete(`/notes/${id}`).then(r => r.data),
+  // AI asistent: { question, history } → { reply, usage }
+  aiAsk:  (question, history) => api.post('/notes/ai-ask', { question, history }).then(r => r.data),
 };
 
 // Scoreboard – per-user task completion stats v rámci current teamu.

@@ -18,31 +18,36 @@ import { notes as notesApi } from '../api.js';
 
 export default function Notes() {
   const { currentTeam } = useTeams();
+  const [scope, setScope] = useState('team'); // 'team' | 'personal'
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [collapsed, setCollapsed] = useState(() => new Set());
+  const [aiOpen, setAiOpen] = useState(false);
 
   const load = (silent = false, selectAfter = null) => {
     if (!silent) setLoading(true);
-    return notesApi.list()
+    return notesApi.list(scope)
       .then(d => {
         setItems(d.notes || []);
         if (selectAfter != null) setSelectedId(selectAfter);
       })
       .finally(() => setLoading(false));
   };
-  useEffect(() => { load(); /* reload při změně teamu */ }, [currentTeam?.id]);
+  // reload při změně teamu i scope
+  useEffect(() => { setSelectedId(null); load(); /* eslint-disable-next-line */ }, [currentTeam?.id, scope]);
 
   // Postav strom z flat listu
   const tree = useMemo(() => buildTree(items), [items]);
   const selected = items.find(n => n.id === selectedId) || null;
 
   const addRoot = async () => {
-    const d = await notesApi.create({ title: 'Nová poznámka' });
+    // Nová root poznámka dědí aktuální scope (týmová vs osobní)
+    const d = await notesApi.create({ title: 'Nová poznámka', visibility: scope });
     await load(true, d.note.id);
   };
   const addChild = async (parentId) => {
+    // Podpoznámka dědí visibility rodiče (backend to vynutí)
     const d = await notesApi.create({ title: 'Nová podpoznámka', parent_id: parentId });
     // Rozbal rodiče, ať je nová podpoznámka vidět
     setCollapsed(prev => { const n = new Set(prev); n.delete(parentId); return n; });
@@ -67,14 +72,37 @@ export default function Notes() {
     <div>
       <PageHeader
         title="📝 Poznámky"
-        subtitle={`Hierarchický blok pro ${currentTeam?.name || 'tým'} — množina a podmnožiny. Do budoucna z nich AI vytvoří úkoly.`}
+        subtitle={`Hierarchický blok pro ${currentTeam?.name || 'tým'} — množina a podmnožiny.`}
         actions={
-          <button onClick={addRoot}
-            className="px-3 py-1.5 bg-brand-500 text-white rounded-lg text-sm font-medium hover:bg-brand-600">
-            + Nová poznámka
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setAiOpen(true)}
+              className="px-3 py-1.5 border border-accent-400 text-accent-700 rounded-lg text-sm font-medium hover:bg-accent-50">
+              🤖 Zeptat se AI
+            </button>
+            <button onClick={addRoot}
+              className="px-3 py-1.5 bg-brand-500 text-white rounded-lg text-sm font-medium hover:bg-brand-600">
+              + Nová poznámka
+            </button>
+          </div>
         }
       />
+
+      {/* Scope toggle: Týmové / Moje */}
+      <div className="px-6 pt-4">
+        <div className="inline-flex rounded-lg border border-cream-300 overflow-hidden text-sm">
+          <button
+            onClick={() => setScope('team')}
+            className={`px-4 py-1.5 ${scope === 'team' ? 'bg-brand-500 text-white' : 'bg-white text-ink-600 hover:bg-cream-50'}`}
+          >👥 Týmové</button>
+          <button
+            onClick={() => setScope('personal')}
+            className={`px-4 py-1.5 ${scope === 'personal' ? 'bg-brand-500 text-white' : 'bg-white text-ink-600 hover:bg-cream-50'}`}
+          >🔒 Moje</button>
+        </div>
+        <span className="ml-3 text-xs text-ink-400">
+          {scope === 'team' ? 'Vidí všichni v týmu.' : 'Vidíš jen ty.'}
+        </span>
+      </div>
 
       <div className="p-6">
         {loading ? (
@@ -119,6 +147,125 @@ export default function Notes() {
             </div>
           </div>
         )}
+      </div>
+
+      {aiOpen && <AiAssistantModal onClose={() => setAiOpen(false)} teamName={currentTeam?.name} />}
+    </div>
+  );
+}
+
+// AI asistent – chat modal. Posílá otázku + historii na /api/notes/ai-ask.
+// Backend přidá kontext (poznámky + úkoly + projekty + členové) a vrátí odpověď.
+function AiAssistantModal({ onClose, teamName }) {
+  const [messages, setMessages] = useState([]); // {role, content}
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const scrollRef = useRef(null);
+
+  const SUGGESTIONS = [
+    'Co jsme tento týden dělali?',
+    'Jaké jsou teď priority?',
+    'Co je rozpracované a co dokončené?',
+    'Shrň, co je v poznámkách.',
+  ];
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [messages, busy]);
+
+  const send = async (text) => {
+    const q = (text ?? input).trim();
+    if (!q || busy) return;
+    setErr(null);
+    const newMessages = [...messages, { role: 'user', content: q }];
+    setMessages(newMessages);
+    setInput('');
+    setBusy(true);
+    try {
+      // historie BEZ poslední otázky (tu pošleme zvlášť jako question)
+      const d = await notesApi.aiAsk(q, messages);
+      setMessages([...newMessages, { role: 'assistant', content: d.reply || '(prázdná odpověď)' }]);
+    } catch (e) {
+      setErr(e.response?.data?.message || e.response?.data?.error || 'AI dotaz selhal');
+      // odeber neúspěšnou user zprávu? necháme ji, ať vidí co se ptal
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-stretch justify-end md:items-center md:justify-center" onClick={onClose}>
+      <div className="bg-white w-full md:max-w-2xl md:rounded-xl shadow-2xl flex flex-col md:max-h-[85vh] h-full md:h-auto"
+        onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="px-5 py-4 border-b border-cream-200 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-ink-800">🤖 AI asistent</h2>
+            <div className="text-xs text-ink-500">
+              Ptej se na cokoliv o týmu {teamName} — úkoly, priority, poznámky.
+            </div>
+          </div>
+          <button onClick={onClose} className="text-ink-400 hover:text-ink-700 text-2xl leading-none">×</button>
+        </div>
+
+        {/* Messages */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 space-y-3 min-h-[300px]">
+          {messages.length === 0 ? (
+            <div className="text-center text-ink-400 mt-6">
+              <div className="text-3xl mb-2">💬</div>
+              <div className="text-sm">Zeptej se třeba:</div>
+              <div className="flex flex-wrap gap-2 justify-center mt-3">
+                {SUGGESTIONS.map((s, i) => (
+                  <button key={i} onClick={() => send(s)}
+                    className="px-3 py-1.5 text-xs border border-cream-300 rounded-full hover:bg-cream-50 text-ink-600">
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            messages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap ${
+                  m.role === 'user'
+                    ? 'bg-brand-500 text-white rounded-br-sm'
+                    : 'bg-cream-100 text-ink-800 rounded-bl-sm'
+                }`}>
+                  {m.content}
+                </div>
+              </div>
+            ))
+          )}
+          {busy && (
+            <div className="flex justify-start">
+              <div className="bg-cream-100 text-ink-500 rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm">
+                <span className="animate-pulse">přemýšlím…</span>
+              </div>
+            </div>
+          )}
+          {err && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{err}</div>}
+        </div>
+
+        {/* Input */}
+        <div className="border-t border-cream-200 p-3">
+          <form onSubmit={(e) => { e.preventDefault(); send(); }} className="flex gap-2">
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Napiš dotaz…"
+              autoFocus
+              className="flex-1 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-400"
+            />
+            <button type="submit" disabled={busy || !input.trim()}
+              className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium disabled:opacity-50">
+              Poslat
+            </button>
+          </form>
+          <div className="text-[10px] text-ink-400 mt-1.5 px-1">
+            AI čte týmové poznámky, tvoje osobní poznámky, úkoly a projekty tohoto týmu. Nemůže nic měnit.
+          </div>
+        </div>
       </div>
     </div>
   );
