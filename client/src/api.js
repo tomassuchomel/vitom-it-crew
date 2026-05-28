@@ -90,13 +90,17 @@ export const ai = {
 // Poznámky – hierarchický strom (množina/podmnožina), team-scoped.
 // Backend server/src/routes/notes.js. Do budoucna čteno AI agentem.
 export const notes = {
-  // scope: 'team' (default) | 'personal'
-  list:   (scope = 'team') => api.get('/notes', { params: { scope } }).then(r => r.data),
-  create: (data) => api.post('/notes', data).then(r => r.data),
-  update: (id, data) => api.put(`/notes/${id}`, data).then(r => r.data),
-  remove: (id) => api.delete(`/notes/${id}`).then(r => r.data),
+  // scope: 'team' (default) | 'personal' | 'shared'
+  list:    (scope = 'team') => api.get('/notes', { params: { scope } }).then(r => r.data),
+  create:  (data) => api.post('/notes', data).then(r => r.data),
+  update:  (id, data) => api.put(`/notes/${id}`, data).then(r => r.data),
+  remove:  (id) => api.delete(`/notes/${id}`).then(r => r.data),
   // AI asistent: { question, history } → { reply, usage }
-  aiAsk:  (question, history) => api.post('/notes/ai-ask', { question, history }).then(r => r.data),
+  aiAsk:   (question, history) => api.post('/notes/ai-ask', { question, history }).then(r => r.data),
+  // Sdílení s jiným uživatelem
+  share:   (id, userId) => api.post(`/notes/${id}/share`, { user_id: userId }).then(r => r.data),
+  unshare: (id, userId) => api.delete(`/notes/${id}/share/${userId}`).then(r => r.data),
+  shares:  (id) => api.get(`/notes/${id}/shares`).then(r => r.data),
 };
 
 // Scoreboard – per-user task completion stats v rámci current teamu.

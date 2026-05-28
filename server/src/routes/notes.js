@@ -32,16 +32,34 @@ router.post('/ai-ask', requireAuth, async (req, res) => {
   }
 });
 
-// List – celý strom current teamu jako flat array (FE poskládá hierarchii).
+// List – flat array (FE poskládá strom).
 //
-// ?scope=team|personal:
+// ?scope=team|personal|shared:
 //   - team (default):  visibility='team' – vidí všichni v teamu
 //   - personal:        visibility='personal' AND user_id=me – jen moje soukromé
+//   - shared:          poznámky sdílené se mnou přes note_shares (read-only;
+//                      mohou být z jiných teamů). Ploché, bez hierarchie.
 //
 // Řazení: parent (NULLS first = top-level), pak position, pak created_at.
 router.get('/', requireAuth, async (req, res) => {
-  if (!req.team_id) return res.json({ notes: [] });
-  const scope = req.query.scope === 'personal' ? 'personal' : 'team';
+  const scope = ['personal', 'shared'].includes(req.query.scope) ? req.query.scope : 'team';
+
+  // Shared scope – nezávisí na team kontextu, vrací poznámky sdílené s uživatelem.
+  if (scope === 'shared') {
+    const r = await query(`
+      SELECT n.id, n.team_id, n.parent_id, n.user_id, n.title, n.content,
+             n.position, n.visibility, n.ai_processed_at, n.created_at, n.updated_at,
+             u.name AS author_name, TRUE AS shared, ns.created_at AS shared_at
+      FROM note_shares ns
+      JOIN notes n ON n.id = ns.note_id
+      LEFT JOIN users u ON u.id = n.user_id
+      WHERE ns.shared_with_user_id = $1
+      ORDER BY ns.created_at DESC
+    `, [req.user.id]);
+    return res.json({ notes: r.rows, scope });
+  }
+
+  if (!req.team_id) return res.json({ notes: [], scope });
 
   let where, params;
   if (scope === 'personal') {
@@ -55,13 +73,61 @@ router.get('/', requireAuth, async (req, res) => {
   const r = await query(`
     SELECT n.id, n.team_id, n.parent_id, n.user_id, n.title, n.content,
            n.position, n.visibility, n.ai_processed_at, n.created_at, n.updated_at,
-           u.name AS author_name
+           u.name AS author_name,
+           FALSE AS shared,
+           (SELECT COUNT(*) FROM note_shares ns WHERE ns.note_id = n.id)::int AS share_count
     FROM notes n
     LEFT JOIN users u ON u.id = n.user_id
     WHERE ${where}
     ORDER BY n.parent_id NULLS FIRST, n.position ASC, n.created_at ASC
   `, params);
   res.json({ notes: r.rows, scope });
+});
+
+// Sdílet poznámku s uživatelem. Smí jen autor poznámky.
+// Body: { user_id }
+router.post('/:id/share', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const targetUserId = Number(req.body?.user_id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_id' });
+  if (!Number.isInteger(targetUserId) || targetUserId <= 0) return res.status(400).json({ error: 'invalid_user_id' });
+  if (targetUserId === req.user.id) return res.status(400).json({ error: 'cannot_share_with_self' });
+
+  const note = (await query(`SELECT id, user_id FROM notes WHERE id = $1`, [id])).rows[0];
+  if (!note) return res.status(404).json({ error: 'not_found' });
+  if (note.user_id !== req.user.id) return res.status(403).json({ error: 'only_author_can_share' });
+
+  await query(`
+    INSERT INTO note_shares (note_id, shared_with_user_id, shared_by)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (note_id, shared_with_user_id) DO NOTHING
+  `, [id, targetUserId, req.user.id]);
+  res.json({ ok: true });
+});
+
+// Zrušit sdílení.
+router.delete('/:id/share/:userId', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const targetUserId = Number(req.params.userId);
+  const note = (await query(`SELECT user_id FROM notes WHERE id = $1`, [id])).rows[0];
+  if (!note) return res.status(404).json({ error: 'not_found' });
+  if (note.user_id !== req.user.id) return res.status(403).json({ error: 'only_author_can_share' });
+  await query(`DELETE FROM note_shares WHERE note_id = $1 AND shared_with_user_id = $2`, [id, targetUserId]);
+  res.json({ ok: true });
+});
+
+// Seznam uživatelů, se kterými je poznámka sdílená (pro share modal).
+router.get('/:id/shares', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const note = (await query(`SELECT user_id FROM notes WHERE id = $1`, [id])).rows[0];
+  if (!note) return res.status(404).json({ error: 'not_found' });
+  if (note.user_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
+  const r = await query(`
+    SELECT ns.shared_with_user_id AS user_id, u.name, u.email, ns.created_at
+    FROM note_shares ns JOIN users u ON u.id = ns.shared_with_user_id
+    WHERE ns.note_id = $1 ORDER BY ns.created_at DESC
+  `, [id]);
+  res.json({ shares: r.rows });
 });
 
 // Create – v current teamu. parent_id volitelné (podpoznámka).

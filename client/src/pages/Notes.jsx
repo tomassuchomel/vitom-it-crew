@@ -13,18 +13,22 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
+import RichTextEditor from '../components/RichTextEditor.jsx';
 import { useTeams } from '../teams.jsx';
-import { notes as notesApi } from '../api.js';
+import { useAuth } from '../auth.jsx';
+import { notes as notesApi, users as usersApi } from '../api.js';
 
 export default function Notes() {
   const { currentTeam } = useTeams();
-  const [scope, setScope] = useState('team'); // 'team' | 'personal'
+  const { user } = useAuth();
+  const [scope, setScope] = useState('team'); // 'team' | 'personal' | 'shared'
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState(null);   // poznámka v editoru
   const [activeMainId, setActiveMainId] = useState(null); // vybraná hlavní (root) poznámka → sloupec 2
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [aiOpen, setAiOpen] = useState(false);
+  const [shareNote, setShareNote] = useState(null); // poznámka pro share modal
 
   const load = (silent = false, selectAfter = null) => {
     if (!silent) setLoading(true);
@@ -38,8 +42,12 @@ export default function Notes() {
   // reload při změně teamu i scope
   useEffect(() => { setSelectedId(null); setActiveMainId(null); load(); /* eslint-disable-next-line */ }, [currentTeam?.id, scope]);
 
-  // Postav strom z flat listu
-  const tree = useMemo(() => buildTree(items), [items]);
+  // Postav strom z flat listu. U sdílených poznámek ignorujeme parent_id
+  // (sdílí se jednotlivé poznámky, ne celý strom) → všechny jsou top-level.
+  const tree = useMemo(() => {
+    const src = scope === 'shared' ? items.map(n => ({ ...n, parent_id: null })) : items;
+    return buildTree(src);
+  }, [items, scope]);
   const selected = items.find(n => n.id === selectedId) || null;
 
   // Mapa id → rodič, pro výpočet root předka libovolné poznámky
@@ -103,15 +111,17 @@ export default function Notes() {
               className="px-3 py-1.5 border border-accent-400 text-accent-700 rounded-lg text-sm font-medium hover:bg-accent-50">
               🤖 Zeptat se AI
             </button>
-            <button onClick={addRoot}
-              className="px-3 py-1.5 bg-brand-500 text-white rounded-lg text-sm font-medium hover:bg-brand-600">
-              + Nová poznámka
-            </button>
+            {scope !== 'shared' && (
+              <button onClick={addRoot}
+                className="px-3 py-1.5 bg-brand-500 text-white rounded-lg text-sm font-medium hover:bg-brand-600">
+                + Nová poznámka
+              </button>
+            )}
           </div>
         }
       />
 
-      {/* Scope toggle: Týmové / Moje */}
+      {/* Scope toggle: Týmové / Moje / Sdílené */}
       <div className="px-6 pt-4">
         <div className="inline-flex rounded-lg border border-cream-300 overflow-hidden text-sm">
           <button
@@ -120,11 +130,17 @@ export default function Notes() {
           >👥 Týmové</button>
           <button
             onClick={() => setScope('personal')}
-            className={`px-4 py-1.5 ${scope === 'personal' ? 'bg-brand-500 text-white' : 'bg-white text-ink-600 hover:bg-cream-50'}`}
+            className={`px-4 py-1.5 border-l border-cream-300 ${scope === 'personal' ? 'bg-brand-500 text-white' : 'bg-white text-ink-600 hover:bg-cream-50'}`}
           >🔒 Moje</button>
+          <button
+            onClick={() => setScope('shared')}
+            className={`px-4 py-1.5 border-l border-cream-300 ${scope === 'shared' ? 'bg-brand-500 text-white' : 'bg-white text-ink-600 hover:bg-cream-50'}`}
+          >🔗 Sdílené</button>
         </div>
         <span className="ml-3 text-xs text-ink-400">
-          {scope === 'team' ? 'Vidí všichni v týmu.' : 'Vidíš jen ty.'}
+          {scope === 'team' ? 'Vidí všichni v týmu.'
+            : scope === 'personal' ? 'Vidíš jen ty.'
+            : 'Poznámky, které s tebou někdo sdílel (jen ke čtení).'}
         </span>
       </div>
 
@@ -141,7 +157,11 @@ export default function Notes() {
           <div className="grid grid-cols-1 lg:grid-cols-[260px_280px_1fr] gap-4 items-start">
             {/* Sloupec 1 — Hlavní poznámky (top-level) */}
             <div className="bg-white border border-cream-200 rounded-xl overflow-hidden max-h-[calc(100vh-220px)] flex flex-col">
-              <ColumnHeader title="Hlavní poznámky" onAdd={addRoot} addTitle="Nová hlavní poznámka" />
+              <ColumnHeader
+                title={scope === 'shared' ? 'Sdílené se mnou' : 'Hlavní poznámky'}
+                onAdd={scope === 'shared' ? null : addRoot}
+                addTitle="Nová hlavní poznámka"
+              />
               <ul className="overflow-y-auto flex-1 p-1">
                 {tree.map(n => (
                   <MainNoteRow
@@ -150,7 +170,7 @@ export default function Notes() {
                     active={n.id === activeMainId}
                     selected={n.id === selectedId}
                     onSelect={() => selectMain(n.id)}
-                    onDelete={() => remove(n.id)}
+                    onDelete={scope === 'shared' ? null : () => remove(n.id)}
                   />
                 ))}
               </ul>
@@ -160,7 +180,7 @@ export default function Notes() {
             <div className="bg-white border border-cream-200 rounded-xl overflow-hidden max-h-[calc(100vh-220px)] flex flex-col">
               <ColumnHeader
                 title="Podpoznámky"
-                onAdd={activeMain ? () => addChild(activeMain.id) : null}
+                onAdd={(activeMain && scope !== 'shared') ? () => addChild(activeMain.id) : null}
                 addTitle="Nová podpoznámka"
                 disabled={!activeMain}
               />
@@ -194,9 +214,11 @@ export default function Notes() {
                 <NoteEditor
                   key={selected.id}
                   note={selected}
+                  currentUserId={user?.id}
                   onSaved={() => load(true)}
                   onAddChild={() => addChild(selected.id)}
                   onDelete={() => remove(selected.id)}
+                  onShare={(n) => setShareNote(n)}
                 />
               ) : (
                 <div className="bg-cream-50 border border-cream-200 rounded-xl p-8 text-center text-ink-400">
@@ -209,6 +231,94 @@ export default function Notes() {
       </div>
 
       {aiOpen && <AiAssistantModal onClose={() => setAiOpen(false)} teamName={currentTeam?.name} />}
+      {shareNote && <ShareNoteModal note={shareNote} onClose={() => setShareNote(null)} />}
+    </div>
+  );
+}
+
+// Modal pro sdílení poznámky s jiným uživatelem. Načte členy current teamu
+// (přes /api/users team-scoped) + aktuální sdílení; umožní přidat/odebrat.
+function ShareNoteModal({ note, onClose }) {
+  const [users, setUsers] = useState([]);
+  const [shares, setShares] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => {
+    Promise.all([usersApi.list(), notesApi.shares(note.id)])
+      .then(([u, s]) => { setUsers(u.users || []); setShares(s.shares || []); })
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, [note.id]);
+
+  const sharedIds = new Set(shares.map(s => s.user_id));
+  const addShare = async (userId) => {
+    setBusy(true);
+    try { await notesApi.share(note.id, userId); load(); } finally { setBusy(false); }
+  };
+  const removeShare = async (userId) => {
+    setBusy(true);
+    try { await notesApi.unshare(note.id, userId); load(); } finally { setBusy(false); }
+  };
+
+  const candidates = users.filter(u => !sharedIds.has(u.id));
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-cream-200 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-ink-800">🔗 Sdílet poznámku</h2>
+            <div className="text-xs text-ink-500 truncate max-w-xs">{note.title}</div>
+          </div>
+          <button onClick={onClose} className="text-ink-400 hover:text-ink-700 text-2xl leading-none">×</button>
+        </div>
+        <div className="p-5 space-y-4 text-sm">
+          {loading ? <div className="text-ink-400">Načítám…</div> : (
+            <>
+              {/* Aktuálně sdíleno */}
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wide text-ink-500 mb-1">Sdíleno s</div>
+                {shares.length === 0 ? (
+                  <div className="text-xs text-ink-400 italic">Zatím s nikým.</div>
+                ) : (
+                  <ul className="space-y-1">
+                    {shares.map(s => (
+                      <li key={s.user_id} className="flex items-center justify-between bg-cream-50 border border-cream-200 rounded px-2 py-1.5">
+                        <span>{s.name} <span className="text-ink-400 text-xs">({s.email})</span></span>
+                        <button onClick={() => removeShare(s.user_id)} disabled={busy}
+                          className="text-ink-400 hover:text-red-600 text-xs">odebrat</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              {/* Přidat */}
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wide text-ink-500 mb-1">Přidat uživatele</div>
+                {candidates.length === 0 ? (
+                  <div className="text-xs text-ink-400 italic">Všichni členové týmu už mají přístup.</div>
+                ) : (
+                  <select
+                    onChange={(e) => { if (e.target.value) { addShare(Number(e.target.value)); e.target.value = ''; } }}
+                    defaultValue="" disabled={busy}
+                    className="w-full border border-ink-300 rounded px-2 py-1.5 text-sm"
+                  >
+                    <option value="" disabled>— Vyber uživatele —</option>
+                    {candidates.map(u => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}
+                  </select>
+                )}
+                <div className="text-[11px] text-ink-400 mt-1">
+                  Příjemce poznámku uvidí v sekci „🔗 Sdílené" jen ke čtení.
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        <div className="px-5 py-3 border-t border-cream-200 flex justify-end">
+          <button onClick={onClose} className="px-4 py-1.5 text-sm rounded bg-brand-500 text-white hover:bg-brand-600">Hotovo</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -351,6 +461,9 @@ function ColumnHeader({ title, onAdd, addTitle, disabled = false }) {
 // jejich počet a hover akci smazat.
 function MainNoteRow({ note, active, selected, onSelect, onDelete }) {
   const childCount = note.children?.length || 0;
+  // 🔗 ikona: buď je sdílená se mnou (note.shared), nebo já ji sdílím (share_count>0)
+  const sharedWithMe = !!note.shared;
+  const iShareIt = (note.share_count || 0) > 0;
   return (
     <li
       onClick={onSelect}
@@ -359,19 +472,25 @@ function MainNoteRow({ note, active, selected, onSelect, onDelete }) {
       }`}
     >
       <div className="flex-1 min-w-0">
-        <div className={`text-sm truncate ${active ? 'text-brand-700 font-medium' : 'text-ink-800'}`}>
-          {note.title || <span className="text-ink-400 italic">(bez názvu)</span>}
+        <div className={`text-sm truncate flex items-center gap-1 ${active ? 'text-brand-700 font-medium' : 'text-ink-800'}`}>
+          {(sharedWithMe || iShareIt) && <span title={sharedWithMe ? 'Sdíleno s tebou' : 'Sdílíš s ostatními'}>🔗</span>}
+          <span className="truncate">{note.title || <span className="text-ink-400 italic">(bez názvu)</span>}</span>
         </div>
         {childCount > 0 && (
           <div className="text-[10px] text-ink-400">{childCount} podpoznámek</div>
         )}
+        {sharedWithMe && note.author_name && (
+          <div className="text-[10px] text-ink-400">od {note.author_name}</div>
+        )}
       </div>
       {childCount > 0 && <span className="text-ink-300 text-xs">›</span>}
-      <button
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="opacity-0 group-hover:opacity-100 text-ink-400 hover:text-red-600 text-xs px-1"
-        title="Smazat"
-      >×</button>
+      {onDelete && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="opacity-0 group-hover:opacity-100 text-ink-400 hover:text-red-600 text-xs px-1"
+          title="Smazat"
+        >×</button>
+      )}
     </li>
   );
 }
@@ -455,26 +574,33 @@ function NoteTree({ nodes, depth, selectedId, collapsed, onSelect, onAddChild, o
   );
 }
 
-// Editor vybrané poznámky. Auto-save on blur (title i content). Debounce není
-// potřeba — ukládáme při opuštění pole.
-function NoteEditor({ note, onSaved, onAddChild, onDelete }) {
+// Editor vybrané poznámky. Bohatý text (RichTextEditor) + debounced auto-save.
+// Když je poznámka sdílená a current user není autor → read-only náhled.
+function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShare }) {
   const [title, setTitle] = useState(note.title || '');
   const [content, setContent] = useState(note.content || '');
   const [savedAt, setSavedAt] = useState(null);
   const [saving, setSaving] = useState(false);
   const dirtyRef = useRef(false);
+  const latestRef = useRef({ title, content });
+  const timerRef = useRef(null);
+
+  // Sdílená poznámka, kterou nevlastním → jen čtu (nemůžu editovat)
+  const readOnly = note.shared && note.user_id !== currentUserId;
 
   useEffect(() => {
     setTitle(note.title || '');
     setContent(note.content || '');
+    latestRef.current = { title: note.title || '', content: note.content || '' };
     dirtyRef.current = false;
+    setSavedAt(null);
   }, [note.id]);
 
-  const save = async () => {
-    if (!dirtyRef.current) return;
+  const doSave = async () => {
+    if (!dirtyRef.current || readOnly) return;
     setSaving(true);
     try {
-      await notesApi.update(note.id, { title, content });
+      await notesApi.update(note.id, { title: latestRef.current.title, content: latestRef.current.content });
       setSavedAt(new Date());
       dirtyRef.current = false;
       onSaved?.();
@@ -483,29 +609,60 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete }) {
     }
   };
 
+  // Debounce: ulož 1.2s po poslední změně
+  const scheduleSave = () => {
+    dirtyRef.current = true;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(doSave, 1200);
+  };
+  const changeTitle = (v) => { setTitle(v); latestRef.current.title = v; scheduleSave(); };
+  const changeContent = (html) => { setContent(html); latestRef.current.content = html; scheduleSave(); };
+
+  // Flush při odchodu z poznámky / unmountu
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (dirtyRef.current && !readOnly) {
+      notesApi.update(note.id, { title: latestRef.current.title, content: latestRef.current.content }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note.id]);
+
+  if (readOnly) {
+    return (
+      <div className="bg-white border border-cream-200 rounded-xl p-5">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-accent-100 text-accent-800 font-semibold">🔗 Sdíleno s tebou</span>
+          {note.author_name && <span className="text-xs text-ink-500">od {note.author_name}</span>}
+        </div>
+        <h2 className="text-xl font-bold text-ink-800 mb-3">{note.title}</h2>
+        <div className="rte-readonly text-sm text-ink-800 leading-relaxed"
+             dangerouslySetInnerHTML={{ __html: note.content || '<p class="text-ink-400">(prázdná poznámka)</p>' }} />
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white border border-cream-200 rounded-xl p-5">
       <input
         value={title}
-        onChange={(e) => { setTitle(e.target.value); dirtyRef.current = true; }}
-        onBlur={save}
+        onChange={(e) => changeTitle(e.target.value)}
+        onBlur={doSave}
         placeholder="Název poznámky"
         className="w-full text-xl font-bold text-ink-800 border-0 border-b border-transparent focus:border-cream-300 focus:outline-none pb-1 mb-3"
       />
-      <textarea
-        value={content}
-        onChange={(e) => { setContent(e.target.value); dirtyRef.current = true; }}
-        onBlur={save}
-        placeholder="Sem piš obsah poznámky… (do budoucna z toho AI vytvoří úkoly)"
-        rows={16}
-        className="w-full text-sm text-ink-700 border border-cream-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-brand-400 resize-y leading-relaxed"
-      />
-      <div className="flex items-center justify-between mt-3">
+
+      <RichTextEditor value={content} onChange={changeContent} />
+
+      <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
         <div className="text-xs text-ink-400">
-          {saving ? 'Ukládám…' : savedAt ? `Uloženo ${savedAt.toLocaleTimeString('cs-CZ')}` : 'Uloží se automaticky při opuštění pole'}
+          {saving ? 'Ukládám…' : savedAt ? `Uloženo ${savedAt.toLocaleTimeString('cs-CZ')}` : 'Ukládá se automaticky'}
           {note.author_name && <span> · autor {note.author_name}</span>}
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={() => onShare?.(note)}
+            className="px-3 py-1.5 text-xs border border-accent-300 text-accent-700 rounded hover:bg-accent-50">
+            🔗 Sdílet
+          </button>
           <button onClick={onAddChild}
             className="px-3 py-1.5 text-xs border border-brand-300 text-brand-600 rounded hover:bg-brand-50">
             + Podpoznámka

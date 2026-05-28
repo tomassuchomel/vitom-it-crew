@@ -9,3 +9,22 @@ body {
   color: #0c363e;            /* Midnight Green */
 }
 h1, h2, h3, h4 { letter-spacing: -0.01em; font-weight: 700; }
+
+/* ─── Rich text editor (Poznámky) – styly pro contentEditable obsah ─── */
+/* Tailwind preflight resetuje nadpisy/listy/tabulky, tady je vracíme zpět. */
+.rte-content h1, .rte-readonly h1 { font-size: 1.6rem; font-weight: 800; margin: 0.6em 0 0.3em; }
+.rte-content h2, .rte-readonly h2 { font-size: 1.3rem; font-weight: 700; margin: 0.5em 0 0.3em; }
+.rte-content h3, .rte-readonly h3 { font-size: 1.1rem; font-weight: 700; margin: 0.4em 0 0.2em; }
+.rte-content p,  .rte-readonly p  { margin: 0.4em 0; }
+.rte-content ul, .rte-readonly ul { list-style: disc; padding-left: 1.4em; margin: 0.4em 0; }
+.rte-content ol, .rte-readonly ol { list-style: decimal; padding-left: 1.4em; margin: 0.4em 0; }
+.rte-content a,  .rte-readonly a  { color: #2563eb; text-decoration: underline; }
+.rte-content img, .rte-readonly img { max-width: 100%; height: auto; border-radius: 6px; margin: 0.4em 0; }
+.rte-content table.rte-table, .rte-readonly table { border-collapse: collapse; margin: 0.5em 0; width: auto; }
+.rte-content table.rte-table td, .rte-readonly table td {
+  border: 1px solid #c9bcb4; padding: 4px 8px; min-width: 60px; vertical-align: top;
+}
+.rte-content .rte-check, .rte-readonly .rte-check { display: flex; align-items: flex-start; gap: 6px; margin: 2px 0; }
+.rte-content .rte-check input[type="checkbox"], .rte-readonly .rte-check input[type="checkbox"] {
+  margin-top: 3px; width: 15px; height: 15px; cursor: pointer;
+}
