@@ -7,6 +7,29 @@ const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
 const HAS_AI = !!process.env.ANTHROPIC_API_KEY;
 export { HAS_AI };
 
+// Validace API klíče. HTTP hlavičky musí být Latin1 (kódy ≤ 255). Když uživatel
+// omylem vloží zkrácenou/maskovanou verzi klíče (UI často zobrazuje "sk-ant-…"),
+// klíč obsahuje znak „…" (U+2026 = 8230) a fetch hodí kryptické
+// "Cannot convert argument to a ByteString". Tady to odchytíme a vrátíme
+// srozumitelnou hlášku. Taky ořízneme whitespace z paste.
+function validateApiKey() {
+  const raw = process.env.ANTHROPIC_API_KEY;
+  if (!raw) return { ok: false, reason: 'no_api_key', message: 'ANTHROPIC_API_KEY není nastaven.' };
+  const key = raw.trim();
+  for (let i = 0; i < key.length; i++) {
+    if (key.charCodeAt(i) > 255) {
+      return {
+        ok: false,
+        reason: 'bad_api_key',
+        message: `ANTHROPIC_API_KEY obsahuje neplatný znak na pozici ${i} (kód ${key.charCodeAt(i)}, např. „…"). `
+          + `Vypadá to, že byl zkopírován zkrácený/maskovaný klíč. V Render → Environment vlož CELÝ klíč `
+          + `(začíná sk-ant-… a má ~100 znaků) znovu, ne tu zkrácenou verzi s výpustkou.`,
+      };
+    }
+  }
+  return { ok: true, key };
+}
+
 // Sběr kontextu z DB
 export async function buildContext() {
   const projectsR = await query(`
@@ -117,9 +140,8 @@ FORMÁT ODPOVĚDI – výhradně validní JSON (nic dalšího okolo):
 }`;
 
 export async function getAdvice() {
-  if (!HAS_AI) {
-    return { error: 'no_api_key', message: 'Anthropic API klíč není nastaven. Přidej ANTHROPIC_API_KEY do environment proměnných.' };
-  }
+  const keyCheck = validateApiKey();
+  if (!keyCheck.ok) return { error: keyCheck.reason, message: keyCheck.message };
   const ctx = await buildContext();
   const userMessage = `Aktuální datum: ${ctx.today}
 
@@ -138,7 +160,7 @@ Posuď stav a vrať JSON podle formátu.`;
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'x-api-key': keyCheck.key,
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
@@ -195,9 +217,8 @@ VÝSTUP (jen JSON, nic okolo):
 }`;
 
 export async function estimateTask(task) {
-  if (!HAS_AI) {
-    return { error: 'no_api_key' };
-  }
+  const keyCheck = validateApiKey();
+  if (!keyCheck.ok) return { error: keyCheck.reason, message: keyCheck.message };
   const userMsg = `Úkol:
 Název: ${task.title}
 Popis: ${task.description || '(prázdný popis)'}
@@ -209,7 +230,7 @@ Odhadni čas v hodinách s ohledem na AI urychlení.`;
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'x-api-key': keyCheck.key,
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
@@ -290,9 +311,8 @@ async function buildTeamAssistantContext(teamId, userId) {
 }
 
 export async function askTeamAssistant({ question, history = [], teamId, userId }) {
-  if (!HAS_AI) {
-    return { error: 'no_api_key', message: 'Anthropic API klíč není nastaven (ANTHROPIC_API_KEY).' };
-  }
+  const keyCheck = validateApiKey();
+  if (!keyCheck.ok) return { error: keyCheck.reason, message: keyCheck.message };
   if (!question || !String(question).trim()) {
     return { error: 'empty_question' };
   }
@@ -336,7 +356,7 @@ Odpovídej plain textem (ne JSON), klidně s odrážkami. Buď konkrétní – j
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'x-api-key': keyCheck.key,
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({ model: MODEL, max_tokens: 1500, system, messages }),
@@ -349,9 +369,8 @@ Odpovídej plain textem (ne JSON), klidně s odrážkami. Buď konkrétní – j
 }
 
 export async function chat(messages) {
-  if (!HAS_AI) {
-    return { error: 'no_api_key', message: 'Anthropic API klíč není nastaven.' };
-  }
+  const keyCheck = validateApiKey();
+  if (!keyCheck.ok) return { error: keyCheck.reason, message: keyCheck.message };
   const ctx = await buildContext();
   const systemWithCtx = `${SYSTEM_PROMPT}
 
@@ -367,7 +386,7 @@ V chatu odpovídej krátce a věcně, plain text (ne JSON).`;
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'x-api-key': keyCheck.key,
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
