@@ -21,7 +21,8 @@ export default function Notes() {
   const [scope, setScope] = useState('team'); // 'team' | 'personal'
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);   // poznámka v editoru
+  const [activeMainId, setActiveMainId] = useState(null); // vybraná hlavní (root) poznámka → sloupec 2
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [aiOpen, setAiOpen] = useState(false);
 
@@ -35,22 +36,44 @@ export default function Notes() {
       .finally(() => setLoading(false));
   };
   // reload při změně teamu i scope
-  useEffect(() => { setSelectedId(null); load(); /* eslint-disable-next-line */ }, [currentTeam?.id, scope]);
+  useEffect(() => { setSelectedId(null); setActiveMainId(null); load(); /* eslint-disable-next-line */ }, [currentTeam?.id, scope]);
 
   // Postav strom z flat listu
   const tree = useMemo(() => buildTree(items), [items]);
   const selected = items.find(n => n.id === selectedId) || null;
 
+  // Mapa id → rodič, pro výpočet root předka libovolné poznámky
+  const parentOf = useMemo(() => {
+    const m = new Map();
+    for (const n of items) m.set(n.id, n.parent_id);
+    return m;
+  }, [items]);
+  const rootAncestorId = (id) => {
+    let cur = id;
+    while (cur != null && parentOf.get(cur) != null) cur = parentOf.get(cur);
+    return cur;
+  };
+
+  // Hlavní (root) poznámka aktivní ve sloupci 1 → její podstrom jde do sloupce 2
+  const activeMain = tree.find(n => n.id === activeMainId) || null;
+
+  // Klik na hlavní poznámku: aktivuje sloupec 2 + otevře ji v editoru
+  const selectMain = (id) => { setActiveMainId(id); setSelectedId(id); };
+  // Klik na podpoznámku: jen otevře v editoru (sloupec 1 zůstane)
+  const selectSub = (id) => setSelectedId(id);
+
   const addRoot = async () => {
     // Nová root poznámka dědí aktuální scope (týmová vs osobní)
     const d = await notesApi.create({ title: 'Nová poznámka', visibility: scope });
     await load(true, d.note.id);
+    setActiveMainId(d.note.id);
   };
   const addChild = async (parentId) => {
     // Podpoznámka dědí visibility rodiče (backend to vynutí)
     const d = await notesApi.create({ title: 'Nová podpoznámka', parent_id: parentId });
-    // Rozbal rodiče, ať je nová podpoznámka vidět
+    // Rozbal rodiče, ať je nová podpoznámka vidět; aktivuj jeho root ve sloupci 1
     setCollapsed(prev => { const n = new Set(prev); n.delete(parentId); return n; });
+    setActiveMainId(rootAncestorId(parentId));
     await load(true, d.note.id);
   };
   const remove = async (id) => {
@@ -62,6 +85,7 @@ export default function Notes() {
     if (!confirm(msg)) return;
     await notesApi.remove(id);
     if (selectedId === id) setSelectedId(null);
+    if (activeMainId === id) setActiveMainId(null);
     await load(true);
   };
   const toggleCollapse = (id) => {
@@ -114,22 +138,57 @@ export default function Notes() {
             <div className="text-sm text-ink-500 mt-1">Klikni „+ Nová poznámka" a začni psát. Můžeš vytvářet podpoznámky.</div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4">
-            {/* Strom */}
-            <div className="bg-white border border-cream-200 rounded-xl p-2 self-start max-h-[calc(100vh-220px)] overflow-y-auto">
-              <NoteTree
-                nodes={tree}
-                depth={0}
-                selectedId={selectedId}
-                collapsed={collapsed}
-                onSelect={setSelectedId}
-                onAddChild={addChild}
-                onDelete={remove}
-                onToggle={toggleCollapse}
-              />
+          <div className="grid grid-cols-1 lg:grid-cols-[260px_280px_1fr] gap-4 items-start">
+            {/* Sloupec 1 — Hlavní poznámky (top-level) */}
+            <div className="bg-white border border-cream-200 rounded-xl overflow-hidden max-h-[calc(100vh-220px)] flex flex-col">
+              <ColumnHeader title="Hlavní poznámky" onAdd={addRoot} addTitle="Nová hlavní poznámka" />
+              <ul className="overflow-y-auto flex-1 p-1">
+                {tree.map(n => (
+                  <MainNoteRow
+                    key={n.id}
+                    note={n}
+                    active={n.id === activeMainId}
+                    selected={n.id === selectedId}
+                    onSelect={() => selectMain(n.id)}
+                    onDelete={() => remove(n.id)}
+                  />
+                ))}
+              </ul>
             </div>
 
-            {/* Editor */}
+            {/* Sloupec 2 — Podpoznámky vybrané hlavní */}
+            <div className="bg-white border border-cream-200 rounded-xl overflow-hidden max-h-[calc(100vh-220px)] flex flex-col">
+              <ColumnHeader
+                title="Podpoznámky"
+                onAdd={activeMain ? () => addChild(activeMain.id) : null}
+                addTitle="Nová podpoznámka"
+                disabled={!activeMain}
+              />
+              <div className="overflow-y-auto flex-1 p-1">
+                {!activeMain ? (
+                  <div className="text-xs text-ink-400 italic p-3 text-center">
+                    Vyber hlavní poznámku vlevo
+                  </div>
+                ) : activeMain.children.length === 0 ? (
+                  <div className="text-xs text-ink-400 italic p-3 text-center">
+                    Žádné podpoznámky. Přidej tlačítkem +
+                  </div>
+                ) : (
+                  <NoteTree
+                    nodes={activeMain.children}
+                    depth={0}
+                    selectedId={selectedId}
+                    collapsed={collapsed}
+                    onSelect={selectSub}
+                    onAddChild={addChild}
+                    onDelete={remove}
+                    onToggle={toggleCollapse}
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* Sloupec 3 — Editor */}
             <div>
               {selected ? (
                 <NoteEditor
@@ -141,7 +200,7 @@ export default function Notes() {
                 />
               ) : (
                 <div className="bg-cream-50 border border-cream-200 rounded-xl p-8 text-center text-ink-400">
-                  Vyber poznámku vlevo, nebo vytvoř novou.
+                  Vyber poznámku, nebo vytvoř novou.
                 </div>
               )}
             </div>
@@ -268,6 +327,52 @@ function AiAssistantModal({ onClose, teamName }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Hlavička sloupce s názvem a [+] ikonou pro přidání poznámky na dané úrovni.
+function ColumnHeader({ title, onAdd, addTitle, disabled = false }) {
+  return (
+    <div className="flex items-center justify-between px-3 py-2 border-b border-cream-200 bg-cream-50">
+      <span className="text-xs font-bold uppercase tracking-wide text-ink-500">{title}</span>
+      {onAdd && (
+        <button
+          onClick={onAdd}
+          disabled={disabled}
+          title={addTitle || 'Nová poznámka'}
+          className="w-6 h-6 flex items-center justify-center rounded bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-40 disabled:cursor-not-allowed text-base leading-none"
+        >+</button>
+      )}
+    </div>
+  );
+}
+
+// Řádek hlavní (root) poznámky ve sloupci 1. Zobrazuje › pokud má podpoznámky,
+// jejich počet a hover akci smazat.
+function MainNoteRow({ note, active, selected, onSelect, onDelete }) {
+  const childCount = note.children?.length || 0;
+  return (
+    <li
+      onClick={onSelect}
+      className={`group flex items-center gap-2 px-2 py-2 rounded cursor-pointer transition ${
+        active ? 'bg-brand-50' : selected ? 'bg-cream-100' : 'hover:bg-cream-50'
+      }`}
+    >
+      <div className="flex-1 min-w-0">
+        <div className={`text-sm truncate ${active ? 'text-brand-700 font-medium' : 'text-ink-800'}`}>
+          {note.title || <span className="text-ink-400 italic">(bez názvu)</span>}
+        </div>
+        {childCount > 0 && (
+          <div className="text-[10px] text-ink-400">{childCount} podpoznámek</div>
+        )}
+      </div>
+      {childCount > 0 && <span className="text-ink-300 text-xs">›</span>}
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        className="opacity-0 group-hover:opacity-100 text-ink-400 hover:text-red-600 text-xs px-1"
+        title="Smazat"
+      >×</button>
+    </li>
   );
 }
 
