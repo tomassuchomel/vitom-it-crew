@@ -87,6 +87,15 @@ export const ai = {
   accuracy: () => api.get('/ai/accuracy').then(r => r.data),
 };
 
+// Poznámky – hierarchický strom (množina/podmnožina), team-scoped.
+// Backend server/src/routes/notes.js. Do budoucna čteno AI agentem.
+export const notes = {
+  list:   () => api.get('/notes').then(r => r.data),
+  create: (data) => api.post('/notes', data).then(r => r.data),
+  update: (id, data) => api.put(`/notes/${id}`, data).then(r => r.data),
+  remove: (id) => api.delete(`/notes/${id}`).then(r => r.data),
+};
+
 // Scoreboard – per-user task completion stats v rámci current teamu.
 // Server filtruje by req.team_id, takže klient nemusí nic specifikovat.
 export const scoreboard = {

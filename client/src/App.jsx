@@ -17,6 +17,7 @@ import AIPage from './pages/AIPage.jsx';
 import Profile from './pages/Profile.jsx';
 import Admin from './pages/Admin.jsx';
 import Scoreboard from './pages/Scoreboard.jsx';
+import Notes from './pages/Notes.jsx';
 
 function ProtectedRoutes() {
   const { user, loading } = useAuth();
@@ -44,6 +45,7 @@ function ProtectedRoutes() {
         <Route path="/my-tasks" element={<MyTasks />} />
         <Route path="/review" element={<Review />} />
         <Route path="/needs-fix" element={<NeedsFix />} />
+        <Route path="/notes" element={<Notes />} />
         <Route path="/questions" element={<Questions />} />
         <Route path="/time" element={<TimeTracking />} />
         <Route path="/reports" element={<Reports />} />

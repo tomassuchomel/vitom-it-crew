@@ -18,6 +18,7 @@ const NAV = [
   { to: '/needs-fix', label: 'Vrácené k opravě',   icon: '🔄', badge: 'needsFix' },
   { to: '/review',    label: 'Review k dokončení', icon: '👀', badge: 'reviewQueue', requireManager: true },
   { to: '/questions', label: 'Dotazy k vyřešení',  icon: '💬', badge: 'inboxPending' },
+  { to: '/notes',     label: 'Poznámky',           icon: '📝' },
   { to: '/time',      label: 'Hodiny',             icon: '⏱️' },
   { to: '/reports',   label: 'Reporty',            icon: '📊', requireSeeAll: true },
   { to: '/ai',        label: 'AI Coach',           icon: '🤖', requireSeeAll: true },
