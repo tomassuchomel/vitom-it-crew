@@ -28,6 +28,7 @@ export default function Notes() {
   const [activeMainId, setActiveMainId] = useState(null); // vybraná hlavní (root) poznámka → sloupec 2
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [aiOpen, setAiOpen] = useState(false);
+  const [aiMinimized, setAiMinimized] = useState(false);
   const [shareNote, setShareNote] = useState(null); // poznámka pro share modal
 
   const load = (silent = false, selectAfter = null) => {
@@ -230,7 +231,15 @@ export default function Notes() {
         )}
       </div>
 
-      {aiOpen && <AiAssistantModal onClose={() => setAiOpen(false)} teamName={currentTeam?.name} />}
+      {aiOpen && (
+        <AiAssistantModal
+          teamName={currentTeam?.name}
+          minimized={aiMinimized}
+          onMinimize={() => setAiMinimized(true)}
+          onRestore={() => setAiMinimized(false)}
+          onClose={() => { setAiOpen(false); setAiMinimized(false); }}
+        />
+      )}
       {shareNote && <ShareNoteModal note={shareNote} onClose={() => setShareNote(null)} />}
     </div>
   );
@@ -325,7 +334,7 @@ function ShareNoteModal({ note, onClose }) {
 
 // AI asistent – chat modal. Posílá otázku + historii na /api/notes/ai-ask.
 // Backend přidá kontext (poznámky + úkoly + projekty + členové) a vrátí odpověď.
-function AiAssistantModal({ onClose, teamName }) {
+function AiAssistantModal({ onClose, teamName, minimized = false, onMinimize, onRestore }) {
   const [messages, setMessages] = useState([]); // {role, content}
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -363,8 +372,34 @@ function AiAssistantModal({ onClose, teamName }) {
     }
   };
 
+  // Minimalizovaný stav – plovoucí proužek vpravo dole. Komponenta zůstává
+  // mountnutá (Notes drží aiOpen=true), takže konverzace zůstane zachovaná.
+  if (minimized) {
+    return (
+      <button
+        onClick={onRestore}
+        className="fixed bottom-4 right-4 z-50 flex items-center gap-2 bg-white border border-cream-300 shadow-lg rounded-full pl-4 pr-3 py-2 hover:shadow-xl transition"
+        title="Rozbalit AI asistenta"
+      >
+        <span className="text-lg">🤖</span>
+        <span className="text-sm font-medium text-ink-800">AI asistent</span>
+        {messages.length > 0 && (
+          <span className="text-[10px] bg-accent-500 text-white rounded-full px-1.5 py-0.5">{messages.length}</span>
+        )}
+        {busy && <span className="text-xs text-ink-400 animate-pulse">…</span>}
+        <span
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
+          className="ml-1 text-ink-400 hover:text-red-600 text-lg leading-none"
+          title="Zavřít"
+        >×</span>
+      </button>
+    );
+  }
+
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-stretch justify-end md:items-center md:justify-center" onClick={onClose}>
+    // V minimalizovatelném režimu nemá overlay zavírat na klik mimo (jen
+    // minimalizovat), ať user nepřijde o konverzaci omylem.
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-stretch justify-end md:items-center md:justify-center" onClick={onMinimize}>
       <div className="bg-white w-full md:max-w-2xl md:rounded-xl shadow-2xl flex flex-col md:max-h-[85vh] h-full md:h-auto"
         onClick={(e) => e.stopPropagation()}>
         {/* Header */}
@@ -375,7 +410,17 @@ function AiAssistantModal({ onClose, teamName }) {
               Ptej se na cokoliv o týmu {teamName} — úkoly, priority, poznámky.
             </div>
           </div>
-          <button onClick={onClose} className="text-ink-400 hover:text-ink-700 text-2xl leading-none">×</button>
+          <div className="flex items-center gap-1">
+            <button onClick={onMinimize}
+              className="w-8 h-8 flex items-center justify-center text-ink-400 hover:text-ink-700 hover:bg-cream-100 rounded"
+              title="Minimalizovat">
+              {/* podtržítko = minimalizovat */}
+              <span className="text-xl leading-none mb-2">_</span>
+            </button>
+            <button onClick={onClose}
+              className="w-8 h-8 flex items-center justify-center text-ink-400 hover:text-ink-700 hover:bg-cream-100 rounded text-2xl leading-none"
+              title="Zavřít">×</button>
+          </div>
         </div>
 
         {/* Messages */}
