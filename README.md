@@ -1,190 +1,130 @@
 # VITOM IT Crew
 
-Interní webová aplikace pro správu projektů, úkolů, času a nákladů vývojářského týmu VITOM.
+Interní webová aplikace pro správu projektů, úkolů, času, poznámek a AI
+asistence napříč více týmy firmy VITOM. Nasazená na `https://it.realitniekosystem.cz`.
+
+> Související dokumenty: [CHANGELOG.md](CHANGELOG.md) (historie změn),
+> [PROGRESS.md](PROGRESS.md) (aktuální stav + co dál), [DEPLOY.md](DEPLOY.md)
+> (nasazení), [ZADANI.md](ZADANI.md) (původní specifikace),
+> [CLAUDE.md](CLAUDE.md) (pravidla pro práci s kódem).
 
 ## Co aplikace umí
 
-- **Timeline** – Gantt-style časová osa projektů s vertikální čárou „dnes" a sekcí „kdo na čem pracuje"
-- **Projekty** s deadliny, klientem, rozpočtem
-- **Úkoly + podúkoly** – přiřazení k osobě, priorita, stav (čeká / v práci / review / hotovo), odhad
-- **Time tracking** – denní zápis hodin (datum, projekt, hodiny, popis)
-- **Reporty** – hodiny a náklady (sazba × čas) seskupené po projektech / osobách / dnech / týdnech / měsících, grafy (bar / line / pie)
-- **Tým** – správa lidí včetně hodinových sazeb (jen admin)
-- **Role**: Admin / Project Manager / Senior Dev / External Dev (každý má jiná oprávnění)
-- **Login**: Google OAuth (volitelný) + dev login (rychlý start)
+- **Více týmů** – jedna instalace slouží více týmům (IT, Management, …).
+  Přepínač týmů v sidebaru; každý projekt patří jednomu týmu. Uživatel může
+  být ve více týmech s různou rolí. Per-team feature flags zapínají/vypínají
+  funkce (AI agent, review, scoreboard, timeline forecast).
+- **Timeline** – Gantt časová osa projektů s čárou „dnes", linkou odhadu
+  (celkem) a forecast linkou (zbývá od dnes → overcommit detekce, jen IT).
+  Sekce „kdo na čem pracuje".
+- **Projekty** – deadliny, rozpočet, GitHub repo (pro AI agenta), přepínače
+  „bez časového ohraničení" a „skrýt v Timeline".
+- **Úkoly + podúkoly** – přiřazení, priorita, odhad, AI odhad času,
+  acceptance criteria, scope paths.
+- **Review workflow** – programátor předá k review → manager schválí
+  (`done`) nebo vrátí k opravě (`needs_fix`) s komentářem a fotem. Fronty
+  „Review k dokončení" (manager) a „Vrácené k opravě" (autor).
+- **AI agent (Claude)** – autonomní vykonání úkolu: naklonuje repo, píše
+  kód v git worktree, otevře PR. Druhý agent (reviewer) verdiktem schválí
+  nebo vrátí. Worker běží jako samostatný proces (`npm run ai-worker`).
+- **AI Coach** – projektový poradce (tempo vs deadliny, rizika, přesnost
+  odhadů per uživatel).
+- **Poznámky** – hierarchický blok (množina/podmnožina, Apple Notes layout),
+  bohatý editor (nadpisy, formátování, barvy, tabulky, checklisty, obrázky),
+  osobní / týmové / sdílené, AI asistent nad poznámkami a daty týmu.
+- **Scoreboard** (Management) – žebříček úspěšnosti plnění úkolů v termínu.
+- **Dotazy** – otázky mezi členy týmu k úkolům, inline detail úkolu.
+- **Time tracking** – denní zápis hodin, reporty (hodiny/náklady po
+  projektech / osobách / dnech / týdnech / měsících).
+- **Tým / Admin** – správa uživatelů, týmů a členství. Avatary, hesla.
+- **Login** – heslo (bcrypt) + Google OAuth (volitelný) + dev login.
 
----
+## Stack
 
-## Co potřebuješ na svém počítači
+- **Backend**: Node.js 22+ (ESM), Express 4, PostgreSQL (`pg`), JWT,
+  Passport (Google OAuth), `@anthropic-ai/sdk`
+- **Frontend**: React 18, Vite 5, React Router 6, Axios, Recharts, Tailwind 3
+- **DB**: PostgreSQL (Neon v produkci). Migrace: inline schéma v `db.js` +
+  idempotentní SQL soubory v `server/src/migrations/`
+- **AI**: Claude přes Anthropic API (estimace, Coach, asistent, agent)
 
-1. **Node.js v22.5 nebo novější** – stáhni z https://nodejs.org (zvol „LTS" nebo „Current").
-   Po instalaci ověř v terminálu: `node --version`
-2. **Terminál** – na macOS „Terminal", ve Windows „PowerShell" nebo „Příkazový řádek"
+## Rychlý start (lokálně)
 
-Nic dalšího – databáze (SQLite) je vestavěná v Node.js, žádná native kompilace.
-
----
-
-## Rychlý start (3 kroky)
-
-Otevři terminál a přejdi do složky s projektem:
+Potřebuješ **Node.js 22+** a přístup k PostgreSQL databázi (lokální nebo Neon).
 
 ```bash
-cd cesta/k/todo-app
-```
-
-### 1) Instalace závislostí (jednou)
-
-```bash
+# 1) Instalace
 npm run install:all
-```
 
-Stáhne všechny knihovny pro frontend i backend (může trvat 1–2 minuty).
+# 2) Nastav server/.env (zkopíruj z .env.example) – minimálně:
+#    DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
+#    JWT_SECRET=nahodny-retezec
+#    (volitelně ANTHROPIC_API_KEY, GITHUB_TOKEN, GOOGLE_CLIENT_ID/SECRET)
 
-### 2) Naplnění ukázkovými daty (jednou)
-
-```bash
-npm run seed
-```
-
-Vytvoří databázi `server/data/teamflow.db` a naplní:
-- 4 ukázkové uživatele (admin = ty, manager, senior dev, external dev)
-- 3 ukázkové projekty s úkoly a podúkoly
-- Pár záznamů odpracovaných hodin
-
-### 3) Spuštění aplikace
-
-```bash
+# 3) Spuštění (migrace + seed proběhnou automaticky při startu)
 npm run dev
 ```
 
-V terminálu uvidíš:
+Frontend: http://localhost:5173 · Backend: http://localhost:4000
+
+### AI agent worker (volitelné)
+
+AI agent (Claude vykonává úkoly) běží jako **samostatný proces** vedle webu:
+
+```bash
+cd server && npm run ai-worker
 ```
-🚀 TeamFlow server running on http://localhost:4000
-   Vite dev server running on http://localhost:5173
-```
 
-**Otevři v prohlížeči: http://localhost:5173**
-
-> **Hot reload:** jakmile cokoli upravím nebo upravíš v kódu, prohlížeč se sám aktualizuje. Žádný refresh není potřeba.
-
----
-
-## Login
-
-### Dev login (rychle, bez konfigurace)
-Na přihlašovací obrazovce klikni na jednoho z předpřipravených uživatelů. Hned tě to pustí dál a budeš vidět rozhraní.
-
-### Google OAuth (produkční přihlášení)
-1. Jdi na https://console.cloud.google.com/ → vytvoř projekt (libovolný název)
-2. Navigace **APIs & Services → Credentials → Create Credentials → OAuth Client ID**
-3. Pokud tě požádá o nastavení OAuth consent screen, vyber „External" a vyplň základní údaje
-4. Application type: **Web application**
-5. Authorized redirect URI: `http://localhost:4000/api/auth/google/callback`
-6. Po vytvoření zkopíruj **Client ID** a **Client Secret**
-7. Ve složce `server/` vytvoř soubor `.env` (zkopíruj `.env.example`) a vlož:
-   ```
-   GOOGLE_CLIENT_ID=tvuj-client-id
-   GOOGLE_CLIENT_SECRET=tvuj-client-secret
-   ```
-8. Restartuj `npm run dev`
-
-> Aby se uživatel mohl přihlásit přes Google, musí být **předem v DB** se stejným emailem. Přidej ho v sekci **Tým**.
-
----
+Vyžaduje v `.env`: `AI_AGENT_ENABLED=true`, `ANTHROPIC_API_KEY`,
+`GITHUB_TOKEN`, `AI_AGENT_WORKDIR`. Viz [PROGRESS.md](PROGRESS.md).
 
 ## Role a oprávnění
 
-| Akce | Admin | PM | Senior Dev | External Dev |
-|---|:-:|:-:|:-:|:-:|
-| Vytvořit / upravit / smazat projekt | ✅ | ✅ | ❌ | ❌ |
-| Vytvořit / upravit úkoly | ✅ | ✅ | ✅ | ❌ |
-| Změnit stav vlastního úkolu | ✅ | ✅ | ✅ | ✅ |
-| Zapsat svoje hodiny | ✅ | ✅ | ✅ | ✅ |
-| Vidět hodiny ostatních | ✅ | ✅ | ❌ | ❌ |
-| Vidět náklady a sazby | ✅ | ✅ | ❌ | ❌ |
-| Spravovat uživatele | ✅ | ❌ | ❌ | ❌ |
+Globální role (`users.role`): **Admin / Project Manager / Senior Dev /
+External Dev**. Navíc každý uživatel má **týmovou roli** v každém týmu, kde
+je členem (např. v Managementu: ředitel / manager).
 
----
+| Akce | Admin | PM | Senior | External |
+|---|:-:|:-:|:-:|:-:|
+| Projekty (CRUD) | ✅ | ✅ | ❌ | ❌ |
+| Úkoly (CRUD) | ✅ | ✅ | ✅ | ❌ |
+| Stav vlastního úkolu | ✅ | ✅ | ✅ | ✅ |
+| Schválit/vrátit review | ✅¹ | ✅¹ | ❌ | ❌ |
+| Hodiny ostatních + náklady | ✅ | ✅ | ❌ | ❌ |
+| Spravovat uživatele/týmy | ✅ | ❌ | ❌ | ❌ |
+
+¹ Review smí jen vedoucí daného projektu nebo admin.
 
 ## Struktura projektu
 
 ```
-todo-app/
-├── package.json          # root – npm run dev pouští server i klient
-├── README.md             # tento soubor
-├── server/               # Express backend + SQLite
-│   ├── src/
-│   │   ├── index.js      # entrypoint serveru
-│   │   ├── db.js         # SQLite + schéma
-│   │   ├── seed.js       # ukázková data
-│   │   ├── auth.js       # JWT + Google OAuth + middleware
-│   │   └── routes/       # API endpointy
-│   │       ├── auth.js
-│   │       ├── users.js
-│   │       ├── projects.js
-│   │       ├── tasks.js
-│   │       ├── time.js
-│   │       └── reports.js
-│   └── data/             # SQLite soubor (vytvoří se automaticky, gitignored)
-└── client/               # React frontend (Vite)
+vitom-it-crew/
+├── server/                      # Express backend + PostgreSQL
+│   └── src/
+│       ├── index.js             # entrypoint, mount routes, migrace
+│       ├── db.js                # pg pool, schéma, runFileMigrations
+│       ├── ai.js                # Claude: Coach, estimace, asistent
+│       ├── auth.js              # JWT + Google OAuth + team kontext
+│       ├── migrations/          # idempotentní SQL (časově řazené)
+│       ├── aiAgent/             # worker, reviewer, gitManager, githubApi…
+│       └── routes/              # auth, users, teams, projects, tasks,
+│                                # reviews, notes, time, reports, questions,
+│                                # attachments, ai, aiAgent, scoreboard
+└── client/                      # React frontend (Vite)
     └── src/
-        ├── main.jsx      # React entrypoint
-        ├── App.jsx       # routing
-        ├── api.js        # axios klient
-        ├── auth.jsx      # auth context + can() helpery
-        ├── components/   # Layout, Modal, PageHeader
-        └── pages/        # Login, Timeline, ProjectsList, ProjectDetail,
-                          # TimeTracking, Reports, Team
+        ├── App.jsx              # routing
+        ├── api.js               # axios klient (X-Team-Id interceptor)
+        ├── auth.jsx, teams.jsx  # auth + team context
+        ├── components/          # Layout, modaly, RichTextEditor, …
+        └── pages/               # Timeline, Projects, MyTasks, Review,
+                                  # NeedsFix, Notes, Scoreboard, Admin, …
 ```
-
----
-
-## Stack
-
-- **Backend**: Node.js, Express 4, node:sqlite (vestavěný), Passport (Google OAuth), JWT
-- **Frontend**: React 18, Vite 5, React Router 6, Axios, Recharts, Tailwind CSS 3
-- **DB**: SQLite – vestavěný v Node.js 22.5+, nic se nekompiluje
-
----
 
 ## Užitečné příkazy
 
 ```bash
-# zastavit dev server
-Ctrl+C v terminálu
-
-# znovu načíst seed (smaže a vytvoří ukázková data)
-npm run seed
-
-# postavit produkční verzi frontendu
-npm run build
-
-# jen backend
-npm run dev:server
-
-# jen frontend
-npm run dev:client
+npm run dev            # web (server + client)
+npm run build          # produkční build frontendu
+cd server && npm test  # backend testy (node:test)
+cd server && npm run ai-worker   # AI agent worker (samostatný proces)
 ```
-
-## Troubleshooting
-
-**Problém: Vite hlásí port 5173 obsazený**
-Zavři ostatní instance nebo si v `client/vite.config.js` změň `port: 5173` na něco jiného.
-
-**Problém: Po seed nevidím data**
-Zkontroluj, že soubor `server/data/teamflow.db` existuje. Pokud ne, znovu spusť `npm run seed`.
-
-**Problém: Chci úplně nasadit reset**
-Smaž `server/data/teamflow.db` a spusť `npm run seed` znovu.
-
----
-
-## Co dál (možné rozšíření)
-
-- Notifikace přes email (např. když ext. dev nezapsal hodiny daný den)
-- Export reportů do Excelu / PDF
-- Komentáře a aktivita u úkolů
-- Drag & drop přesun úkolů mezi sloupci (Kanban)
-- Mobilní layout
-- Multi-tenant podpora (více firem)
