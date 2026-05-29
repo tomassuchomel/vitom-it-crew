@@ -5,15 +5,23 @@ Aktualizováno průběžně. Pro detailní historii viz [CHANGELOG.md](CHANGELOG
 
 _Poslední aktualizace: 2026-05-29_
 
+## ⚠️ NUTNÁ AKCE: OPENAI_API_KEY pro přepis porad
+
+Hlasová porada (přepis řeči) jede přes **OpenAI Whisper** — Anthropic
+speech-to-text nemá. Aby tlačítko „🎙️ Porada" fungovalo, je potřeba
+přidat `OPENAI_API_KEY` do ENV (Render web service + lokální `server/.env`).
+Bez něj endpoint vrátí 503 se srozumitelnou hláškou. Cena ~$0,006/min.
+
 ## Aktuální stav
 
 Aplikace běží na `https://it.realitniekosystem.cz` (Render + Neon PostgreSQL).
 Auto-deploy z větve `main`. Migrace běží automaticky při startu serveru.
 
 **Hotové oblasti:** multi-team, projekty/úkoly/podúkoly, review workflow,
-AI agent (Claude) + reviewer, AI Coach, poznámky (bohatý editor, osobní/
-týmové/sdílené, AI asistent), scoreboard, dotazy, time tracking, reporty,
-admin (týmy + uživatelé), login (heslo + Google + dev).
+AI agent (Claude) + reviewer, AI Coach, poznámky (bohatý editor s
+checklisty/tabulkami/obrázky/kreslením, osobní/týmové/sdílené, AI asistent
++ AI nad poznámkou, hlasová porada s přepisem), scoreboard, dotazy,
+time tracking, reporty, admin (týmy + uživatelé), login (heslo + Google + dev).
 
 ## Provozní poznámky
 
