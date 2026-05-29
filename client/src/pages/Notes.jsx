@@ -163,7 +163,7 @@ export default function Notes() {
                 onAdd={scope === 'shared' ? null : addRoot}
                 addTitle="Nová hlavní poznámka"
               />
-              <ul className="overflow-y-auto flex-1 p-1">
+              <ul className="overflow-y-auto flex-1">
                 {tree.map(n => (
                   <MainNoteRow
                     key={n.id}
@@ -185,7 +185,7 @@ export default function Notes() {
                 addTitle="Nová podpoznámka"
                 disabled={!activeMain}
               />
-              <div className="overflow-y-auto flex-1 p-1">
+              <div className="overflow-y-auto flex-1 p-1.5">
                 {!activeMain ? (
                   <div className="text-xs text-ink-400 italic p-3 text-center">
                     Vyber hlavní poznámku vlevo
@@ -502,40 +502,64 @@ function ColumnHeader({ title, onAdd, addTitle, disabled = false }) {
   );
 }
 
-// Řádek hlavní (root) poznámky ve sloupci 1. Zobrazuje › pokud má podpoznámky,
-// jejich počet a hover akci smazat.
+// Náhled obsahu poznámky – strhne HTML tagy, vrátí prvních ~50 znaků čistého textu.
+function notePreview(html, max = 50) {
+  if (!html) return '';
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const text = (tmp.textContent || '').replace(/\s+/g, ' ').trim();
+  return text.length > max ? text.slice(0, max) + '…' : text;
+}
+// Krátké datum úpravy (Apple list styl): „14:32" dnes, jinak „26. 5."
+function noteDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' });
+}
+
+// Řádek hlavní (root) poznámky ve sloupci 1 — Apple Notes styl:
+// titulek (tučně) + náhled textu + datum. Plošší (jen spodní oddělovač).
 function MainNoteRow({ note, active, selected, onSelect, onDelete }) {
   const childCount = note.children?.length || 0;
-  // 🔗 ikona: buď je sdílená se mnou (note.shared), nebo já ji sdílím (share_count>0)
   const sharedWithMe = !!note.shared;
   const iShareIt = (note.share_count || 0) > 0;
+  const preview = notePreview(note.content);
   return (
     <li
       onClick={onSelect}
-      className={`group flex items-center gap-2 px-2 py-2 rounded cursor-pointer transition ${
-        active ? 'bg-brand-50' : selected ? 'bg-cream-100' : 'hover:bg-cream-50'
+      className={`group px-3 py-2.5 cursor-pointer border-b border-cream-100 last:border-0 transition ${
+        active || selected ? 'bg-brand-50' : 'hover:bg-cream-50'
       }`}
     >
-      <div className="flex-1 min-w-0">
-        <div className={`text-sm truncate flex items-center gap-1 ${active ? 'text-brand-700 font-medium' : 'text-ink-800'}`}>
-          {(sharedWithMe || iShareIt) && <span title={sharedWithMe ? 'Sdíleno s tebou' : 'Sdílíš s ostatními'}>🔗</span>}
-          <span className="truncate">{note.title || <span className="text-ink-400 italic">(bez názvu)</span>}</span>
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+          {/* Titulek tučně */}
+          <div className="text-sm font-semibold text-ink-800 truncate flex items-center gap-1">
+            {(sharedWithMe || iShareIt) && <span title={sharedWithMe ? 'Sdíleno s tebou' : 'Sdílíš s ostatními'}>🔗</span>}
+            <span className="truncate">{note.title || <span className="text-ink-400 italic font-normal">(bez názvu)</span>}</span>
+          </div>
+          {/* Náhled + meta řádek */}
+          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-ink-400">
+            <span className="whitespace-nowrap">{noteDate(note.updated_at || note.created_at)}</span>
+            <span className="truncate">{preview || (childCount > 0 ? `${childCount} podpoznámek` : 'žádný text')}</span>
+          </div>
+          {sharedWithMe && note.author_name && (
+            <div className="text-[10px] text-ink-400 mt-0.5">od {note.author_name}</div>
+          )}
         </div>
-        {childCount > 0 && (
-          <div className="text-[10px] text-ink-400">{childCount} podpoznámek</div>
-        )}
-        {sharedWithMe && note.author_name && (
-          <div className="text-[10px] text-ink-400">od {note.author_name}</div>
+        {childCount > 0 && <span className="text-ink-300 text-sm mt-0.5">›</span>}
+        {onDelete && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            className="opacity-0 group-hover:opacity-100 text-ink-400 hover:text-red-600 text-xs px-1"
+            title="Smazat"
+          >×</button>
         )}
       </div>
-      {childCount > 0 && <span className="text-ink-300 text-xs">›</span>}
-      {onDelete && (
-        <button
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="opacity-0 group-hover:opacity-100 text-ink-400 hover:text-red-600 text-xs px-1"
-          title="Smazat"
-        >×</button>
-      )}
     </li>
   );
 }
@@ -578,13 +602,19 @@ function NoteTree({ nodes, depth, selectedId, collapsed, onSelect, onAddChild, o
                 className={`w-4 text-xs ${hasChildren ? 'text-ink-400 hover:text-ink-700' : 'text-transparent'}`}
               >{hasChildren ? (isCollapsed ? '▸' : '▾') : '•'}</button>
 
-              {/* Title – click selects */}
+              {/* Title + datum – click selects */}
               <button
                 onClick={() => onSelect(n.id)}
-                className="flex-1 text-left text-sm py-1 truncate"
+                className="flex-1 text-left py-1.5 min-w-0"
                 title={n.title}
               >
-                {n.title || <span className="text-ink-400 italic">(bez názvu)</span>}
+                <div className="text-sm truncate">
+                  {n.title || <span className="text-ink-400 italic">(bez názvu)</span>}
+                </div>
+                <div className="text-[10px] text-ink-400 truncate">
+                  {noteDate(n.updated_at || n.created_at)}
+                  {notePreview(n.content) ? ` · ${notePreview(n.content, 30)}` : ''}
+                </div>
               </button>
 
               {/* Hover akce */}
@@ -626,6 +656,10 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
   const [content, setContent] = useState(note.content || '');
   const [savedAt, setSavedAt] = useState(null);
   const [saving, setSaving] = useState(false);
+  // AI zpracování poznámky
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiResult, setAiResult] = useState(null); // { action, text }
+  const [aiErr, setAiErr] = useState(null);
   const dirtyRef = useRef(false);
   const latestRef = useRef({ title, content });
   const timerRef = useRef(null);
@@ -639,6 +673,7 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
     latestRef.current = { title: note.title || '', content: note.content || '' };
     dirtyRef.current = false;
     setSavedAt(null);
+    setAiResult(null); setAiErr(null);
   }, [note.id]);
 
   const doSave = async () => {
@@ -662,6 +697,18 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
   };
   const changeTitle = (v) => { setTitle(v); latestRef.current.title = v; scheduleSave(); };
   const changeContent = (html) => { setContent(html); latestRef.current.content = html; scheduleSave(); };
+
+  // AI zpracování – nejdřív flush rozepsaných změn, ať AI vidí aktuální obsah
+  const runAi = async (action) => {
+    if (dirtyRef.current) await doSave();
+    setAiBusy(true); setAiErr(null); setAiResult(null);
+    try {
+      const d = await notesApi.aiProcess(note.id, action);
+      setAiResult({ action, text: d.reply || '(prázdná odpověď)' });
+    } catch (e) {
+      setAiErr(e.response?.data?.message || e.response?.data?.error || 'AI zpracování selhalo');
+    } finally { setAiBusy(false); }
+  };
 
   // Flush při odchodu z poznámky / unmountu
   useEffect(() => () => {
@@ -688,20 +735,53 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
 
   return (
     <div className="bg-white border border-cream-200 rounded-xl p-5">
+      {/* Prominentní nadpis (Apple styl) + decentní meta řádek */}
       <input
         value={title}
         onChange={(e) => changeTitle(e.target.value)}
         onBlur={doSave}
         placeholder="Název poznámky"
-        className="w-full text-xl font-bold text-ink-800 border-0 border-b border-transparent focus:border-cream-300 focus:outline-none pb-1 mb-3"
+        className="w-full text-2xl font-extrabold text-ink-800 border-0 focus:outline-none pb-0.5"
       />
+      <div className="text-[11px] text-ink-400 mb-3">
+        {note.author_name && <>autor {note.author_name} · </>}
+        {saving ? 'ukládám…' : savedAt ? `uloženo ${savedAt.toLocaleTimeString('cs-CZ')}` : 'ukládá se automaticky'}
+      </div>
 
       <RichTextEditor value={content} onChange={changeContent} />
 
+      {/* AI zpracování poznámky */}
+      <div className="mt-3 flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-ink-500">🤖 AI:</span>
+        <button onClick={() => runAi('summarize')} disabled={aiBusy}
+          className="px-2.5 py-1 text-xs border border-accent-300 text-accent-700 rounded hover:bg-accent-50 disabled:opacity-50">
+          Sumarizovat
+        </button>
+        <button onClick={() => runAi('suggest_tasks')} disabled={aiBusy}
+          className="px-2.5 py-1 text-xs border border-accent-300 text-accent-700 rounded hover:bg-accent-50 disabled:opacity-50">
+          Navrhnout úkoly
+        </button>
+        {aiBusy && <span className="text-xs text-ink-400 animate-pulse">přemýšlím…</span>}
+      </div>
+      {aiErr && <div className="mt-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{aiErr}</div>}
+      {aiResult && (
+        <div className="mt-2 bg-accent-50/50 border border-accent-200 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[11px] font-semibold text-accent-700 uppercase tracking-wide">
+              {aiResult.action === 'suggest_tasks' ? '📋 Návrh úkolů' : '📝 Shrnutí'}
+            </span>
+            <button onClick={() => setAiResult(null)} className="text-ink-400 hover:text-ink-700 text-xs">zavřít</button>
+          </div>
+          <div className="text-sm text-ink-800 whitespace-pre-wrap">{aiResult.text}</div>
+          <div className="text-[10px] text-ink-400 mt-2">
+            Návrh od AI — nic se nezaložilo. Úkoly případně vytvoř ručně v projektu.
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
         <div className="text-xs text-ink-400">
-          {saving ? 'Ukládám…' : savedAt ? `Uloženo ${savedAt.toLocaleTimeString('cs-CZ')}` : 'Ukládá se automaticky'}
-          {note.author_name && <span> · autor {note.author_name}</span>}
+          {saving ? 'Ukládám…' : savedAt ? `Uloženo ${savedAt.toLocaleTimeString('cs-CZ')}` : ''}
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => onShare?.(note)}

@@ -378,6 +378,72 @@ Odpovídej plain textem (ne JSON), klidně s odrážkami. Buď konkrétní – j
   return { reply: data.content?.[0]?.text || '', usage: data.usage };
 }
 
+// ----------- AI zpracování konkrétní poznámky -----------
+// action: 'summarize' (krátké shrnutí) | 'suggest_tasks' (návrh úkolů z textu).
+// U suggest_tasks dáme Claude projekty + členy teamu, ať umí navrhnout
+// realistické přiřazení. Vrací plain text (návrh k přečtení, nic nezakládá).
+function stripHtml(html) {
+  return String(html || '')
+    .replace(/<\/(p|div|li|h[1-3]|tr)>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '• ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export async function processNote({ noteTitle, noteContent, action, teamId }) {
+  const keyCheck = validateApiKey();
+  if (!keyCheck.ok) return { error: keyCheck.reason, message: keyCheck.message };
+
+  const text = stripHtml(noteContent);
+  if (!text && !noteTitle) return { error: 'empty_note' };
+
+  let system, userMsg;
+  if (action === 'suggest_tasks') {
+    const projects = (await query(
+      `SELECT name, status FROM projects WHERE team_id = $1 AND status = 'active' ORDER BY name`, [teamId]
+    )).rows;
+    const members = (await query(
+      `SELECT u.name, tm.team_role FROM team_members tm JOIN users u ON u.id = tm.user_id
+       WHERE tm.team_id = $1 AND u.active = TRUE ORDER BY u.name`, [teamId]
+    )).rows;
+    system = `Jsi asistent, který z poznámky navrhne konkrétní úkoly. Čteš poznámku a vytáhneš
+z ní akční položky. U každého úkolu navrhni: název (stručný, akční), komu (vyber z členů týmu
+níže, nebo nech prázdné), prioritu (low/normal/high/urgent) a orientační termín (jen pokud z textu
+plyne). Pokud poznámka neobsahuje nic akčního, řekni to.
+
+Toto je POUZE NÁVRH – nic nezakládáš, jen ukazuješ, jak by úkoly mohly vypadat.
+
+ČLENOVÉ TÝMU: ${JSON.stringify(members)}
+AKTIVNÍ PROJEKTY: ${JSON.stringify(projects)}
+
+Odpověz česky, přehledně. Pro každý úkol formát:
+• [název] — kdo: [jméno/—], priorita: […], termín: […/—]
+Na konci přidej 1 větu, do kterého projektu by úkoly nejspíš patřily.`;
+    userMsg = `Poznámka „${noteTitle || ''}":\n\n${text}`;
+  } else {
+    system = `Jsi asistent, který stručně shrne poznámku. Vytáhni hlavní body a závěry.
+Odpověz česky, max 5 odrážek nebo 3 věty. Buď věcný, nevymýšlej nic, co v poznámce není.`;
+    userMsg = `Shrň tuto poznámku „${noteTitle || ''}":\n\n${text}`;
+  }
+
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': keyCheck.key,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({ model: MODEL, max_tokens: 1200, system, messages: [{ role: 'user', content: userMsg }] }),
+  });
+  if (!res.ok) {
+    return { error: 'api_error', status: res.status, message: (await res.text()).slice(0, 500) };
+  }
+  const data = await res.json();
+  return { reply: data.content?.[0]?.text || '', usage: data.usage };
+}
+
 export async function chat(messages) {
   const keyCheck = validateApiKey();
   if (!keyCheck.ok) return { error: keyCheck.reason, message: keyCheck.message };

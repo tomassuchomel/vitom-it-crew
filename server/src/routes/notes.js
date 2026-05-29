@@ -12,7 +12,7 @@
 import { Router } from 'express';
 import { query } from '../db.js';
 import { requireAuth } from '../auth.js';
-import { askTeamAssistant, HAS_AI } from '../ai.js';
+import { askTeamAssistant, processNote, HAS_AI } from '../ai.js';
 
 const router = Router();
 
@@ -28,6 +28,34 @@ router.post('/ai-ask', requireAuth, async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[notes/ai-ask]', err);
+    res.status(500).json({ error: 'server_error', message: err.message });
+  }
+});
+
+// AI zpracování konkrétní poznámky. Body: { action: 'summarize'|'suggest_tasks' }.
+// Vrací návrh (text) – nic nezakládá. Smí autor / čtenář poznámky.
+router.post('/:id/ai-process', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_id' });
+  if (!HAS_AI) return res.status(503).json({ error: 'no_api_key', message: 'AI není nakonfigurované (ANTHROPIC_API_KEY).' });
+  const action = req.body?.action === 'suggest_tasks' ? 'suggest_tasks' : 'summarize';
+
+  const note = (await query(`SELECT id, title, content, team_id, user_id, visibility FROM notes WHERE id = $1`, [id])).rows[0];
+  if (!note) return res.status(404).json({ error: 'not_found' });
+  // Přístup: osobní → jen autor; jinak člen teamu poznámky nebo admin.
+  const ok = note.visibility === 'personal'
+    ? note.user_id === req.user.id
+    : (req.user.role === 'admin' || note.team_id === req.team_id);
+  if (!ok) return res.status(403).json({ error: 'forbidden' });
+
+  try {
+    const result = await processNote({
+      noteTitle: note.title, noteContent: note.content, action, teamId: note.team_id,
+    });
+    if (result.error) return res.status(result.error === 'api_error' ? 502 : 400).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('[notes/ai-process]', err);
     res.status(500).json({ error: 'server_error', message: err.message });
   }
 });

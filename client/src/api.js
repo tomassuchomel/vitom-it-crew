@@ -97,6 +97,8 @@ export const notes = {
   remove:  (id) => api.delete(`/notes/${id}`).then(r => r.data),
   // AI asistent: { question, history } → { reply, usage }
   aiAsk:   (question, history) => api.post('/notes/ai-ask', { question, history }).then(r => r.data),
+  // AI zpracování poznámky: action 'summarize' | 'suggest_tasks' → { reply }
+  aiProcess: (id, action) => api.post(`/notes/${id}/ai-process`, { action }).then(r => r.data),
   // Sdílení s jiným uživatelem
   share:   (id, userId) => api.post(`/notes/${id}/share`, { user_id: userId }).then(r => r.data),
   unshare: (id, userId) => api.delete(`/notes/${id}/share/${userId}`).then(r => r.data),

@@ -39,8 +39,9 @@ export default function RichTextEditor({ value, onChange }) {
   };
 
   const insertChecklist = () => {
+    // Prázdná položka – uživatel rovnou píše, Enter pak přidá další (viz onKeyDown).
     exec('insertHTML',
-      '<div class="rte-check"><input type="checkbox" contenteditable="false"><span>&nbsp;Položka</span></div>');
+      '<div class="rte-check"><input type="checkbox" contenteditable="false"><span>&nbsp;</span></div>');
   };
   const insertTable = () => {
     let html = '<table class="rte-table"><tbody>';
@@ -80,6 +81,56 @@ export default function RichTextEditor({ value, onChange }) {
         emit();
       }, 0);
     }
+  };
+
+  // Postaví jednu prázdnou checklist položku (nbsp uvnitř kvůli kurzoru)
+  const newCheckDiv = () => {
+    const div = document.createElement('div');
+    div.className = 'rte-check';
+    div.innerHTML = '<input type="checkbox" contenteditable="false"><span>&nbsp;</span>';
+    return div;
+  };
+  // Umístí kurzor na konec daného elementu
+  const placeCaretEnd = (el) => {
+    const range = document.createRange();
+    const sel = window.getSelection();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+
+  // Enter v zaškrtávacím seznamu:
+  //   - položka s textem → vytvoř novou prázdnou položku pod ní
+  //   - prázdná položka → ukonči seznam (nahraď ji normálním odstavcem)
+  const onKeyDown = (e) => {
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    const sel = window.getSelection();
+    if (!sel.rangeCount) return;
+    let node = sel.anchorNode;
+    let checkDiv = node?.nodeType === 3 ? node.parentElement : node;
+    while (checkDiv && checkDiv !== ref.current && !checkDiv.classList?.contains('rte-check')) {
+      checkDiv = checkDiv.parentElement;
+    }
+    if (!checkDiv || !checkDiv.classList?.contains('rte-check')) return; // nejsme v checklistu
+
+    e.preventDefault();
+    const span = checkDiv.querySelector('span');
+    const text = (span?.textContent || '').replace(/ /g, '').trim();
+
+    if (text === '') {
+      // prázdná položka → exit na odstavec
+      const p = document.createElement('p');
+      p.innerHTML = '<br>';
+      checkDiv.replaceWith(p);
+      placeCaretEnd(p);
+    } else {
+      // má text → nová položka pod
+      const div = newCheckDiv();
+      checkDiv.after(div);
+      placeCaretEnd(div.querySelector('span'));
+    }
+    emit();
   };
 
   return (
@@ -126,6 +177,7 @@ export default function RichTextEditor({ value, onChange }) {
         onInput={emit}
         onBlur={emit}
         onClick={onClick}
+        onKeyDown={onKeyDown}
         className="rte-content min-h-[320px] max-h-[60vh] overflow-y-auto p-4 text-sm text-ink-800 focus:outline-none leading-relaxed"
       />
     </div>
