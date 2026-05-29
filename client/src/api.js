@@ -99,6 +99,15 @@ export const notes = {
   aiAsk:   (question, history) => api.post('/notes/ai-ask', { question, history }).then(r => r.data),
   // AI zpracování poznámky: action 'summarize' | 'suggest_tasks' → { reply }
   aiProcess: (id, action) => api.post(`/notes/${id}/ai-process`, { action }).then(r => r.data),
+  // Přepis nahrávky porady přes Whisper → { text }
+  transcribe: (audioBlob) => {
+    const fd = new FormData();
+    fd.append('audio', audioBlob, 'porada.webm');
+    return api.post('/notes/transcribe', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000, // přepis může trvat
+    }).then(r => r.data);
+  },
   // Sdílení s jiným uživatelem
   share:   (id, userId) => api.post(`/notes/${id}/share`, { user_id: userId }).then(r => r.data),
   unshare: (id, userId) => api.delete(`/notes/${id}/share/${userId}`).then(r => r.data),

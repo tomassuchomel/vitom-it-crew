@@ -14,6 +14,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import RichTextEditor from '../components/RichTextEditor.jsx';
+import VoiceMeetingModal from '../components/VoiceMeetingModal.jsx';
+import DrawingLayer from '../components/DrawingLayer.jsx';
 import { useTeams } from '../teams.jsx';
 import { useAuth } from '../auth.jsx';
 import { notes as notesApi, users as usersApi } from '../api.js';
@@ -30,6 +32,7 @@ export default function Notes() {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiMinimized, setAiMinimized] = useState(false);
   const [shareNote, setShareNote] = useState(null); // poznámka pro share modal
+  const [voiceOpen, setVoiceOpen] = useState(false); // hlasová porada modal
 
   const load = (silent = false, selectAfter = null) => {
     if (!silent) setLoading(true);
@@ -77,6 +80,14 @@ export default function Notes() {
     await load(true, d.note.id);
     setActiveMainId(d.note.id);
   };
+  // Z přepisu porady vytvoř novou poznámku (shared scope nemá zápis → padne do team)
+  const createFromVoice = async (title, html) => {
+    const vis = scope === 'shared' ? 'team' : scope;
+    const d = await notesApi.create({ title, content: html, visibility: vis });
+    if (scope === 'shared') setScope('team'); // přepni na team, ať je poznámka vidět
+    await load(true, d.note.id);
+    setActiveMainId(d.note.id);
+  };
   const addChild = async (parentId) => {
     // Podpoznámka dědí visibility rodiče (backend to vynutí)
     const d = await notesApi.create({ title: 'Nová podpoznámka', parent_id: parentId });
@@ -108,6 +119,10 @@ export default function Notes() {
         subtitle={`Hierarchický blok pro ${currentTeam?.name || 'tým'} — množina a podmnožiny.`}
         actions={
           <div className="flex items-center gap-2">
+            <button onClick={() => setVoiceOpen(true)}
+              className="px-3 py-1.5 border border-red-300 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50">
+              🎙️ Porada
+            </button>
             <button onClick={() => setAiOpen(true)}
               className="px-3 py-1.5 border border-accent-400 text-accent-700 rounded-lg text-sm font-medium hover:bg-accent-50">
               🤖 Zeptat se AI
@@ -241,6 +256,7 @@ export default function Notes() {
         />
       )}
       {shareNote && <ShareNoteModal note={shareNote} onClose={() => setShareNote(null)} />}
+      {voiceOpen && <VoiceMeetingModal onClose={() => setVoiceOpen(false)} onCreateNote={createFromVoice} />}
     </div>
   );
 }
@@ -660,8 +676,15 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
   const [aiBusy, setAiBusy] = useState(false);
   const [aiResult, setAiResult] = useState(null); // { action, text }
   const [aiErr, setAiErr] = useState(null);
+  // Kreslení (tužka)
+  const [drawing, setDrawing] = useState(note.drawing || null);
+  const [drawMode, setDrawMode] = useState(false);
+  const [penColor, setPenColor] = useState('#dc2626');
+  const [penWidth, setPenWidth] = useState(3);
+  const [eraser, setEraser] = useState(false);
+  const [drawKey, setDrawKey] = useState(0); // změna = remount canvasu (clear)
   const dirtyRef = useRef(false);
-  const latestRef = useRef({ title, content });
+  const latestRef = useRef({ title, content, drawing: note.drawing || null });
   const timerRef = useRef(null);
 
   // Sdílená poznámka, kterou nevlastním → jen čtu (nemůžu editovat)
@@ -670,7 +693,9 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
   useEffect(() => {
     setTitle(note.title || '');
     setContent(note.content || '');
-    latestRef.current = { title: note.title || '', content: note.content || '' };
+    setDrawing(note.drawing || null);
+    setDrawMode(false);
+    latestRef.current = { title: note.title || '', content: note.content || '', drawing: note.drawing || null };
     dirtyRef.current = false;
     setSavedAt(null);
     setAiResult(null); setAiErr(null);
@@ -680,7 +705,11 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
     if (!dirtyRef.current || readOnly) return;
     setSaving(true);
     try {
-      await notesApi.update(note.id, { title: latestRef.current.title, content: latestRef.current.content });
+      await notesApi.update(note.id, {
+        title: latestRef.current.title,
+        content: latestRef.current.content,
+        drawing: latestRef.current.drawing,
+      });
       setSavedAt(new Date());
       dirtyRef.current = false;
       onSaved?.();
@@ -697,6 +726,12 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
   };
   const changeTitle = (v) => { setTitle(v); latestRef.current.title = v; scheduleSave(); };
   const changeContent = (html) => { setContent(html); latestRef.current.content = html; scheduleSave(); };
+  const changeDrawing = (dataUrl) => { setDrawing(dataUrl); latestRef.current.drawing = dataUrl; scheduleSave(); };
+  const clearDrawing = () => {
+    setDrawing(null); latestRef.current.drawing = null;
+    setDrawKey(k => k + 1); // remount canvasu → čistý
+    scheduleSave();
+  };
 
   // AI zpracování – nejdřív flush rozepsaných změn, ať AI vidí aktuální obsah
   const runAi = async (action) => {
@@ -714,7 +749,11 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
   useEffect(() => () => {
     if (timerRef.current) clearTimeout(timerRef.current);
     if (dirtyRef.current && !readOnly) {
-      notesApi.update(note.id, { title: latestRef.current.title, content: latestRef.current.content }).catch(() => {});
+      notesApi.update(note.id, {
+        title: latestRef.current.title,
+        content: latestRef.current.content,
+        drawing: latestRef.current.drawing,
+      }).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [note.id]);
@@ -727,8 +766,13 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
           {note.author_name && <span className="text-xs text-ink-500">od {note.author_name}</span>}
         </div>
         <h2 className="text-xl font-bold text-ink-800 mb-3">{note.title}</h2>
-        <div className="rte-readonly text-sm text-ink-800 leading-relaxed"
-             dangerouslySetInnerHTML={{ __html: note.content || '<p class="text-ink-400">(prázdná poznámka)</p>' }} />
+        <div className="relative">
+          <div className="rte-readonly text-sm text-ink-800 leading-relaxed"
+               dangerouslySetInnerHTML={{ __html: note.content || '<p class="text-ink-400">(prázdná poznámka)</p>' }} />
+          {note.drawing && (
+            <img src={note.drawing} alt="kresba" className="absolute inset-0 w-full h-full pointer-events-none" />
+          )}
+        </div>
       </div>
     );
   }
@@ -748,7 +792,59 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
         {saving ? 'ukládám…' : savedAt ? `uloženo ${savedAt.toLocaleTimeString('cs-CZ')}` : 'ukládá se automaticky'}
       </div>
 
-      <RichTextEditor value={content} onChange={changeContent} />
+      {/* Editor + kreslicí overlay ve společném relativním kontejneru */}
+      <div className="relative">
+        <RichTextEditor value={content} onChange={changeContent} />
+        <DrawingLayer
+          key={`${note.id}-${drawKey}`}
+          value={drawing}
+          editing={drawMode}
+          color={penColor}
+          width={penWidth}
+          eraser={eraser}
+          onChange={changeDrawing}
+        />
+      </div>
+
+      {/* Kreslicí toolbar */}
+      <div className="mt-2 flex items-center gap-2 flex-wrap">
+        <button onClick={() => setDrawMode(m => !m)}
+          className={`px-2.5 py-1 text-xs rounded border font-medium ${
+            drawMode ? 'bg-brand-500 text-white border-brand-500' : 'border-cream-300 text-ink-600 hover:bg-cream-50'
+          }`}>
+          ✏️ {drawMode ? 'Kreslení zapnuté' : 'Kreslit'}
+        </button>
+        {drawMode && (
+          <>
+            {/* Tloušťky */}
+            {[2, 4, 8].map((w, i) => (
+              <button key={w} onClick={() => { setPenWidth(w); setEraser(false); }}
+                title={['tenká', 'střední', 'tlustá'][i]}
+                className={`w-7 h-7 flex items-center justify-center rounded border ${
+                  penWidth === w && !eraser ? 'border-brand-500 bg-brand-50' : 'border-cream-300'
+                }`}>
+                <span className="rounded-full bg-ink-800" style={{ width: w + 2, height: w + 2 }} />
+              </button>
+            ))}
+            {/* Barvy */}
+            {['#0c363e', '#dc2626', '#ea580c', '#16a34a', '#2563eb', '#9333ea'].map(c => (
+              <button key={c} onClick={() => { setPenColor(c); setEraser(false); }}
+                className={`w-6 h-6 rounded-full border-2 ${penColor === c && !eraser ? 'border-ink-800' : 'border-cream-300'}`}
+                style={{ background: c }} aria-label={`barva ${c}`} />
+            ))}
+            {/* Guma + smazat */}
+            <button onClick={() => setEraser(e => !e)}
+              className={`px-2 py-1 text-xs rounded border ${eraser ? 'border-brand-500 bg-brand-50' : 'border-cream-300 hover:bg-cream-50'}`}>
+              🧽 Guma
+            </button>
+            <button onClick={clearDrawing}
+              className="px-2 py-1 text-xs rounded border border-red-300 text-red-600 hover:bg-red-50">
+              Smazat kresbu
+            </button>
+            <span className="text-[10px] text-ink-400">Kreslení blokuje psaní textu — vypni ho pro úpravu textu.</span>
+          </>
+        )}
+      </div>
 
       {/* AI zpracování poznámky */}
       <div className="mt-3 flex items-center gap-2 flex-wrap">

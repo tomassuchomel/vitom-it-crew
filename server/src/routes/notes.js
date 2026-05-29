@@ -10,11 +10,44 @@
 // a vytvořit z něj úkoly do projektů/teamů s přiřazením a termíny.
 
 import { Router } from 'express';
+import multer from 'multer';
 import { query } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { askTeamAssistant, processNote, HAS_AI } from '../ai.js';
 
 const router = Router();
+
+// Audio z porady drží multer v RAM. Whisper má limit 25 MB na soubor.
+const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+// Přepis nahrávky porady přes OpenAI Whisper. Multipart pole 'audio'.
+// Vrací { text }. Vyžaduje OPENAI_API_KEY (Anthropic speech-to-text nemá).
+router.post('/transcribe', requireAuth, audioUpload.single('audio'), async (req, res) => {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return res.status(503).json({ error: 'no_openai_key', message: 'Přepis vyžaduje OPENAI_API_KEY v server/.env (Whisper). Anthropic speech-to-text nemá.' });
+  if (!req.file) return res.status(400).json({ error: 'no_audio' });
+  try {
+    const form = new FormData();
+    form.append('file', new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/webm' }), 'porada.webm');
+    form.append('model', 'whisper-1');
+    form.append('language', 'cs');
+    const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}` },
+      body: form,
+    });
+    if (!r.ok) {
+      const txt = await r.text();
+      console.error('[notes/transcribe] whisper', r.status, txt.slice(0, 300));
+      return res.status(502).json({ error: 'whisper_error', message: txt.slice(0, 300) });
+    }
+    const data = await r.json();
+    res.json({ text: data.text || '' });
+  } catch (err) {
+    console.error('[notes/transcribe]', err);
+    res.status(500).json({ error: 'server_error', message: err.message });
+  }
+});
 
 // AI asistent – odpovídá na otázky nad poznámkami + daty týmu.
 // Body: { question, history?: [{role, content}] }. Team scope z req.team_id.
@@ -76,7 +109,7 @@ router.get('/', requireAuth, async (req, res) => {
   if (scope === 'shared') {
     const r = await query(`
       SELECT n.id, n.team_id, n.parent_id, n.user_id, n.title, n.content,
-             n.position, n.visibility, n.ai_processed_at, n.created_at, n.updated_at,
+             n.position, n.visibility, n.drawing, n.ai_processed_at, n.created_at, n.updated_at,
              u.name AS author_name, TRUE AS shared, ns.created_at AS shared_at
       FROM note_shares ns
       JOIN notes n ON n.id = ns.note_id
@@ -100,7 +133,7 @@ router.get('/', requireAuth, async (req, res) => {
 
   const r = await query(`
     SELECT n.id, n.team_id, n.parent_id, n.user_id, n.title, n.content,
-           n.position, n.visibility, n.ai_processed_at, n.created_at, n.updated_at,
+           n.position, n.visibility, n.drawing, n.ai_processed_at, n.created_at, n.updated_at,
            u.name AS author_name,
            FALSE AS shared,
            (SELECT COUNT(*) FROM note_shares ns WHERE ns.note_id = n.id)::int AS share_count
@@ -229,12 +262,14 @@ router.put('/:id', requireAuth, async (req, res) => {
     content:  'content'  in req.body ? (req.body.content ?? null) : cur.content,
     position: 'position' in req.body ? Number(req.body.position) || 0 : cur.position,
     parent_id: nextParent,
+    // drawing = PNG data URL overlay kresby (nebo null pro smazání kresby)
+    drawing:  'drawing'  in req.body ? (req.body.drawing ?? null) : cur.drawing,
   };
 
   const r = await query(`
-    UPDATE notes SET title = $1, content = $2, position = $3, parent_id = $4, updated_at = NOW()
-    WHERE id = $5 RETURNING *
-  `, [next.title, next.content, next.position, next.parent_id, id]);
+    UPDATE notes SET title = $1, content = $2, position = $3, parent_id = $4, drawing = $5, updated_at = NOW()
+    WHERE id = $6 RETURNING *
+  `, [next.title, next.content, next.position, next.parent_id, next.drawing, id]);
   res.json({ note: r.rows[0] });
 });
 
