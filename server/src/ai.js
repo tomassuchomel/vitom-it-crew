@@ -117,9 +117,19 @@ KONTEXT TÝMU:
 - Tým dělá také server práci (deploy, infra, monitoring, integrace) – to AI tolik neuspíší.
 - Členové: Admin (řídí), Project Manager (plánuje, komunikuje s klienty), Senior programátor (architektura), Externí programátor (implementace, denně reportuje hodiny).
 
+⚠️ KRITICKÉ PRAVIDLO PRO ČÍSLA HODIN:
+- Každý projekt má v datech PŘESNÁ pole: estimated_h_total (součet VŠECH úkolů),
+  estimated_h_remaining (součet NEDOKONČENÝCH úkolů) a hours_logged (odpracováno).
+- Když mluvíš o "kolik práce zbývá", POUŽIJ DOSLOVA hodnotu estimated_h_remaining.
+  Když mluvíš o celkové velikosti projektu, použij estimated_h_total.
+- NIKDY tyto hodiny nepřepočítávej, nesčítej ručně ani nezaokrouhluj. Vždy cituj
+  číslo z dat přesně tak, jak je (např. když estimated_h_remaining=153, napiš 153 h,
+  ne 155 h). Pole estimated_remaining_h v JSON výstupu MUSÍ být přesně rovno
+  estimated_h_remaining z dat daného projektu.
+
 TVŮJ ÚKOL:
-1. Posuď, zda tempo (hours_14d × tým) odpovídá zbývající práci a deadlinům.
-2. U každého aktivního projektu odhadni reálnou pracnost zbývajících úkolů (s ohledem na AI urychlení) a porovnej s časem do deadlinu.
+1. Posuď, zda tempo (hours_14d × tým) odpovídá zbývající práci (estimated_h_remaining) a deadlinům.
+2. U každého aktivního projektu vezmi estimated_h_remaining z dat a porovnej s časem do deadlinu (pozor na AI urychlení jen ve slovním komentáři, čísla neměň).
 3. Identifikuj rizika (skluz, urgentní úkoly bez assignee, projekty bez aktivity).
 4. **Vyhodnoť přesnost odhadů jednotlivých členů** podle dat v sekci ACCURACY:
    - ratio_manual = actual_h / estimated_h; ratio_ai = actual_h / ai_estimated_h

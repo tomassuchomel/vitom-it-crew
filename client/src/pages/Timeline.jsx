@@ -326,16 +326,22 @@ function ProjectRow({ project, layout, colorIdx, forecastEnabled }) {
   const cd = countdown(project.effective_due_date);
   const isDone = project.status === 'done';
 
-  // Linka 1: odhad práce v rámci plánu (od start_date)
-  const estH = Number(project.estimated_h_total || project.estimated_h_remaining || 0);
+  // Hodiny: total (vše), remaining (nedokončené), done = rozdíl.
+  // estimated_h_total i estimated_h_remaining jdou z projects.js agregace.
+  const totalH = Number(project.estimated_h_total || 0);
+  const remH = Number(project.estimated_h_remaining || 0);
+  // Když total chybí (0), použij remaining jako fallback (starší projekty).
+  const estH = totalH > 0 ? totalH : remH;
+  const doneH = Math.max(0, estH - remH);
+
+  // Linka 1 (accent): CELKOVÝ odhad od start_date. Délka = total / 6h.
   const estDays = estH / HOURS_PER_DAY;
   const estWidth = estDays * layout.pxPerDay;
   const estLabel = workdaysLabel(estH);
 
-  // Linka 2: forecast „od dneška + zbývající odhad" – jen pro teamy s timeline_forecast feature.
+  // Linka 2: forecast „od dneška + ZBÝVAJÍCÍ odhad" – jen pro teamy s timeline_forecast feature.
   // Pokud délka přesahuje deadline, zbarví se červeně (overcommit).
   // Když je projekt hotový nebo nemá zbývající odhad, nezobrazujeme.
-  const remH = Number(project.estimated_h_remaining || 0);
   const showForecast = forecastEnabled && !isDone && remH > 0;
   const todayLeft = daysBetween(layout.min, today) * layout.pxPerDay;
   const forecastLeft = Math.max(todayLeft, left);  // začíná dneškem, nebo startem (cokoliv pozdější)
@@ -384,7 +390,7 @@ function ProjectRow({ project, layout, colorIdx, forecastEnabled }) {
           />
           {estLabel && estWidth > 50 && (
             <div className="text-[9px] text-accent-700 font-medium mt-0.5 whitespace-nowrap">
-              odhad celkem: {estLabel} ({estH} h)
+              celkem: {estLabel} ({estH} h){doneH > 0 ? ` · hotovo ${doneH} h` : ''}
             </div>
           )}
         </div>
@@ -405,7 +411,7 @@ function ProjectRow({ project, layout, colorIdx, forecastEnabled }) {
           />
           {forecastLabel && forecastWidth > 60 && (
             <div className={`text-[9px] font-medium mt-0.5 whitespace-nowrap ${overcommit ? 'text-red-700' : 'text-blue-700'}`}>
-              {overcommit ? '⚠ ' : ''}od dnes: {forecastLabel} → {projectedDateLabel}
+              {overcommit ? '⚠ ' : ''}zbývá od dnes: {forecastLabel} ({remH} h) → {projectedDateLabel}
             </div>
           )}
         </div>
