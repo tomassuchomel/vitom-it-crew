@@ -12,10 +12,12 @@
 // agentovi, který navrhne úkoly do projektů. Zatím placeholder.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import RichTextEditor from '../components/RichTextEditor.jsx';
 import VoiceMeetingModal from '../components/VoiceMeetingModal.jsx';
 import DrawingLayer from '../components/DrawingLayer.jsx';
+import SuggestedTasksModal from '../components/SuggestedTasksModal.jsx';
 import { useTeams } from '../teams.jsx';
 import { useAuth } from '../auth.jsx';
 import { notes as notesApi, users as usersApi } from '../api.js';
@@ -674,8 +676,10 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
   const [saving, setSaving] = useState(false);
   // AI zpracování poznámky
   const [aiBusy, setAiBusy] = useState(false);
-  const [aiResult, setAiResult] = useState(null); // { action, text }
+  const [aiResult, setAiResult] = useState(null); // { action, text } (summarize)
   const [aiErr, setAiErr] = useState(null);
+  const [taskSuggest, setTaskSuggest] = useState(null); // { tasks, projectId, projectName }
+  const [createdInfo, setCreatedInfo] = useState(null);  // { count, projectId } po založení
   // Kreslení (tužka)
   const [drawing, setDrawing] = useState(note.drawing || null);
   const [drawMode, setDrawMode] = useState(false);
@@ -698,7 +702,7 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
     latestRef.current = { title: note.title || '', content: note.content || '', drawing: note.drawing || null };
     dirtyRef.current = false;
     setSavedAt(null);
-    setAiResult(null); setAiErr(null);
+    setAiResult(null); setAiErr(null); setTaskSuggest(null); setCreatedInfo(null);
   }, [note.id]);
 
   const doSave = async () => {
@@ -736,10 +740,19 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
   // AI zpracování – nejdřív flush rozepsaných změn, ať AI vidí aktuální obsah
   const runAi = async (action) => {
     if (dirtyRef.current) await doSave();
-    setAiBusy(true); setAiErr(null); setAiResult(null);
+    setAiBusy(true); setAiErr(null); setAiResult(null); setTaskSuggest(null); setCreatedInfo(null);
     try {
       const d = await notesApi.aiProcess(note.id, action);
-      setAiResult({ action, text: d.reply || '(prázdná odpověď)' });
+      if (action === 'suggest_tasks') {
+        // Strukturovaný návrh → otevři review modal
+        setTaskSuggest({
+          tasks: d.tasks || [],
+          projectId: d.suggested_project_id || '',
+          projectName: d.suggested_project_name || null,
+        });
+      } else {
+        setAiResult({ action, text: d.reply || '(prázdná odpověď)' });
+      }
     } catch (e) {
       setAiErr(e.response?.data?.message || e.response?.data?.error || 'AI zpracování selhalo');
     } finally { setAiBusy(false); }
@@ -863,15 +876,18 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
       {aiResult && (
         <div className="mt-2 bg-accent-50/50 border border-accent-200 rounded-lg p-3">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[11px] font-semibold text-accent-700 uppercase tracking-wide">
-              {aiResult.action === 'suggest_tasks' ? '📋 Návrh úkolů' : '📝 Shrnutí'}
-            </span>
+            <span className="text-[11px] font-semibold text-accent-700 uppercase tracking-wide">📝 Shrnutí</span>
             <button onClick={() => setAiResult(null)} className="text-ink-400 hover:text-ink-700 text-xs">zavřít</button>
           </div>
           <div className="text-sm text-ink-800 whitespace-pre-wrap">{aiResult.text}</div>
-          <div className="text-[10px] text-ink-400 mt-2">
-            Návrh od AI — nic se nezaložilo. Úkoly případně vytvoř ručně v projektu.
-          </div>
+        </div>
+      )}
+      {createdInfo && (
+        <div className="mt-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded p-2.5 flex items-center justify-between">
+          <span>✅ Založeno {createdInfo.count} úkol(ů).{' '}
+            <Link to={`/projects/${createdInfo.projectId}`} className="underline font-medium">Otevřít projekt</Link>
+          </span>
+          <button onClick={() => setCreatedInfo(null)} className="text-ink-400 hover:text-ink-700">×</button>
         </div>
       )}
 
@@ -894,6 +910,15 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
           </button>
         </div>
       </div>
+
+      {/* Review + založení AI-navržených úkolů */}
+      {taskSuggest && (
+        <SuggestedTasksModal
+          suggestion={taskSuggest}
+          onClose={() => setTaskSuggest(null)}
+          onCreated={(count, projectId) => setCreatedInfo({ count, projectId })}
+        />
+      )}
     </div>
   );
 }

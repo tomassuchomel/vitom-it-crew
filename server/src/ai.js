@@ -399,47 +399,92 @@ export async function processNote({ noteTitle, noteContent, action, teamId }) {
   const text = stripHtml(noteContent);
   if (!text && !noteTitle) return { error: 'empty_note' };
 
-  let system, userMsg;
+  // ── suggest_tasks: strukturovaný JSON výstup → namapujeme na reálné ID ──
+  // (frontend pak zobrazí editovatelný seznam a založí úkoly přes POST /api/tasks)
   if (action === 'suggest_tasks') {
     const projects = (await query(
-      `SELECT name, status FROM projects WHERE team_id = $1 AND status = 'active' ORDER BY name`, [teamId]
+      `SELECT id, name FROM projects WHERE team_id = $1 AND status = 'active' ORDER BY name`, [teamId]
     )).rows;
     const members = (await query(
-      `SELECT u.name, tm.team_role FROM team_members tm JOIN users u ON u.id = tm.user_id
+      `SELECT u.id, u.name FROM team_members tm JOIN users u ON u.id = tm.user_id
        WHERE tm.team_id = $1 AND u.active = TRUE ORDER BY u.name`, [teamId]
     )).rows;
-    system = `Jsi asistent, který z poznámky navrhne konkrétní úkoly. Čteš poznámku a vytáhneš
-z ní akční položky. U každého úkolu navrhni: název (stručný, akční), komu (vyber z členů týmu
-níže, nebo nech prázdné), prioritu (low/normal/high/urgent) a orientační termín (jen pokud z textu
-plyne). Pokud poznámka neobsahuje nic akčního, řekni to.
+    const today = new Date().toISOString().slice(0, 10);
+    const system = `Jsi asistent, který z poznámky vytáhne konkrétní akční úkoly.
+Vrať POUZE validní JSON (nic okolo, žádné \`\`\`), v tomto formátu:
+{
+  "tasks": [
+    { "title": "stručný akční název", "description": "1 věta kontextu nebo prázdné",
+      "assignee_name": "<přesné jméno člena týmu nebo null>",
+      "priority": "low" | "normal" | "high" | "urgent",
+      "due_date": "YYYY-MM-DD nebo null" }
+  ],
+  "project_name": "<název projektu z nabídky nebo null>"
+}
+Pravidla: assignee_name MUSÍ být přesně jedno ze jmen členů týmu, jinak null.
+project_name MUSÍ být přesně název z nabídky projektů, jinak null. due_date jen
+pokud z textu plyne termín (dnes je ${today}). Když poznámka nemá nic akčního,
+vrať {"tasks": [], "project_name": null}.
 
-Toto je POUZE NÁVRH – nic nezakládáš, jen ukazuješ, jak by úkoly mohly vypadat.
+ČLENOVÉ TÝMU: ${JSON.stringify(members.map(m => m.name))}
+AKTIVNÍ PROJEKTY: ${JSON.stringify(projects.map(p => p.name))}`;
+    const userMsg = `Poznámka „${noteTitle || ''}":\n\n${text}`;
 
-ČLENOVÉ TÝMU: ${JSON.stringify(members)}
-AKTIVNÍ PROJEKTY: ${JSON.stringify(projects)}
-
-Odpověz česky, přehledně. Pro každý úkol formát:
-• [název] — kdo: [jméno/—], priorita: […], termín: […/—]
-Na konci přidej 1 větu, do kterého projektu by úkoly nejspíš patřily.`;
-    userMsg = `Poznámka „${noteTitle || ''}":\n\n${text}`;
-  } else {
-    system = `Jsi asistent, který stručně shrne poznámku. Vytáhni hlavní body a závěry.
-Odpověz česky, max 5 odrážek nebo 3 věty. Buď věcný, nevymýšlej nic, co v poznámce není.`;
-    userMsg = `Shrň tuto poznámku „${noteTitle || ''}":\n\n${text}`;
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': keyCheck.key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: MODEL, max_tokens: 1500, system, messages: [{ role: 'user', content: userMsg }] }),
+    });
+    if (!res.ok) return { error: 'api_error', status: res.status, message: (await res.text()).slice(0, 500) };
+    const data = await res.json();
+    const raw = data.content?.[0]?.text || '';
+    let parsed;
+    try {
+      parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim());
+    } catch {
+      return { error: 'parse_error', raw };
+    }
+    // Mapování jmen → ID (case-insensitive, trim)
+    const findMember = (name) => {
+      if (!name) return null;
+      const n = String(name).trim().toLowerCase();
+      return members.find(m => m.name.toLowerCase() === n) || null;
+    };
+    const proj = parsed.project_name
+      ? projects.find(p => p.name.toLowerCase() === String(parsed.project_name).trim().toLowerCase())
+      : null;
+    const VALID_PRIO = ['low', 'normal', 'high', 'urgent'];
+    const tasks = (Array.isArray(parsed.tasks) ? parsed.tasks : []).map(t => {
+      const m = findMember(t.assignee_name);
+      const due = /^\d{4}-\d{2}-\d{2}$/.test(t.due_date || '') ? t.due_date : null;
+      return {
+        title: String(t.title || '').slice(0, 200),
+        description: t.description ? String(t.description).slice(0, 1000) : '',
+        assignee_id: m?.id || null,
+        assignee_name: m?.name || null,
+        priority: VALID_PRIO.includes(t.priority) ? t.priority : 'normal',
+        due_date: due,
+      };
+    }).filter(t => t.title);
+    return {
+      tasks,
+      suggested_project_id: proj?.id || null,
+      suggested_project_name: proj?.name || null,
+      usage: data.usage,
+    };
   }
+
+  // ── summarize: prostý text ──
+  const system = `Jsi asistent, který stručně shrne poznámku. Vytáhni hlavní body a závěry.
+Odpověz česky, max 5 odrážek nebo 3 věty. Buď věcný, nevymýšlej nic, co v poznámce není.`;
+  const userMsg = `Shrň tuto poznámku „${noteTitle || ''}":\n\n${text}`;
 
   const res = await fetch(API_URL, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': keyCheck.key,
-      'anthropic-version': '2023-06-01',
-    },
+    headers: { 'content-type': 'application/json', 'x-api-key': keyCheck.key, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({ model: MODEL, max_tokens: 1200, system, messages: [{ role: 'user', content: userMsg }] }),
   });
-  if (!res.ok) {
-    return { error: 'api_error', status: res.status, message: (await res.text()).slice(0, 500) };
-  }
+  if (!res.ok) return { error: 'api_error', status: res.status, message: (await res.text()).slice(0, 500) };
   const data = await res.json();
   return { reply: data.content?.[0]?.text || '', usage: data.usage };
 }
