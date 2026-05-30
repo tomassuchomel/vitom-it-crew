@@ -137,9 +137,10 @@ router.delete('/me/avatar', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Vytvoření – jen admin. Nový uživatel dostane výchozí heslo a must_change_password.
+// Vytvoření – jen admin. Pokud klient pošle `password`, použije se a uživatel
+// si ho NEmusí měnit. Bez `password` se nastaví DEFAULT_PASSWORD + must_change_password=TRUE.
 router.post('/', requireAuth, requireRole('admin'), async (req, res) => {
-  const { email, name, first_name, last_name, role, hourly_rate } = req.body || {};
+  const { email, name, first_name, last_name, role, hourly_rate, password } = req.body || {};
   // Backward kompatibilita – pokud klient pošle jen `name`, rozdělíme automaticky
   let first = String(first_name || '').trim();
   let last  = String(last_name || '').trim();
@@ -154,16 +155,27 @@ router.post('/', requireAuth, requireRole('admin'), async (req, res) => {
   if (!['admin', 'manager', 'senior_dev', 'external_dev'].includes(role)) {
     return res.status(400).json({ error: 'invalid_role' });
   }
+  // Pokud admin pošle vlastní heslo, použijeme ho a nevynucujeme změnu.
+  const customPwd = typeof password === 'string' ? password.trim() : '';
+  if (customPwd && customPwd.length < 6) {
+    return res.status(400).json({ error: 'password_too_short', message: 'Heslo musí mít aspoň 6 znaků.' });
+  }
+  const pwdToHash = customPwd || DEFAULT_PASSWORD;
+  const mustChange = customPwd ? false : true;
   try {
-    const hash = await bcrypt.hash(DEFAULT_PASSWORD, PASSWORD_SALT_ROUNDS);
+    const hash = await bcrypt.hash(pwdToHash, PASSWORD_SALT_ROUNDS);
     const r = await query(
       `INSERT INTO users (email, name, first_name, last_name, role, hourly_rate, password_hash, must_change_password)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id, email, name, first_name, last_name, role, hourly_rate, active,
                  must_change_password, avatar_updated_at`,
-      [email.toLowerCase().trim(), fullName, first, last, role, Number(hourly_rate) || 0, hash]
+      [email.toLowerCase().trim(), fullName, first, last, role, Number(hourly_rate) || 0, hash, mustChange]
     );
-    res.json({ user: publicUser(r.rows[0], { includeRate: true }), default_password: DEFAULT_PASSWORD });
+    res.json({
+      user: publicUser(r.rows[0], { includeRate: true }),
+      // default_password vracíme jen když jsme ho fakt použili (admin neposlal vlastní)
+      default_password: customPwd ? null : DEFAULT_PASSWORD,
+    });
   } catch (err) {
     if (String(err).includes('unique')) return res.status(409).json({ error: 'email_exists' });
     throw err;

@@ -343,8 +343,170 @@ function EditTeamModal({ teamId, onClose, onSaved }) {
             onAdd={addMember}
           />
         )}
+
+        {/* Vytvořit zcela nového uživatele a rovnou přidat do teamu */}
+        <CreateNewUserForm
+          allowedRoles={allowedRoles}
+          defaultRole={defaultRole}
+          onCreated={async (newUser, teamRole) => {
+            // Server vytvořil usera → přidáme ho do teamu existujícím handlerem
+            await addMember(newUser.id, teamRole);
+          }}
+        />
       </div>
     </Modal>
+  );
+}
+
+// Inline collapsible formulář: admin zadá email + jméno + (volitelně) heslo,
+// vybere globální + týmovou roli. Server vytvoří usera, my ho rovnou strčíme
+// do teamu. Bez separátního modalu — drží to vše v jedné editaci teamu.
+function CreateNewUserForm({ allowedRoles, defaultRole, onCreated }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [form, setForm] = useState({
+    email: '',
+    first_name: '',
+    last_name: '',
+    password: '',
+    role: 'external_dev', // bezpečný default — admin si může změnit
+    team_role: defaultRole,
+  });
+  const roleKeys = Object.keys(allowedRoles || {});
+
+  const reset = () => {
+    setForm({ email: '', first_name: '', last_name: '', password: '', role: 'external_dev', team_role: defaultRole });
+    setErr(null);
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr(null);
+    if (!form.email.trim() || !form.first_name.trim() || !form.last_name.trim()) {
+      setErr('Vyplň email, jméno a příjmení.');
+      return;
+    }
+    if (form.password && form.password.length < 6) {
+      setErr('Heslo musí mít aspoň 6 znaků (nebo nech prázdné — použije se výchozí).');
+      return;
+    }
+    setBusy(true);
+    try {
+      const payload = {
+        email: form.email.trim(),
+        first_name: form.first_name.trim(),
+        last_name: form.last_name.trim(),
+        role: form.role,
+        hourly_rate: 0,
+      };
+      if (form.password.trim()) payload.password = form.password.trim();
+      const r = await usersApi.create(payload);
+      await onCreated(r.user, form.team_role);
+      reset();
+      setOpen(false);
+    } catch (e2) {
+      const code = e2.response?.data?.error;
+      if (code === 'email_exists') setErr('Uživatel s tímto emailem už existuje.');
+      else if (code === 'password_too_short') setErr('Heslo musí mít aspoň 6 znaků.');
+      else setErr(e2.response?.data?.message || 'Vytvoření selhalo');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="w-full text-left px-3 py-2 text-xs text-ink-500 hover:text-ink-700 border border-dashed border-cream-300 rounded hover:bg-cream-50"
+      >
+        + Vytvořit zcela nového uživatele
+      </button>
+    );
+  }
+
+  return (
+    <form onSubmit={submit} className="border border-cream-300 rounded-lg p-3 space-y-2 bg-cream-50">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-bold uppercase tracking-wide text-ink-500">Nový uživatel</div>
+        <button type="button" onClick={() => { setOpen(false); reset(); }} className="text-ink-400 hover:text-ink-700 text-sm">×</button>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          type="email"
+          required
+          placeholder="email *"
+          value={form.email}
+          onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))}
+          className="border border-ink-300 rounded px-2 py-1.5 text-sm col-span-2"
+        />
+        <input
+          type="text"
+          required
+          placeholder="jméno *"
+          value={form.first_name}
+          onChange={(e) => setForm(f => ({ ...f, first_name: e.target.value }))}
+          className="border border-ink-300 rounded px-2 py-1.5 text-sm"
+        />
+        <input
+          type="text"
+          required
+          placeholder="příjmení *"
+          value={form.last_name}
+          onChange={(e) => setForm(f => ({ ...f, last_name: e.target.value }))}
+          className="border border-ink-300 rounded px-2 py-1.5 text-sm"
+        />
+        <input
+          type="text"
+          placeholder="heslo (volitelné — jinak výchozí + nucená změna)"
+          value={form.password}
+          onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))}
+          className="border border-ink-300 rounded px-2 py-1.5 text-sm col-span-2 font-mono"
+        />
+        <select
+          value={form.role}
+          onChange={(e) => setForm(f => ({ ...f, role: e.target.value }))}
+          className="border border-ink-300 rounded px-2 py-1.5 text-sm bg-white"
+          title="Globální role"
+        >
+          <option value="admin">admin</option>
+          <option value="manager">manager</option>
+          <option value="senior_dev">senior_dev</option>
+          <option value="external_dev">external_dev</option>
+        </select>
+        {roleKeys.length > 0 ? (
+          <select
+            value={form.team_role}
+            onChange={(e) => setForm(f => ({ ...f, team_role: e.target.value }))}
+            className="border border-ink-300 rounded px-2 py-1.5 text-sm bg-white"
+            title="Týmová role"
+          >
+            {Object.entries(allowedRoles).map(([k, label]) => (
+              <option key={k} value={k}>{label}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={form.team_role}
+            onChange={(e) => setForm(f => ({ ...f, team_role: e.target.value }))}
+            placeholder="týmová role"
+            className="border border-ink-300 rounded px-2 py-1.5 text-sm"
+          />
+        )}
+      </div>
+      {err && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{err}</div>}
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={() => { setOpen(false); reset(); }} disabled={busy}
+          className="px-3 py-1 text-xs rounded border border-ink-300">Zrušit</button>
+        <button type="submit" disabled={busy}
+          className="px-3 py-1 text-xs rounded bg-brand-500 text-white disabled:opacity-50">
+          {busy ? 'Vytvářím…' : 'Vytvořit + přidat do teamu'}
+        </button>
+      </div>
+    </form>
   );
 }
 
