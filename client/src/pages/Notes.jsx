@@ -12,7 +12,7 @@
 // agentovi, který navrhne úkoly do projektů. Zatím placeholder.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import RichTextEditor from '../components/RichTextEditor.jsx';
 import VoiceMeetingModal from '../components/VoiceMeetingModal.jsx';
@@ -34,7 +34,9 @@ export default function Notes() {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiMinimized, setAiMinimized] = useState(false);
   const [shareNote, setShareNote] = useState(null); // poznámka pro share modal
-  const [voiceOpen, setVoiceOpen] = useState(false); // hlasová porada modal
+  const [voiceOpen, setVoiceOpen] = useState(false); // hlasová porada modal (vytvoří novou poznámku)
+  const [freshNoteId, setFreshNoteId] = useState(null); // pro auto-focus názvu nové poznámky
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const load = (silent = false, selectAfter = null) => {
     if (!silent) setLoading(true);
@@ -47,6 +49,29 @@ export default function Notes() {
   };
   // reload při změně teamu i scope
   useEffect(() => { setSelectedId(null); setActiveMainId(null); load(); /* eslint-disable-next-line */ }, [currentTeam?.id, scope]);
+
+  // Deep-link z popisu úkolu: ?noteId=X&scope=Y → přepni scope (pokud chybí načti) a vyber poznámku.
+  // Spouští se jednou na mount; cleanup query params po použití, ať nezůstávají v URL.
+  useEffect(() => {
+    const qScope = searchParams.get('scope');
+    if (qScope && ['team', 'personal', 'shared'].includes(qScope) && qScope !== scope) {
+      setScope(qScope);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Po načtení items + máme-li noteId v URL, vyber tu poznámku.
+  useEffect(() => {
+    const qId = Number(searchParams.get('noteId'));
+    if (!qId || !items.length) return;
+    const note = items.find(n => n.id === qId);
+    if (note) {
+      setSelectedId(note.id);
+      setActiveMainId(rootAncestorId(note.id));
+      // Vyčisti query, aby F5 nepřeskakoval pořád sem
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
 
   // Postav strom z flat listu. U sdílených poznámek ignorujeme parent_id
   // (sdílí se jednotlivé poznámky, ne celý strom) → všechny jsou top-level.
@@ -81,6 +106,7 @@ export default function Notes() {
     const d = await notesApi.create({ title: 'Nová poznámka', visibility: scope });
     await load(true, d.note.id);
     setActiveMainId(d.note.id);
+    setFreshNoteId(d.note.id);
   };
   // Z přepisu porady vytvoř novou poznámku (shared scope nemá zápis → padne do team)
   const createFromVoice = async (title, html) => {
@@ -89,6 +115,7 @@ export default function Notes() {
     if (scope === 'shared') setScope('team'); // přepni na team, ať je poznámka vidět
     await load(true, d.note.id);
     setActiveMainId(d.note.id);
+    setFreshNoteId(d.note.id);
   };
   const addChild = async (parentId) => {
     // Podpoznámka dědí visibility rodiče (backend to vynutí)
@@ -97,6 +124,7 @@ export default function Notes() {
     setCollapsed(prev => { const n = new Set(prev); n.delete(parentId); return n; });
     setActiveMainId(rootAncestorId(parentId));
     await load(true, d.note.id);
+    setFreshNoteId(d.note.id);
   };
   const remove = async (id) => {
     const node = items.find(n => n.id === id);
@@ -232,7 +260,10 @@ export default function Notes() {
                 <NoteEditor
                   key={selected.id}
                   note={selected}
+                  scope={scope}
                   currentUserId={user?.id}
+                  freshlyCreated={selected.id === freshNoteId}
+                  onConsumeFresh={() => setFreshNoteId(null)}
                   onSaved={() => load(true)}
                   onAddChild={() => addChild(selected.id)}
                   onDelete={() => remove(selected.id)}
@@ -669,7 +700,7 @@ function NoteTree({ nodes, depth, selectedId, collapsed, onSelect, onAddChild, o
 
 // Editor vybrané poznámky. Bohatý text (RichTextEditor) + debounced auto-save.
 // Když je poznámka sdílená a current user není autor → read-only náhled.
-function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShare }) {
+function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShare, scope, freshlyCreated, onConsumeFresh }) {
   const [title, setTitle] = useState(note.title || '');
   const [content, setContent] = useState(note.content || '');
   const [savedAt, setSavedAt] = useState(null);
@@ -690,6 +721,9 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
   const dirtyRef = useRef(false);
   const latestRef = useRef({ title, content, drawing: note.drawing || null });
   const timerRef = useRef(null);
+  const titleInputRef = useRef(null);
+  // 🎙️ tlačítko v editoru → nahrávka → vložit přepis do TÉTO poznámky
+  const [voiceInsertOpen, setVoiceInsertOpen] = useState(false);
 
   // Sdílená poznámka, kterou nevlastním → jen čtu (nemůžu editovat)
   const readOnly = note.shared && note.user_id !== currentUserId;
@@ -703,6 +737,17 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
     dirtyRef.current = false;
     setSavedAt(null);
     setAiResult(null); setAiErr(null); setTaskSuggest(null); setCreatedInfo(null);
+    // Pokud je poznámka čerstvě vytvořená, autofocus názvu + select all
+    // (uživatel rovnou píše název, nemusí klikat na input).
+    if (freshlyCreated && titleInputRef.current) {
+      // Mikro-delay, ať React stihne render po setSelected
+      setTimeout(() => {
+        titleInputRef.current?.focus();
+        titleInputRef.current?.select();
+        onConsumeFresh?.();
+      }, 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [note.id]);
 
   const doSave = async () => {
@@ -794,6 +839,7 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
     <div className="bg-white border border-cream-200 rounded-xl p-5">
       {/* Prominentní nadpis (Apple styl) + decentní meta řádek */}
       <input
+        ref={titleInputRef}
         value={title}
         onChange={(e) => changeTitle(e.target.value)}
         onBlur={doSave}
@@ -859,8 +905,14 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
         )}
       </div>
 
-      {/* AI zpracování poznámky */}
+      {/* AI zpracování poznámky + nahrávka do TÉTO poznámky */}
       <div className="mt-3 flex items-center gap-2 flex-wrap">
+        <button onClick={() => setVoiceInsertOpen(true)}
+          className="px-2.5 py-1 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50"
+          title="Nahrát mluvený text do této poznámky">
+          🎙️ Nahrát do poznámky
+        </button>
+        <span className="w-px h-5 bg-cream-300 mx-1" />
         <span className="text-xs text-ink-500">🤖 AI:</span>
         <button onClick={() => runAi('summarize')} disabled={aiBusy}
           className="px-2.5 py-1 text-xs border border-accent-300 text-accent-700 rounded hover:bg-accent-50 disabled:opacity-50">
@@ -915,8 +967,25 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
       {taskSuggest && (
         <SuggestedTasksModal
           suggestion={taskSuggest}
+          sourceNote={note}
+          sourceScope={scope}
           onClose={() => setTaskSuggest(null)}
           onCreated={(count, projectId) => setCreatedInfo({ count, projectId })}
+        />
+      )}
+
+      {/* Nahrávka přímo do TÉTO poznámky – přepis se připojí k obsahu */}
+      {voiceInsertOpen && (
+        <VoiceMeetingModal
+          onClose={() => setVoiceInsertOpen(false)}
+          submitLabel="Vložit do této poznámky"
+          onSubmit={(text) => {
+            // Připoj přepis jako odstavce na konec stávajícího obsahu
+            const escaped = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const addition = text.split(/\n+/).map(p => `<p>${escaped(p)}</p>`).join('');
+            const newContent = (latestRef.current.content || '') + addition;
+            changeContent(newContent);
+          }}
         />
       )}
     </div>

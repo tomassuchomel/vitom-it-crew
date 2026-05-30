@@ -11,7 +11,7 @@ import { notes as notesApi } from '../api.js';
 
 const fmtTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
-export default function VoiceMeetingModal({ onClose, onCreateNote }) {
+export default function VoiceMeetingModal({ onClose, onSubmit, submitLabel = 'Vložit přepis', onCreateNote }) {
   const [phase, setPhase] = useState('idle'); // idle | recording | transcribing | done | error
   const [seconds, setSeconds] = useState(0);
   const [transcript, setTranscript] = useState('');
@@ -73,11 +73,15 @@ export default function VoiceMeetingModal({ onClose, onCreateNote }) {
     }
   };
 
-  const createNote = async () => {
-    const title = `Porada ${new Date().toLocaleDateString('cs-CZ')}`;
-    // Přepis vložíme jako odstavce (HTML)
-    const html = transcript.split(/\n+/).map(p => `<p>${escapeHtml(p)}</p>`).join('') || '<p></p>';
-    await onCreateNote(title, html);
+  const submit = async () => {
+    // Preferuj nový generický onSubmit(text). Fallback na starší onCreateNote(title, html).
+    if (onSubmit) {
+      await onSubmit(transcript);
+    } else if (onCreateNote) {
+      const title = `Porada ${new Date().toLocaleDateString('cs-CZ')}`;
+      const html = transcript.split(/\n+/).map(p => `<p>${escapeHtml(p)}</p>`).join('') || '<p></p>';
+      await onCreateNote(title, html);
+    }
     onClose();
   };
 
@@ -148,9 +152,9 @@ export default function VoiceMeetingModal({ onClose, onCreateNote }) {
                 className="px-3 py-1.5 text-sm rounded border border-cream-300 hover:bg-cream-50">Zkusit znovu</button>
             )}
             {phase === 'done' && (
-              <button onClick={createNote} disabled={!transcript.trim()}
+              <button onClick={submit} disabled={!transcript.trim()}
                 className="px-4 py-1.5 text-sm rounded bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50">
-                Vytvořit poznámku z přepisu
+                {onSubmit ? submitLabel : 'Vytvořit poznámku z přepisu'}
               </button>
             )}
             <button onClick={onClose} className="px-3 py-1.5 text-sm text-ink-500 hover:text-ink-700">Zavřít</button>

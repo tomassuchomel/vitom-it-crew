@@ -414,17 +414,31 @@ export async function processNote({ noteTitle, noteContent, action, teamId }) {
 Vrať POUZE validní JSON (nic okolo, žádné \`\`\`), v tomto formátu:
 {
   "tasks": [
-    { "title": "stručný akční název", "description": "1 věta kontextu nebo prázdné",
+    { "title": "stručný akční název",
+      "description": "1–2 věty kontextu PROČ úkol existuje (ne odkud) nebo prázdné",
       "assignee_name": "<přesné jméno člena týmu nebo null>",
+      "project_name": "<přesný název projektu z nabídky NEBO null pro každý úkol zvlášť>",
       "priority": "low" | "normal" | "high" | "urgent",
       "due_date": "YYYY-MM-DD nebo null" }
-  ],
-  "project_name": "<název projektu z nabídky nebo null>"
+  ]
 }
-Pravidla: assignee_name MUSÍ být přesně jedno ze jmen členů týmu, jinak null.
-project_name MUSÍ být přesně název z nabídky projektů, jinak null. due_date jen
-pokud z textu plyne termín (dnes je ${today}). Když poznámka nemá nic akčního,
-vrať {"tasks": [], "project_name": null}.
+
+PRAVIDLA:
+- assignee_name MUSÍ být PŘESNĚ jedno ze jmen členů, jinak null.
+- project_name MUSÍ být PŘESNĚ název z nabídky, jinak null.
+  KAŽDÝ úkol může patřit do JINÉHO projektu – posuď podle kontextu úkolu.
+  Pokud z poznámky vyplývá projekt jen pro některé úkoly, ostatní nech null.
+- due_date je DŮLEŽITÉ – odhadni i z náznaků (dnes je ${today}):
+  • „dnes" → ${today}
+  • „zítra" → +1 den; „pozítří" → +2
+  • „příští týden" → +7 dní; „za týden" → +7
+  • „začátkem příštího týdne" → +pondělí příštího týdne
+  • „do měsíce", „příští měsíc" → +30 dní
+  • „brzy", „rychle", „urgentně" → +3 dny
+  • „příští porada", „další kontrola" → +7 dní
+  • konkrétní datum v textu → použij ho.
+  Jen pokud opravdu žádný náznak není, nech null.
+- Když poznámka nemá nic akčního, vrať {"tasks": []}.
 
 ČLENOVÉ TÝMU: ${JSON.stringify(members.map(m => m.name))}
 AKTIVNÍ PROJEKTY: ${JSON.stringify(projects.map(p => p.name))}`;
@@ -450,28 +464,28 @@ AKTIVNÍ PROJEKTY: ${JSON.stringify(projects.map(p => p.name))}`;
       const n = String(name).trim().toLowerCase();
       return members.find(m => m.name.toLowerCase() === n) || null;
     };
-    const proj = parsed.project_name
-      ? projects.find(p => p.name.toLowerCase() === String(parsed.project_name).trim().toLowerCase())
-      : null;
+    const findProject = (name) => {
+      if (!name) return null;
+      const n = String(name).trim().toLowerCase();
+      return projects.find(p => p.name.toLowerCase() === n) || null;
+    };
     const VALID_PRIO = ['low', 'normal', 'high', 'urgent'];
     const tasks = (Array.isArray(parsed.tasks) ? parsed.tasks : []).map(t => {
       const m = findMember(t.assignee_name);
+      const p = findProject(t.project_name);
       const due = /^\d{4}-\d{2}-\d{2}$/.test(t.due_date || '') ? t.due_date : null;
       return {
         title: String(t.title || '').slice(0, 200),
         description: t.description ? String(t.description).slice(0, 1000) : '',
         assignee_id: m?.id || null,
         assignee_name: m?.name || null,
+        project_id: p?.id || null,
+        project_name: p?.name || null,
         priority: VALID_PRIO.includes(t.priority) ? t.priority : 'normal',
         due_date: due,
       };
     }).filter(t => t.title);
-    return {
-      tasks,
-      suggested_project_id: proj?.id || null,
-      suggested_project_name: proj?.name || null,
-      usage: data.usage,
-    };
+    return { tasks, usage: data.usage };
   }
 
   // ── summarize: prostý text ──
