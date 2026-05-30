@@ -12,6 +12,7 @@ import TimeTriad from './TimeTriad.jsx';
 import AiAgentPanel from './AiAgentPanel.jsx';
 import ReviewTaskDialog from './ReviewTaskDialog.jsx';
 import ReviewHistory from './ReviewHistory.jsx';
+import LinkifyText from './LinkifyText.jsx';
 
 const PRIORITY_OPTIONS = [
   { value: 'low',    label: '⬇ Nízká' },
@@ -161,7 +162,7 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
           )}
 
           {/* Poznámka / popis */}
-          <NoteSection task={task} canEdit={canEditNote} onSave={handleSave} />
+          <NoteSection task={task} canEdit={canEditNote} onSave={handleSave} onNavigateAway={onClose} />
 
           {/* Detaily úkolu – jen pro plný edit */}
           {canEditFull && (
@@ -214,7 +215,7 @@ function Section({ title, subtitle, children, action }) {
   );
 }
 
-function NoteSection({ task, canEdit, onSave }) {
+function NoteSection({ task, canEdit, onSave, onNavigateAway }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(task.description || '');
   const [busy, setBusy] = useState(false);
@@ -270,7 +271,7 @@ function NoteSection({ task, canEdit, onSave }) {
         </div>
       ) : task.description ? (
         <div className="text-sm text-ink-700 whitespace-pre-wrap bg-cream-100 border border-cream-200 rounded-lg p-3">
-          {task.description}
+          <LinkifyText text={task.description} onInternalNav={onNavigateAway} />
         </div>
       ) : (
         <div className="text-xs text-ink-400 italic">Bez poznámky.</div>

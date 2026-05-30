@@ -41,8 +41,13 @@ export async function requireAuth(req, res, next) {
     req.user = user;
 
     // Načti team kontext – nejdřív zkus X-Team-Id z hlavičky.
+    // POZOR: pokud klient požaduje konkrétní team, ALE user není jeho členem,
+    // VRÁTÍME team_id=undefined (ne fallback na první team). Frontend by jinak
+    // viděl data z jiného teamu, než si myslel — ošklivý silent bug.
+    // Endpointy si poradí přes `if (!req.team_id) return res.json({...prázdné})`.
     const requestedTeamId = Number(req.header('X-Team-Id'));
-    if (Number.isInteger(requestedTeamId) && requestedTeamId > 0) {
+    const hasRequestedHeader = Number.isInteger(requestedTeamId) && requestedTeamId > 0;
+    if (hasRequestedHeader) {
       const tm = await query(
         `SELECT team_id, team_role FROM team_members WHERE team_id = $1 AND user_id = $2`,
         [requestedTeamId, user.id]
@@ -51,9 +56,9 @@ export async function requireAuth(req, res, next) {
         req.team_id   = tm.rows[0].team_id;
         req.team_role = tm.rows[0].team_role;
       }
-    }
-    // Fallback: první team uživatele
-    if (!req.team_id) {
+      // ← žádný fallback. team_id zůstává undefined.
+    } else {
+      // Žádný header → default první team uživatele (legacy / first load).
       const tm = await query(
         `SELECT team_id, team_role FROM team_members WHERE user_id = $1 ORDER BY team_id ASC LIMIT 1`,
         [user.id]

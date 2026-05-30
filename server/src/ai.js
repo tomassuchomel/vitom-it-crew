@@ -392,7 +392,7 @@ function stripHtml(html) {
     .trim();
 }
 
-export async function processNote({ noteTitle, noteContent, action, teamId }) {
+export async function processNote({ noteTitle, noteContent, action, teamId, userId }) {
   const keyCheck = validateApiKey();
   if (!keyCheck.ok) return { error: keyCheck.reason, message: keyCheck.message };
 
@@ -402,10 +402,27 @@ export async function processNote({ noteTitle, noteContent, action, teamId }) {
   // ── suggest_tasks: strukturovaný JSON výstup → namapujeme na reálné ID ──
   // (frontend pak zobrazí editovatelný seznam a založí úkoly přes POST /api/tasks)
   if (action === 'suggest_tasks') {
-    const projects = (await query(
-      `SELECT id, name FROM projects WHERE team_id = $1 AND status = 'active' ORDER BY name`, [teamId]
+    // Cross-team: AI nabízí projekty + členy ze VŠECH týmů, kde je user členem.
+    // Bez userId fallback na origin team poznámky (legacy).
+    const projects = userId ? (await query(`
+      SELECT p.id, p.name, t.name AS team_name, p.team_id
+      FROM projects p JOIN teams t ON t.id = p.team_id
+      JOIN team_members tm ON tm.team_id = p.team_id
+      WHERE tm.user_id = $1 AND p.status = 'active'
+      ORDER BY t.name, p.name
+    `, [userId])).rows : (await query(
+      `SELECT p.id, p.name, t.name AS team_name, p.team_id
+       FROM projects p JOIN teams t ON t.id = p.team_id
+       WHERE p.team_id = $1 AND p.status = 'active' ORDER BY p.name`, [teamId]
     )).rows;
-    const members = (await query(
+
+    const members = userId ? (await query(`
+      SELECT DISTINCT u.id, u.name
+      FROM team_members tm JOIN users u ON u.id = tm.user_id
+      WHERE u.active = TRUE
+        AND tm.team_id IN (SELECT team_id FROM team_members WHERE user_id = $1)
+      ORDER BY u.name
+    `, [userId])).rows : (await query(
       `SELECT u.id, u.name FROM team_members tm JOIN users u ON u.id = tm.user_id
        WHERE tm.team_id = $1 AND u.active = TRUE ORDER BY u.name`, [teamId]
     )).rows;
@@ -440,8 +457,10 @@ PRAVIDLA:
   Jen pokud opravdu žádný náznak není, nech null.
 - Když poznámka nemá nic akčního, vrať {"tasks": []}.
 
-ČLENOVÉ TÝMU: ${JSON.stringify(members.map(m => m.name))}
-AKTIVNÍ PROJEKTY: ${JSON.stringify(projects.map(p => p.name))}`;
+DOSTUPNÍ ČLENOVÉ (napříč všemi týmy uživatele): ${JSON.stringify(members.map(m => m.name))}
+DOSTUPNÉ PROJEKTY (s týmem): ${JSON.stringify(projects.map(p => ({ project: p.name, team: p.team_name })))}
+
+POZN. K TÝMŮM: úkol můžeš zařadit do JAKÉHOKOLI projektu z nabídky, i z jiného týmu, pokud z poznámky vyplývá, že tam logicky patří (např. „dáme to designerům" → projekt v týmu Design). project_name posuď podle obsahu úkolu, ne podle origin team poznámky.`;
     const userMsg = `Poznámka „${noteTitle || ''}":\n\n${text}`;
 
     const res = await fetch(API_URL, {
@@ -481,11 +500,19 @@ AKTIVNÍ PROJEKTY: ${JSON.stringify(projects.map(p => p.name))}`;
         assignee_name: m?.name || null,
         project_id: p?.id || null,
         project_name: p?.name || null,
+        team_id: p?.team_id || null,
+        team_name: p?.team_name || null,
         priority: VALID_PRIO.includes(t.priority) ? t.priority : 'normal',
         due_date: due,
       };
     }).filter(t => t.title);
-    return { tasks, usage: data.usage };
+    return {
+      tasks,
+      // Cross-team katalog pro frontend dropdowny (modal nemusí sám fetch).
+      available_projects: projects.map(p => ({ id: p.id, name: p.name, team_id: p.team_id, team_name: p.team_name })),
+      available_members:  members.map(m => ({ id: m.id, name: m.name })),
+      usage: data.usage,
+    };
   }
 
   // ── summarize: prostý text ──

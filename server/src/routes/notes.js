@@ -229,7 +229,8 @@ router.post('/:id/ai-process', requireAuth, async (req, res) => {
 
   try {
     const result = await processNote({
-      noteTitle: note.title, noteContent: note.content, action, teamId: note.team_id,
+      noteTitle: note.title, noteContent: note.content, action,
+      teamId: note.team_id, userId: req.user.id,
     });
     if (result.error) return res.status(result.error === 'api_error' ? 502 : 400).json(result);
     res.json(result);

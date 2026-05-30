@@ -91,13 +91,32 @@ router.post('/', requireAuth, async (req, res) => {
   const { name, slug, description, features } = req.body || {};
   if (!name || !slug) return res.status(400).json({ error: 'missing_fields' });
   if (!isValidSlug(slug)) return res.status(400).json({ error: 'invalid_slug', message: 'Slug musí být lowercase, písmena/číslice/pomlčky, 2–32 znaků.' });
+
+  // Sane default — admin si team_roles upraví v Edit team modalu.
+  // Bez tohohle dropdown rolí v Add member nemá žádné položky.
+  const defaultFeatures = {
+    team_roles: { admin: 'Admin', manager: 'Manager', member: 'Člen' },
+    ...(features || {}),
+  };
+
   try {
     const r = await query(`
       INSERT INTO teams (name, slug, description, features)
       VALUES ($1, $2, $3, $4::jsonb)
       RETURNING *
-    `, [name, slug, description || null, JSON.stringify(features || {})]);
-    res.json({ team: r.rows[0] });
+    `, [name, slug, description || null, JSON.stringify(defaultFeatures)]);
+    const team = r.rows[0];
+
+    // Creator (admin) se rovnou stane členem nového teamu s rolí 'admin'.
+    // Bez tohohle by team byl "ghost" — viditelný v list, ale frontend by se
+    // na něj nemohl přepnout (X-Team-Id by neprošlo, middleware by spadlo na default).
+    await query(`
+      INSERT INTO team_members (team_id, user_id, team_role)
+      VALUES ($1, $2, 'admin')
+      ON CONFLICT (team_id, user_id) DO NOTHING
+    `, [team.id, req.user.id]);
+
+    res.json({ team });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'slug_taken' });
     throw err;

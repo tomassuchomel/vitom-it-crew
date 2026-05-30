@@ -40,10 +40,18 @@ export default function SuggestedTasksModal({ suggestion, sourceNote, sourceScop
   const [err, setErr] = useState(null);
 
   useEffect(() => {
+    // Preferuj cross-team katalog ze server-side suggest_tasks (obsahuje projekty
+    // i členy ze VŠECH týmů uživatele). Fallback na API list (current team only).
+    if (suggestion.available_projects && suggestion.available_members) {
+      setProjects(suggestion.available_projects);
+      setUsers(suggestion.available_members);
+      setLoading(false);
+      return;
+    }
     Promise.all([projectsApi.list(), usersApi.list()])
       .then(([p, u]) => { setProjects(p.projects || []); setUsers(u.users || []); })
       .finally(() => setLoading(false));
-  }, []);
+  }, [suggestion]);
 
   const setRow = (i, patch) => setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r));
   const includedRows = rows.filter(r => r.include);
@@ -118,7 +126,11 @@ export default function SuggestedTasksModal({ suggestion, sourceNote, sourceScop
                             r.include && !r.project_id ? 'border-red-300 bg-red-50' : 'border-cream-300'
                           }`}>
                           <option value="">— vyber projekt —</option>
-                          {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          {projects.map(p => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}{p.team_name ? ` · ${p.team_name}` : ''}
+                            </option>
+                          ))}
                         </select>
                         {r.project_name && <span className="text-[10px] text-ink-400 whitespace-nowrap">AI: {r.project_name}</span>}
                       </div>

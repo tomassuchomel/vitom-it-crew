@@ -227,6 +227,21 @@ router.post('/', requireAuth, async (req, res) => {
   const { project_id, parent_id, title, description, assignee_id, status, priority, estimated_h, due_date } = req.body || {};
   if (!project_id || !title) return res.status(400).json({ error: 'missing_fields' });
 
+  // Membership check: project.team_id musí být team, kde je user členem
+  // (nebo je globální admin). Dovoluje cross-team úkoly z poznámky/quick capture,
+  // ale neproblematicky.
+  if (req.user.role !== 'admin') {
+    const ok = await query(`
+      SELECT 1 FROM projects p
+      JOIN team_members tm ON tm.team_id = p.team_id
+      WHERE p.id = $1 AND tm.user_id = $2
+      LIMIT 1
+    `, [Number(project_id), req.user.id]);
+    if (ok.rows.length === 0) {
+      return res.status(403).json({ error: 'not_team_member', message: 'Nejsi členem teamu tohoto projektu.' });
+    }
+  }
+
   // AI agent fields – validuje + filtruje + dopočítá defaulty
   const aiExtract = extractAiFields(req.body || {}, description);
   if (aiExtract.error) return res.status(400).json({ error: aiExtract.error, min: aiExtract.min });
