@@ -23,8 +23,11 @@ const SHELL_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
+  // NEdeláme auto-skipWaiting — nová verze čeká v 'waiting' stavu, dokud
+  // user nepotvrdí přes UpdatePrompt. Zabraňuje, aby se appka přepla pod rukama
+  // uprostřed rozdělané práce.
   event.waitUntil(
-    caches.open(SHELL).then((cache) => cache.addAll(SHELL_ASSETS)).then(() => self.skipWaiting())
+    caches.open(SHELL).then((cache) => cache.addAll(SHELL_ASSETS))
   );
 });
 
@@ -33,6 +36,45 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => !k.endsWith(VERSION)).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
+  );
+});
+
+// Klient zavolá tohle, když user klikne „Aktualizovat" v UpdatePromptu.
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+// Web Push — server posílá JSON { title, body, url, tag, icon }.
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
+  const title = data.title || 'VITOM';
+  const options = {
+    body: data.body || '',
+    icon: data.icon || '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: data.tag || undefined,           // stejný tag = updatuje stávající notifikaci (ne stack)
+    data: { url: data.url || '/' },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Klik na notifikaci → otevři appku na url (nebo focusni existující tab).
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || '/';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // Pokud je appka už otevřená, zaměříme tab + navigujeme.
+      for (const c of clientList) {
+        if ('focus' in c) {
+          c.navigate?.(targetUrl).catch(() => {});
+          return c.focus();
+        }
+      }
+      // Jinak otevři nový tab.
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+    })
   );
 });
 

@@ -3,6 +3,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { useAuth, ROLE_LABELS } from '../auth.jsx';
 import { users as usersApi } from '../api.js';
+import PushOptIn from '../components/PushOptIn.jsx';
 
 export default function Profile() {
   const { user, refreshMe, changePassword } = useAuth();
@@ -15,6 +16,9 @@ export default function Profile() {
         <AvatarCard user={user} onChanged={refreshMe} />
         <NameCard user={user} onSaved={refreshMe} />
         <PasswordCard mustChange={user.must_change_password} onChanged={changePassword} />
+        <Card title="Notifikace" subtitle="Push notifikace v prohlížeči i nainstalované appce.">
+          <PushOptIn />
+        </Card>
       </div>
     </div>
   );

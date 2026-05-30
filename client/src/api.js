@@ -137,6 +137,14 @@ export const notes = {
   shares:  (id) => api.get(`/notes/${id}/shares`).then(r => r.data),
 };
 
+// Web Push — VAPID klíč + (un)subscribe. Backend server/src/routes/push.js.
+export const push = {
+  vapidKey:    () => api.get('/push/vapid-public-key').then(r => r.data),
+  subscribe:   (subscription) => api.post('/push/subscribe', subscription).then(r => r.data),
+  unsubscribe: (endpoint) => api.post('/push/unsubscribe', { endpoint }).then(r => r.data),
+  test:        () => api.post('/push/test').then(r => r.data),
+};
+
 // Scoreboard – per-user task completion stats v rámci current teamu.
 // Server filtruje by req.team_id, takže klient nemusí nic specifikovat.
 export const scoreboard = {

@@ -18,6 +18,7 @@ import Profile from './pages/Profile.jsx';
 import Admin from './pages/Admin.jsx';
 import Scoreboard from './pages/Scoreboard.jsx';
 import Notes from './pages/Notes.jsx';
+import UpdatePrompt from './components/UpdatePrompt.jsx';
 
 function ProtectedRoutes() {
   const { user, loading } = useAuth();
@@ -68,6 +69,8 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/*" element={<ProtectedRoutes />} />
         </Routes>
+        {/* PWA — když SW najde novou verzi, ukáže toast „Aktualizovat". */}
+        <UpdatePrompt />
       </TeamProvider>
     </AuthProvider>
   );

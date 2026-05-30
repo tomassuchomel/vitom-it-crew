@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { query } from '../db.js';
 import { requireAuth, can } from '../auth.js';
+import { sendToUser } from '../push.js';
 
 const router = Router();
 
@@ -110,6 +111,16 @@ router.post('/', requireAuth, async (req, res) => {
 
   const r = await query(`${SELECT_FULL} WHERE q.id = $1`, [ins.rows[0].id]);
   res.json({ question: r.rows[0] });
+
+  // Push notifikace příjemci — fire-and-forget.
+  if (Number(to_user_id) !== req.user.id) {
+    sendToUser(Number(to_user_id), {
+      title: '💬 Nový dotaz',
+      body: `${req.user.name || 'Někdo'}: ${String(question).slice(0, 120)}`,
+      url: `/questions?questionId=${ins.rows[0].id}`,
+      tag: `question-${ins.rows[0].id}`,
+    }).catch(err => console.warn('[push/question]', err.message));
+  }
 });
 
 // Odpověď

@@ -26,6 +26,8 @@ import reviewsRoutes from './routes/reviews.js';
 import teamsRoutes from './routes/teams.js';
 import scoreboardRoutes from './routes/scoreboard.js';
 import notesRoutes from './routes/notes.js';
+import pushRoutes from './routes/push.js';
+import { startPushCron } from './pushCron.js';
 import { agentConfig, describeAgentConfig, validateAgentConfig } from './aiAgent/config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -63,6 +65,7 @@ app.use('/api/reports', reportsRoutes);
 app.use('/api/questions', questionsRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/push', pushRoutes);
 
 // Statické přílohy
 app.use('/uploads', express.static(uploadsDir, {
@@ -108,6 +111,9 @@ async function start() {
     console.error('[server] Migrace/seed selhala:', err.message);
     process.exit(1);
   }
+  // Push cron — deadline reminders 18:00 + daily digest 08:00 (Europe/Prague).
+  startPushCron();
+
   app.listen(PORT, () => {
     console.log(`\n🚀 VITOM IT Crew server běží na portu ${PORT}`);
     console.log(`   Frontend očekáván na: ${CLIENT_URL}`);

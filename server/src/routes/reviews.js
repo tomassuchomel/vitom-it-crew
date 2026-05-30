@@ -12,6 +12,7 @@
 import { Router } from 'express';
 import { query } from '../db.js';
 import { requireAuth, can } from '../auth.js';
+import { sendToUser } from '../push.js';
 
 const router = Router();
 
@@ -83,6 +84,15 @@ router.post('/tasks/:id/review', requireAuth, async (req, res) => {
   // Vrátíme aktualizovaný task + review
   const updR = await query('SELECT * FROM tasks WHERE id = $1', [id]);
   res.json({ task: updR.rows[0], review: rev.rows[0] });
+
+  // Push notifikace assignee — fire-and-forget po response.
+  if (task.assignee_id && task.assignee_id !== req.user.id) {
+    const url = `/my-tasks?taskId=${id}`;
+    const payload = verdict === 'approved'
+      ? { title: '✅ Úkol schválen', body: `„${task.title}" v ${task.project_name}`, url, tag: `task-${id}` }
+      : { title: '🔄 Úkol vrácen k opravě', body: `„${task.title}": ${cleanComment?.slice(0, 100) || ''}`, url: `/needs-fix?taskId=${id}`, tag: `task-${id}` };
+    sendToUser(task.assignee_id, payload).catch(err => console.warn('[push/review]', err.message));
+  }
 });
 
 /**
