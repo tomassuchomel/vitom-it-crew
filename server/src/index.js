@@ -27,6 +27,7 @@ import teamsRoutes from './routes/teams.js';
 import scoreboardRoutes from './routes/scoreboard.js';
 import notesRoutes from './routes/notes.js';
 import pushRoutes from './routes/push.js';
+import emailRoutes from './routes/email.js';
 import { startPushCron } from './pushCron.js';
 import { agentConfig, describeAgentConfig, validateAgentConfig } from './aiAgent/config.js';
 
@@ -66,6 +67,7 @@ app.use('/api/questions', questionsRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/push', pushRoutes);
+app.use('/api/email', emailRoutes);
 
 // Statické přílohy
 app.use('/uploads', express.static(uploadsDir, {

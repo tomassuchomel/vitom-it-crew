@@ -139,6 +139,15 @@ export const notes = {
   shares:  (id) => api.get(`/notes/${id}/shares`).then(r => r.data),
 };
 
+// Email agent (M365). Phase 1 = OAuth + zobrazení Inboxu.
+export const email = {
+  status:     () => api.get('/email/status').then(r => r.data),
+  // /connect je 302 redirect na MS — voláme přes plain location, ne axios.
+  connectUrl: () => '/api/email/connect',
+  disconnect: () => api.post('/email/disconnect').then(r => r.data),
+  messages:   (top = 20) => api.get('/email/messages', { params: { top } }).then(r => r.data),
+};
+
 // Web Push — VAPID klíč + (un)subscribe. Backend server/src/routes/push.js.
 export const push = {
   vapidKey:    () => api.get('/push/vapid-public-key').then(r => r.data),
