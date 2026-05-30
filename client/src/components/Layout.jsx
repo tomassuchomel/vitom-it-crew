@@ -10,6 +10,7 @@ import { questions as questionsApi, reviews as reviewsApi } from '../api.js';
 import VitomLogo from './VitomLogo.jsx';
 import Avatar from './Avatar.jsx';
 import AIAdvisor from './AIAdvisor.jsx';
+import QuickCaptureFAB from './QuickCaptureFAB.jsx';
 
 const NAV = [
   { to: '/',          label: 'Timeline',           icon: '📅' },
@@ -161,6 +162,8 @@ export default function Layout({ children }) {
       </main>
       {/* Vždy viditelný AI poradce – jen pro admin/manager */}
       <AIAdvisor />
+      {/* Quick Capture — hlasovka → AI klasifikuje → akce */}
+      <QuickCaptureFAB />
     </div>
   );
 }

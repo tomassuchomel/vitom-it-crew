@@ -3,10 +3,10 @@ import { useEffect, useState } from 'react';
 import Modal from './Modal.jsx';
 import { questions as questionsApi, users as usersApi } from '../api.js';
 
-export default function AskQuestionModal({ open, onClose, taskId, taskTitle, defaultToUserId, onCreated }) {
+export default function AskQuestionModal({ open, onClose, taskId, taskTitle, defaultToUserId, prefillQuestion, onCreated }) {
   const [users, setUsers] = useState([]);
   const [toUserId, setToUserId] = useState(defaultToUserId || '');
-  const [text, setText] = useState('');
+  const [text, setText] = useState(prefillQuestion || '');
   const [err, setErr] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -14,10 +14,10 @@ export default function AskQuestionModal({ open, onClose, taskId, taskTitle, def
     if (open) {
       usersApi.list().then(d => setUsers(d.users.filter(u => u.active)));
       setToUserId(defaultToUserId || '');
-      setText('');
+      setText(prefillQuestion || '');
       setErr(null);
     }
-  }, [open, defaultToUserId]);
+  }, [open, defaultToUserId, prefillQuestion]);
 
   const submit = async (e) => {
     e.preventDefault();

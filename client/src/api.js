@@ -131,6 +131,8 @@ export const notes = {
   // Cleanup syrového přepisu přes Claude → { cleaned }
   cleanupTranscript: (text) =>
     api.post('/notes/transcript-cleanup', { text }, { timeout: 60000 }).then(r => r.data),
+  // Quick Capture: AI klasifikuje text → { intent, summary, params }
+  classify: (text) => api.post('/notes/ai-classify', { text }, { timeout: 30000 }).then(r => r.data),
   // Sdílení s jiným uživatelem
   share:   (id, userId) => api.post(`/notes/${id}/share`, { user_id: userId }).then(r => r.data),
   unshare: (id, userId) => api.delete(`/notes/${id}/share/${userId}`).then(r => r.data),

@@ -121,6 +121,80 @@ Vrať POUZE upravený text, žádné komentáře okolo.`;
   }
 });
 
+// Quick Capture klasifikace – z hlasovky odhadneme, jestli je to úkol,
+// poznámka, otázka nebo email (zatím fallback). Vrátí návrh, který user
+// pak potvrdí nebo přepne v Quick Capture UI.
+router.post('/ai-classify', requireAuth, async (req, res) => {
+  const raw = String(req.body?.text || '').slice(0, 8000).trim();
+  if (!raw) return res.json({ intent: 'note', summary: '', params: {} });
+  const key = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!key) return res.status(503).json({ error: 'no_api_key', message: 'ANTHROPIC_API_KEY není nastaven.' });
+  for (let i = 0; i < key.length; i++) {
+    if (key.charCodeAt(i) > 255) return res.status(400).json({ error: 'bad_api_key' });
+  }
+  if (!req.team_id) return res.status(400).json({ error: 'no_team' });
+
+  // Členové týmu pro mapování „pošli to Pepovi" → user_id.
+  const members = (await query(
+    `SELECT u.id, u.name FROM team_members tm JOIN users u ON u.id = tm.user_id
+     WHERE tm.team_id = $1 AND u.active = TRUE ORDER BY u.name`, [req.team_id]
+  )).rows;
+
+  const system = `Jsi asistent, který klasifikuje krátký záznam z hlasovky. Vrať POUZE validní JSON v tomto formátu:
+{
+  "intent": "task" | "note" | "question" | "mail",
+  "summary": "1 věta shrnující obsah (max 80 znaků)",
+  "suggested_title": "krátký titulek (max 60 znaků)",
+  "assignee_name": "<přesné jméno člena nebo null>"
+}
+
+PRAVIDLA:
+- "task"     = něco konkrétního, co někdo má udělat (akce, deadline, výsledek)
+- "question" = chci se někoho zeptat (objevují se slova „zeptat se", „ověřit", jméno + otazník)
+- "mail"     = chci komusi napsat / poslat email (objevuje se „napsat", „poslat mail", konkrétní příjemce z venku)
+- "note"     = informace / myšlenka / poznámka bez konkrétní akce — DEFAULT pokud nic jiného nesedí
+- assignee_name vyplň JEN když z textu jasně vyplývá konkrétní člen týmu (pro task/question/mail)
+- assignee_name MUSÍ být přesně jedno ze jmen, jinak null
+
+ČLENOVÉ TÝMU: ${JSON.stringify(members.map(m => m.name))}`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5',
+        max_tokens: 400, system,
+        messages: [{ role: 'user', content: raw }],
+      }),
+    });
+    if (!r.ok) return res.status(502).json({ error: 'classify_failed', message: (await r.text()).slice(0, 300) });
+    const d = await r.json();
+    const txt = (d.content?.[0]?.text || '').replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+    let parsed;
+    try { parsed = JSON.parse(txt); } catch { parsed = { intent: 'note', summary: '', suggested_title: '', assignee_name: null }; }
+
+    const VALID_INTENTS = ['task', 'note', 'question', 'mail'];
+    const intent = VALID_INTENTS.includes(parsed.intent) ? parsed.intent : 'note';
+    const assigneeMatch = (parsed.assignee_name && typeof parsed.assignee_name === 'string')
+      ? members.find(m => m.name.toLowerCase() === parsed.assignee_name.trim().toLowerCase())
+      : null;
+
+    res.json({
+      intent,
+      summary: String(parsed.summary || '').slice(0, 200),
+      params: {
+        suggested_title: String(parsed.suggested_title || '').slice(0, 80),
+        suggested_assignee_id: assigneeMatch?.id || null,
+        suggested_assignee_name: assigneeMatch?.name || null,
+      },
+    });
+  } catch (err) {
+    console.error('[notes/ai-classify]', err);
+    res.status(500).json({ error: 'server_error', message: err.message });
+  }
+});
+
 // AI asistent – odpovídá na otázky nad poznámkami + daty týmu.
 // Body: { question, history?: [{role, content}] }. Team scope z req.team_id.
 router.post('/ai-ask', requireAuth, async (req, res) => {
