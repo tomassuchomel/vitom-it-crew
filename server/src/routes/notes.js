@@ -20,31 +20,91 @@ const router = Router();
 // Audio z porady drží multer v RAM. Whisper má limit 25 MB na soubor.
 const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
+// Pomocná funkce pro volání Whisper – sdílená batch i chunked endpointem.
+async function whisperTranscribe(buffer, mimetype) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return { error: 'no_openai_key', status: 503, message: 'Přepis vyžaduje OPENAI_API_KEY v server/.env (Whisper).' };
+  const form = new FormData();
+  form.append('file', new Blob([buffer], { type: mimetype || 'audio/webm' }), 'audio.webm');
+  form.append('model', 'whisper-1');
+  form.append('language', 'cs');
+  const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form,
+  });
+  if (!r.ok) {
+    const txt = await r.text();
+    return { error: 'whisper_error', status: 502, message: txt.slice(0, 300) };
+  }
+  const d = await r.json();
+  return { text: d.text || '' };
+}
+
 // Přepis nahrávky porady přes OpenAI Whisper. Multipart pole 'audio'.
 // Vrací { text }. Vyžaduje OPENAI_API_KEY (Anthropic speech-to-text nemá).
 router.post('/transcribe', requireAuth, audioUpload.single('audio'), async (req, res) => {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return res.status(503).json({ error: 'no_openai_key', message: 'Přepis vyžaduje OPENAI_API_KEY v server/.env (Whisper). Anthropic speech-to-text nemá.' });
   if (!req.file) return res.status(400).json({ error: 'no_audio' });
   try {
-    const form = new FormData();
-    form.append('file', new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/webm' }), 'porada.webm');
-    form.append('model', 'whisper-1');
-    form.append('language', 'cs');
-    const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    const r = await whisperTranscribe(req.file.buffer, req.file.mimetype);
+    if (r.error) return res.status(r.status).json(r);
+    res.json({ text: r.text });
+  } catch (err) {
+    console.error('[notes/transcribe]', err);
+    res.status(500).json({ error: 'server_error', message: err.message });
+  }
+});
+
+// Chunked variant pro real-time přepis: stejný backend, separátní cesta
+// pro budoucí ladění (limity, fronty…). Klient posílá ~10s chunky.
+router.post('/transcribe-chunk', requireAuth, audioUpload.single('audio'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no_audio' });
+  try {
+    const r = await whisperTranscribe(req.file.buffer, req.file.mimetype);
+    if (r.error) return res.status(r.status).json(r);
+    res.json({ text: r.text });
+  } catch (err) {
+    console.error('[notes/transcribe-chunk]', err);
+    res.status(500).json({ error: 'server_error', message: err.message });
+  }
+});
+
+// Claude cleanup syrového přepisu – opraví interpunkci, sjednotí pojmy přes
+// chunky, přepíše do logicky vázaných vět. Vrací upravený text.
+// Vstup: { text }; výstup: { cleaned }.
+router.post('/transcript-cleanup', requireAuth, async (req, res) => {
+  const raw = String(req.body?.text || '').slice(0, 30000);
+  if (!raw.trim()) return res.json({ cleaned: '' });
+  const key = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!key) return res.status(503).json({ error: 'no_api_key', message: 'ANTHROPIC_API_KEY není nastaven.' });
+  // Detekce bad bytes v klíči (stejně jako validateApiKey v ai.js)
+  for (let i = 0; i < key.length; i++) {
+    if (key.charCodeAt(i) > 255) return res.status(400).json({ error: 'bad_api_key', message: 'ANTHROPIC_API_KEY obsahuje neplatný znak (např. „…").' });
+  }
+  const system = `Dostaneš syrový přepis mluveného slova z porady (čeština). Tvůj úkol:
+1. Oprav interpunkci a velká písmena, ať jsou logické věty.
+2. Sjednoť odlišné zápisy stejného pojmu (např. „cerem"/„CRM" → „CRM" když to dává smysl).
+3. Spravuj zjevné chyby přepisu, kde z kontextu plyne jiné slovo.
+4. NEPŘIDÁVEJ obsah, který v přepisu není. NEZMĚNUJ smysl.
+5. Zachovaj přirozený mluvený styl, ne všechno přepisuj na formální projev.
+
+Vrať POUZE upravený text, žádné komentáře okolo.`;
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${key}` },
-      body: form,
+      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5',
+        max_tokens: 4000, system,
+        messages: [{ role: 'user', content: raw }],
+      }),
     });
     if (!r.ok) {
       const txt = await r.text();
-      console.error('[notes/transcribe] whisper', r.status, txt.slice(0, 300));
-      return res.status(502).json({ error: 'whisper_error', message: txt.slice(0, 300) });
+      return res.status(502).json({ error: 'cleanup_failed', message: txt.slice(0, 300) });
     }
-    const data = await r.json();
-    res.json({ text: data.text || '' });
+    const d = await r.json();
+    res.json({ cleaned: d.content?.[0]?.text || raw });
   } catch (err) {
-    console.error('[notes/transcribe]', err);
+    console.error('[notes/transcript-cleanup]', err);
     res.status(500).json({ error: 'server_error', message: err.message });
   }
 });

@@ -108,6 +108,18 @@ export const notes = {
       timeout: 120000, // přepis může trvat
     }).then(r => r.data);
   },
+  // Real-time: jeden ~10s chunk → text
+  transcribeChunk: (audioBlob) => {
+    const fd = new FormData();
+    fd.append('audio', audioBlob, 'chunk.webm');
+    return api.post('/notes/transcribe-chunk', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
+    }).then(r => r.data);
+  },
+  // Cleanup syrového přepisu přes Claude → { cleaned }
+  cleanupTranscript: (text) =>
+    api.post('/notes/transcript-cleanup', { text }, { timeout: 60000 }).then(r => r.data),
   // Sdílení s jiným uživatelem
   share:   (id, userId) => api.post(`/notes/${id}/share`, { user_id: userId }).then(r => r.data),
   unshare: (id, userId) => api.delete(`/notes/${id}/share/${userId}`).then(r => r.data),
