@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Maskable: safe zone je vnitřních 80% (~102px padding) — Android ji ořízne do kruhu/squircle. -->
+  <rect width="512" height="512" fill="#0c363e"/>
+  <text x="256" y="332" font-family="Source Sans 3, Source Sans Pro, -apple-system, sans-serif"
+        font-size="240" font-weight="700" fill="#eee9e4" text-anchor="middle">V</text>
+  <circle cx="350" cy="356" r="30" fill="#e72b78"/>
+</svg>

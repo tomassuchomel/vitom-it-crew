@@ -87,6 +87,17 @@ export const ai = {
   accuracy: () => api.get('/ai/accuracy').then(r => r.data),
 };
 
+// Whisper bere přípony jako hint pro container. WebM (Chrome/Firefox) vs MP4
+// (iOS Safari). Bez správné přípony někdy Whisper vrací 400.
+const audioExt = (blob) => {
+  const t = (blob?.type || '').toLowerCase();
+  if (t.includes('mp4')) return '.m4a';
+  if (t.includes('ogg')) return '.ogg';
+  if (t.includes('wav')) return '.wav';
+  if (t.includes('mpeg') || t.includes('mp3')) return '.mp3';
+  return '.webm';
+};
+
 // Poznámky – hierarchický strom (množina/podmnožina), team-scoped.
 // Backend server/src/routes/notes.js. Do budoucna čteno AI agentem.
 export const notes = {
@@ -102,7 +113,7 @@ export const notes = {
   // Přepis nahrávky porady přes Whisper → { text }
   transcribe: (audioBlob) => {
     const fd = new FormData();
-    fd.append('audio', audioBlob, 'porada.webm');
+    fd.append('audio', audioBlob, `porada${audioExt(audioBlob)}`);
     return api.post('/notes/transcribe', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 120000, // přepis může trvat
@@ -111,7 +122,7 @@ export const notes = {
   // Real-time: jeden ~10s chunk → text
   transcribeChunk: (audioBlob) => {
     const fd = new FormData();
-    fd.append('audio', audioBlob, 'chunk.webm');
+    fd.append('audio', audioBlob, `chunk${audioExt(audioBlob)}`);
     return api.post('/notes/transcribe-chunk', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 60000,

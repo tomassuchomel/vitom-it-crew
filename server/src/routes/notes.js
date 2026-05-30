@@ -20,12 +20,24 @@ const router = Router();
 // Audio z porady drží multer v RAM. Whisper má limit 25 MB na soubor.
 const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
+// Whisper API rozhoduje formát podle filename extenze. iOS Safari produkuje
+// audio/mp4 (AAC), Chrome/Firefox audio/webm. Filename musíme odvodit z mimetype.
+function filenameForMime(mimetype) {
+  const t = String(mimetype || '').toLowerCase();
+  if (t.includes('mp4'))  return 'audio.m4a';
+  if (t.includes('ogg'))  return 'audio.ogg';
+  if (t.includes('wav'))  return 'audio.wav';
+  if (t.includes('mpeg') || t.includes('mp3')) return 'audio.mp3';
+  return 'audio.webm';
+}
+
 // Pomocná funkce pro volání Whisper – sdílená batch i chunked endpointem.
 async function whisperTranscribe(buffer, mimetype) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) return { error: 'no_openai_key', status: 503, message: 'Přepis vyžaduje OPENAI_API_KEY v server/.env (Whisper).' };
   const form = new FormData();
-  form.append('file', new Blob([buffer], { type: mimetype || 'audio/webm' }), 'audio.webm');
+  const mt = mimetype || 'audio/webm';
+  form.append('file', new Blob([buffer], { type: mt }), filenameForMime(mt));
   form.append('model', 'whisper-1');
   form.append('language', 'cs');
   const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {

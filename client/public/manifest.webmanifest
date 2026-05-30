@@ -1,0 +1,32 @@
+{
+  "name": "VITOM IT Crew",
+  "short_name": "VITOM",
+  "description": "Multi-team správa projektů, úkolů a poznámek pro VITOM realitní ekosystém.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#eee9e4",
+  "theme_color": "#0c363e",
+  "lang": "cs",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

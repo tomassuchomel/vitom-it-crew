@@ -19,6 +19,16 @@ const MIN_LEN_FOR_CLEANUP = 100; // málo textu nemá smysl posílat na cleanup
 
 const fmtTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
+// iOS Safari nepodporuje WebM/Opus → produkuje audio/mp4 (AAC). Chrome/Firefox
+// preferují WebM/Opus. Vrátíme první podporovaný MIME, nebo prázdný string
+// (= browser default, MediaRecorder pak vybere sám). Whisper API bere obojí.
+const pickAudioMime = () => {
+  if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/mp4;codecs=mp4a.40.2'];
+  for (const m of candidates) if (MediaRecorder.isTypeSupported(m)) return m;
+  return '';
+};
+
 export default function VoiceMeetingModal({ onClose, onSubmit, submitLabel = 'Vložit přepis', onCreateNote }) {
   const [phase, setPhase] = useState('idle'); // idle | recording | cleaning | done | error
   const [secs, setSecs] = useState(0);
@@ -69,11 +79,14 @@ export default function VoiceMeetingModal({ onClose, onSubmit, submitLabel = 'Vl
   const startNewMR = () => {
     if (!streamRef.current) return;
     const localChunks = [];
-    const mr = new MediaRecorder(streamRef.current);
+    // MIME se vybírá per-browser. iOS Safari = audio/mp4, Chrome = audio/webm.
+    const mime = pickAudioMime();
+    const mr = mime ? new MediaRecorder(streamRef.current, { mimeType: mime }) : new MediaRecorder(streamRef.current);
+    const effectiveMime = mr.mimeType || mime || 'audio/webm';
     mr.ondataavailable = (e) => { if (e.data.size > 0) localChunks.push(e.data); };
     mr.onstop = async () => {
       if (localChunks.length === 0) return;
-      const blob = new Blob(localChunks, { type: 'audio/webm' });
+      const blob = new Blob(localChunks, { type: effectiveMime });
       if (blob.size < 1000) return; // chunk skoro prázdný (ticho/restart artefakt)
       try {
         const d = await notesApi.transcribeChunk(blob);

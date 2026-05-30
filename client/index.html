@@ -2,8 +2,24 @@
 <html lang="cs">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>VITOM IT Crew</title>
+
+    <!-- PWA manifest + barvy. theme-color = brand-500 (Midnight Green). -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0c363e" />
+    <meta name="description" content="Multi-team správa projektů, úkolů a poznámek pro VITOM realitní ekosystém." />
+
+    <!-- iOS Safari — apple-touch-icon je povinné PNG. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+
+    <!-- iOS "Add to Home Screen" → standalone režim s tmavým status barem. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="VITOM" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <!-- Source Sans Pro / Source Sans 3 – sekundární písmo z brand manuálu VITOM -->
@@ -12,5 +28,17 @@
   <body class="bg-cream-100">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+
+    <!-- PWA service worker. Registrace běží asynchronně po loadu, žádný blocking.
+         Verze v SW samotném (VERSION const) se mění při major změnách cache schématu. -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch((err) => {
+            console.warn('[PWA] SW registration failed:', err);
+          });
+        });
+      }
+    </script>
   </body>
 </html>

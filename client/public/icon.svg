@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- VITOM brand colors: Midnight Green #0c363e, Linen #eee9e4, Cerise #e72b78 -->
+  <rect width="512" height="512" rx="96" fill="#0c363e"/>
+  <text x="256" y="362" font-family="Source Sans 3, Source Sans Pro, -apple-system, sans-serif"
+        font-size="320" font-weight="700" fill="#eee9e4" text-anchor="middle">V</text>
+  <circle cx="400" cy="400" r="40" fill="#e72b78"/>
+</svg>

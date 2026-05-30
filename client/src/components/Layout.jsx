@@ -33,6 +33,10 @@ export default function Layout({ children }) {
   const location = useLocation();
   const { currentTeam } = useTeams();
   const [counts, setCounts] = useState({ inboxPending: 0, sentPending: 0, reviewQueue: 0, needsFix: 0 });
+  // Mobile drawer: na malých obrazovkách je sidebar schovaný; hamburger ho otevře.
+  // lg+ má sidebar pořád viditelný (původní desktop UX).
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  useEffect(() => { setMobileMenuOpen(false); }, [location.pathname]);
 
   // Načítáme počet nevyřízených dotazů + review fronty + vrácených úkolů.
   // Periodicky (30s) a při změně stránky, ať badge svítí aktuální číslo.
@@ -62,9 +66,40 @@ export default function Layout({ children }) {
     nav('/login');
   };
 
+  // Sidebar styles: na lg+ statické, na mobilu fixed slide-in drawer.
+  const sidebarClasses = [
+    'w-64 bg-brand-500 text-cream-100 flex-col',
+    'lg:flex lg:static lg:translate-x-0',
+    'fixed inset-y-0 left-0 z-40 flex transition-transform duration-200',
+    mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
+  ].join(' ');
+
   return (
     <div className="flex h-full">
-      <aside className="w-64 bg-brand-500 text-cream-100 flex flex-col">
+      {/* Mobile topbar — jen pod lg breakpointem. Obsahuje hamburger + název current teamu. */}
+      <div
+        className="lg:hidden fixed top-0 inset-x-0 z-30 bg-brand-500 text-cream-50 flex items-center gap-3 px-3 h-12 shadow-md"
+        style={{ paddingTop: 'env(safe-area-inset-top)', height: 'calc(3rem + env(safe-area-inset-top))' }}
+      >
+        <button
+          onClick={() => setMobileMenuOpen(true)}
+          className="p-2 -ml-1 rounded hover:bg-brand-600 active:bg-brand-700"
+          aria-label="Menu"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
+        </button>
+        <div className="font-bold text-sm tracking-tight">VITOM</div>
+        <div className="text-[10px] uppercase tracking-[0.18em] text-accent-400 truncate">
+          {currentTeam?.name || ''}
+        </div>
+      </div>
+
+      {/* Backdrop pro otevřený drawer */}
+      {mobileMenuOpen && (
+        <div className="lg:hidden fixed inset-0 bg-black/40 z-30" onClick={() => setMobileMenuOpen(false)} />
+      )}
+
+      <aside className={sidebarClasses}>
         <div className="px-6 py-6 border-b border-brand-700/50 flex items-center gap-3">
           <div className="text-cream-50">
             <VitomLogo size={40} color="currentColor" />
@@ -120,7 +155,8 @@ export default function Layout({ children }) {
           >Odhlásit</button>
         </div>
       </aside>
-      <main className="flex-1 overflow-auto bg-cream-100">
+      {/* Mobil: pt = výška topbaru (3rem) + iOS safe area. lg+ žádný topbar → pt-0. */}
+      <main className="flex-1 overflow-auto bg-cream-100 pt-[calc(3rem+env(safe-area-inset-top))] lg:pt-0">
         {children}
       </main>
       {/* Vždy viditelný AI poradce – jen pro admin/manager */}
