@@ -140,13 +140,17 @@ export const notes = {
   shares:  (id) => api.get(`/notes/${id}/shares`).then(r => r.data),
 };
 
-// Email agent (M365). Phase 1 = OAuth + zobrazení Inboxu.
+// Email agent (M365). Phase 1 = OAuth + Inbox. Phase 2a = AI klasifikace + úkoly.
 export const email = {
   status:     () => api.get('/email/status').then(r => r.data),
   // /connect je 302 redirect na MS — voláme přes plain location, ne axios.
   connectUrl: () => '/api/email/connect',
   disconnect: () => api.post('/email/disconnect').then(r => r.data),
   messages:   (top = 20) => api.get('/email/messages', { params: { top } }).then(r => r.data),
+  // Pošleme zhuštěné info o viditelných zprávách, server klasifikuje + uloží.
+  classify:   (messages) => api.post('/email/classify', { messages }, { timeout: 60000 }).then(r => r.data),
+  // Z jednoho emailu AI vytáhne návrhy úkolů (SuggestedTasksModal-kompatibilní).
+  extractTasks: (msgId) => api.post(`/email/${encodeURIComponent(msgId)}/extract-tasks`, {}, { timeout: 60000 }).then(r => r.data),
 };
 
 // Web Push — VAPID klíč + (un)subscribe. Backend server/src/routes/push.js.
