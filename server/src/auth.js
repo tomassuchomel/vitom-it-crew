@@ -32,7 +32,7 @@ export async function requireAuth(req, res, next) {
     // čerstvá data uživatele z DB
     const r = await query(
       `SELECT id, email, name, first_name, last_name, role, hourly_rate, active,
-              must_change_password, avatar_updated_at
+              must_change_password, avatar_updated_at, can_see_all_teams
        FROM users WHERE id = $1`,
       [payload.id]
     );

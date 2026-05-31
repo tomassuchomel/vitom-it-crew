@@ -31,10 +31,19 @@ function validateApiKey() {
 }
 
 // Sběr kontextu z DB
-export async function buildContext() {
+// scope: 'team' (default) – filtruj na teamId; 'all' – napříč všemi týmy (executive coach).
+// Když scope='team' a teamId není, vrátíme prázdný kontext (žádný team = nic neukazujeme).
+export async function buildContext({ teamId, scope = 'team' } = {}) {
+  const filterAll = scope === 'all';
+  if (!filterAll && !teamId) {
+    return { today: new Date().toISOString().slice(0, 10), projects: [], velocity: [], accuracy: [] };
+  }
+
+  // projects + team join (pro coach 'all' chceme i názvy týmů)
   const projectsR = await query(`
     SELECT p.*,
       mu.name AS manager_name,
+      tm.name AS team_name,
       (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) AS task_count,
       (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = 'done') AS done_count,
       (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = 'in_progress') AS inprog_count,
@@ -46,9 +55,11 @@ export async function buildContext() {
          WHERE te.project_id = p.id) AS cost_so_far
     FROM projects p
     LEFT JOIN users mu ON mu.id = p.manager_id
+    LEFT JOIN teams tm ON tm.id = p.team_id
     WHERE p.status = 'active'
+      ${filterAll ? '' : 'AND p.team_id = $1'}
     ORDER BY p.due_date ASC
-  `);
+  `, filterAll ? [] : [teamId]);
   const projects = projectsR.rows;
 
   for (const p of projects) {
@@ -62,20 +73,23 @@ export async function buildContext() {
     p.tasks = tasksR.rows;
   }
 
+  // velocity: členové daného teamu (resp. všichni active při scope='all')
   const velocityR = await query(`
     SELECT u.id, u.name, u.role, u.hourly_rate,
            COALESCE(SUM(te.hours), 0) AS hours_14d
     FROM users u
+    ${filterAll ? '' : 'JOIN team_members tmem ON tmem.user_id = u.id AND tmem.team_id = $1'}
     LEFT JOIN time_entries te ON te.user_id = u.id AND te.date >= CURRENT_DATE - INTERVAL '14 days'
     WHERE u.active = TRUE
     GROUP BY u.id
     ORDER BY hours_14d DESC
-  `);
+  `, filterAll ? [] : [teamId]);
 
   const accuracy = await computeAccuracy();
 
   return {
     today: new Date().toISOString().slice(0, 10),
+    scope,
     projects,
     velocity: velocityR.rows,
     accuracy,
@@ -149,11 +163,24 @@ FORMÁT ODPOVĚDI – výhradně validní JSON (nic dalšího okolo):
   "recommendations": ["...", "..."]
 }`;
 
-export async function getAdvice() {
+export async function getAdvice({ teamId, scope = 'team' } = {}) {
   const keyCheck = validateApiKey();
   if (!keyCheck.ok) return { error: keyCheck.reason, message: keyCheck.message };
-  const ctx = await buildContext();
+  const ctx = await buildContext({ teamId, scope });
+  if (ctx.projects.length === 0) {
+    return {
+      status: 'ok',
+      headline: scope === 'all' ? 'Žádné aktivní projekty napříč týmy.' : 'Tento tým nemá aktivní projekty.',
+      summary: 'Není co analyzovat — zatím tu nejsou žádné aktivní projekty.',
+      projects: [],
+      recommendations: [],
+    };
+  }
+  const scopeNote = scope === 'all'
+    ? 'EXECUTIVE VIEW: analyzuješ projekty NAPŘÍČ VŠEMI TÝMY firmy. U každého projektu je pole team_name — v komentářích zmiňuj, ze kterého týmu projekt je.'
+    : 'TEAM VIEW: analyzuješ projekty JEDNOHO konkrétního týmu.';
   const userMessage = `Aktuální datum: ${ctx.today}
+${scopeNote}
 
 PROJEKTY:
 ${JSON.stringify(ctx.projects, null, 2)}
@@ -530,12 +557,16 @@ Odpověz česky, max 5 odrážek nebo 3 věty. Buď věcný, nevymýšlej nic, c
   return { reply: data.content?.[0]?.text || '', usage: data.usage };
 }
 
-export async function chat(messages) {
+export async function chat(messages, { teamId, scope = 'team' } = {}) {
   const keyCheck = validateApiKey();
   if (!keyCheck.ok) return { error: keyCheck.reason, message: keyCheck.message };
-  const ctx = await buildContext();
+  const ctx = await buildContext({ teamId, scope });
+  const scopeNote = scope === 'all'
+    ? 'KONTEXT: vidíš data ZE VŠECH TÝMŮ. U projektů je team_name.'
+    : 'KONTEXT: vidíš data JEDNOHO konkrétního týmu.';
   const systemWithCtx = `${SYSTEM_PROMPT}
 
+${scopeNote}
 DATA, KE KTERÝM MŮŽEŠ ODKAZOVAT (nemůžeš měnit, jen analyzovat):
 DATUM: ${ctx.today}
 PROJEKTY: ${JSON.stringify(ctx.projects)}

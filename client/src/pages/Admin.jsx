@@ -780,6 +780,7 @@ function EditUserModal({ userId, users, onClose, onSaved }) {
     role:       userData?.role || 'manager',
     hourly_rate:userData?.hourly_rate || 0,
     active:     userData?.active ?? true,
+    can_see_all_teams: !!userData?.can_see_all_teams,
   });
   const [allTeams, setAllTeams] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -865,6 +866,11 @@ function EditUserModal({ userId, users, onClose, onSaved }) {
           <label className="flex items-center gap-2 text-sm cursor-pointer">
             <input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} />
             Aktivní (může se přihlásit a být asignován)
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={form.can_see_all_teams}
+              onChange={e => setForm({ ...form, can_see_all_teams: e.target.checked })} />
+            Vidí AI Coach napříč všemi týmy (executive view)
           </label>
           <button onClick={resetPassword} className="text-xs text-brand-500 hover:text-brand-600 underline">
             Resetovat heslo na výchozí

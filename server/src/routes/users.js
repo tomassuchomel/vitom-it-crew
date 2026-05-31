@@ -30,6 +30,7 @@ function publicUser(u, { includeRate = false } = {}) {
     active: u.active,
     must_change_password: !!u.must_change_password,
     avatar_updated_at: u.avatar_updated_at,
+    can_see_all_teams: !!u.can_see_all_teams,
   };
   if (includeRate) out.hourly_rate = u.hourly_rate;
   return out;
@@ -52,7 +53,7 @@ router.get('/', requireAuth, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
     const r = await query(
       `SELECT u.id, u.email, u.name, u.first_name, u.last_name, u.role, u.hourly_rate, u.active,
-              u.must_change_password, u.avatar_updated_at,
+              u.must_change_password, u.avatar_updated_at, u.can_see_all_teams,
               COALESCE(
                 (SELECT json_agg(json_build_object('team_id', tm.team_id, 'team_role', tm.team_role, 'team_name', t.name, 'team_slug', t.slug)
                                  ORDER BY tm.team_id)
@@ -195,6 +196,7 @@ router.put('/:id', requireAuth, requireRole('admin'), async (req, res) => {
     role = cur.role,
     hourly_rate = cur.hourly_rate,
     active = cur.active,
+    can_see_all_teams = cur.can_see_all_teams,
   } = req.body || {};
 
   // Pokud admin pošle first/last, použijeme je a přegenerujeme name
@@ -207,13 +209,14 @@ router.put('/:id', requireAuth, requireRole('admin'), async (req, res) => {
 
   await query(
     `UPDATE users SET name = $1, first_name = $2, last_name = $3,
-                      role = $4, hourly_rate = $5, active = $6
-     WHERE id = $7`,
-    [newName, first, last, role, Number(hourly_rate) || 0, !!active, id]
+                      role = $4, hourly_rate = $5, active = $6,
+                      can_see_all_teams = $7
+     WHERE id = $8`,
+    [newName, first, last, role, Number(hourly_rate) || 0, !!active, !!can_see_all_teams, id]
   );
   const r = await query(
     `SELECT id, email, name, first_name, last_name, role, hourly_rate, active,
-            must_change_password, avatar_updated_at
+            must_change_password, avatar_updated_at, can_see_all_teams
      FROM users WHERE id = $1`,
     [id]
   );

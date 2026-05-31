@@ -4,6 +4,8 @@ import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { ai as aiApi } from '../api.js';
+import { useAuth } from '../auth.jsx';
+import { useTeams } from '../teams.jsx';
 
 const STATUS_STYLE = {
   ok:      { dot: 'bg-emerald-500', label: 'V pohodě',     bg: 'bg-emerald-50',  text: 'text-emerald-800', border: 'border-emerald-200' },
@@ -12,6 +14,11 @@ const STATUS_STYLE = {
 };
 
 export default function AIPage() {
+  const { user } = useAuth();
+  const { currentTeam } = useTeams();
+  const canSeeAll = !!user?.can_see_all_teams;
+  // scope: 'team' (analyzuje currently-selected team) | 'all' (executive cross-team)
+  const [scope, setScope] = useState('team');
   const [enabled, setEnabled] = useState(null);
   const [advice, setAdvice] = useState(null);
   const [accuracy, setAccuracy] = useState([]);
@@ -23,18 +30,27 @@ export default function AIPage() {
   const chatRef = useRef();
 
   useEffect(() => {
-    // Accuracy je nezávislá na AI – načteme vždy, i bez API klíče
     aiApi.accuracy().then(d => setAccuracy(d.accuracy || [])).catch(() => {});
     aiApi.status().then(d => {
       setEnabled(d.enabled);
-      if (d.enabled) loadAdvice();
+      if (d.enabled) loadAdvice(scope);
     });
   }, []);
 
-  const loadAdvice = async () => {
+  // Po změně scope nebo teamu znovu načteme analýzu + resetneme chat (jiný kontext).
+  useEffect(() => {
+    if (enabled) {
+      setAdvice(null);
+      setChatLog([]);
+      loadAdvice(scope);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, currentTeam?.id]);
+
+  const loadAdvice = async (s = scope) => {
     setLoading(true); setErr(null);
     try {
-      const d = await aiApi.advice();
+      const d = await aiApi.advice(s);
       if (d.error) setErr(d.message || d.error);
       else setAdvice(d.advice);
     } catch (e) {
@@ -53,7 +69,7 @@ export default function AIPage() {
     setChatInput('');
     setChatLoading(true);
     try {
-      const d = await aiApi.chat(newLog);
+      const d = await aiApi.chat(newLog, scope);
       const reply = d.error ? `❌ ${d.message || d.error}` : d.reply;
       setChatLog([...newLog, { role: 'assistant', content: reply }]);
     } finally {
@@ -68,14 +84,30 @@ export default function AIPage() {
   return (
     <div>
       <PageHeader
-        title="AI Coach"
-        subtitle="Projektový poradce – tempo, rizika, doporučení"
+        title={scope === 'all' ? 'AI Coach (celá firma)' : `AI Coach${currentTeam?.name ? ` (${currentTeam.name})` : ''}`}
+        subtitle={scope === 'all'
+          ? 'Executive pohled napříč všemi týmy — tempo, rizika, doporučení'
+          : 'Projektový poradce — tempo, rizika, doporučení'}
         actions={enabled && (
-          <button
-            onClick={loadAdvice}
-            disabled={loading}
-            className="px-4 py-2 bg-brand-500 text-white rounded-lg hover:bg-brand-600 text-sm font-medium disabled:opacity-50"
-          >{loading ? 'Aktualizuji…' : '↻ Aktualizovat'}</button>
+          <div className="flex items-center gap-2">
+            {canSeeAll && (
+              <div className="flex rounded-lg border border-cream-300 overflow-hidden text-sm">
+                <button
+                  onClick={() => setScope('team')}
+                  className={`px-3 py-1.5 ${scope === 'team' ? 'bg-brand-500 text-white' : 'bg-white text-ink-600 hover:bg-cream-50'}`}
+                >Tento tým</button>
+                <button
+                  onClick={() => setScope('all')}
+                  className={`px-3 py-1.5 ${scope === 'all' ? 'bg-brand-500 text-white' : 'bg-white text-ink-600 hover:bg-cream-50'}`}
+                >Celá firma</button>
+              </div>
+            )}
+            <button
+              onClick={() => loadAdvice()}
+              disabled={loading}
+              className="px-4 py-2 bg-brand-500 text-white rounded-lg hover:bg-brand-600 text-sm font-medium disabled:opacity-50"
+            >{loading ? 'Aktualizuji…' : '↻ Aktualizovat'}</button>
+          </div>
         )}
       />
 

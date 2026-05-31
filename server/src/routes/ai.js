@@ -22,11 +22,16 @@ router.get('/accuracy', requireAuth, async (req, res) => {
   }
 });
 
-// Hlavní analýza projektů a tempa – jen admin/manager
+// Hlavní analýza projektů a tempa – jen admin/manager.
+// ?scope=team (default) → req.team_id; ?scope=all → cross-team (jen pro users s can_see_all_teams)
 router.get('/advice', requireAuth, async (req, res) => {
   if (!can.seeAllHours(req.user)) return res.status(403).json({ error: 'forbidden' });
+  const scope = req.query.scope === 'all' ? 'all' : 'team';
+  if (scope === 'all' && !req.user.can_see_all_teams) {
+    return res.status(403).json({ error: 'forbidden', message: 'Executive view dostupný jen pro privilegované uživatele.' });
+  }
   try {
-    const result = await getAdvice();
+    const result = await getAdvice({ teamId: req.team_id, scope });
     res.json(result);
   } catch (err) {
     console.error('[ai/advice]', err);
@@ -35,15 +40,19 @@ router.get('/advice', requireAuth, async (req, res) => {
 });
 
 // Chat – uživatel se může zeptat na cokoli
-// Body: { messages: [{ role: 'user'|'assistant', content: '...' }, ...] }
+// Body: { messages: [{ role: 'user'|'assistant', content: '...' }, ...], scope?: 'team'|'all' }
 router.post('/chat', requireAuth, async (req, res) => {
   if (!can.seeAllHours(req.user)) return res.status(403).json({ error: 'forbidden' });
-  const { messages } = req.body || {};
+  const { messages, scope: rawScope } = req.body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'no_messages' });
   }
+  const scope = rawScope === 'all' ? 'all' : 'team';
+  if (scope === 'all' && !req.user.can_see_all_teams) {
+    return res.status(403).json({ error: 'forbidden', message: 'Executive chat dostupný jen pro privilegované uživatele.' });
+  }
   try {
-    const result = await chat(messages);
+    const result = await chat(messages, { teamId: req.team_id, scope });
     res.json(result);
   } catch (err) {
     console.error('[ai/chat]', err);
