@@ -9,7 +9,7 @@
 // Pozn.: žádný offline data layer ve vrstvě 2 – appka offline ukáže shell, ale
 // jakákoliv akce (load notes/tasks/...) selže. To je vědomě jednoduché.
 
-const VERSION = 'vitom-it-crew-v2';
+const VERSION = 'vitom-it-crew-v3';
 const SHELL = 'shell-' + VERSION;
 
 const SHELL_ASSETS = [
@@ -45,17 +45,23 @@ self.addEventListener('message', (event) => {
 });
 
 // Web Push — server posílá JSON { title, body, url, tag, icon }.
+// iOS Safari je citlivé:
+//   - prázdný body schová notifikaci do tichého centra → vždy aspoň „."
+//   - undefined v options crashuje JSON serializaci → stavíme cleanly
+//   - requireInteraction drží notifikaci viditelnou, dokud user nezareaguje
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
-  const title = data.title || 'VITOM';
+  const title = String(data.title || 'VITOM').trim() || 'VITOM';
+  const body  = String(data.body  || 'Nová událost').trim() || 'Nová událost';
   const options = {
-    body: data.body || '',
+    body,
     icon: data.icon || '/icon-192.png',
     badge: '/icon-192.png',
-    tag: data.tag || undefined,           // stejný tag = updatuje stávající notifikaci (ne stack)
+    requireInteraction: true,
     data: { url: data.url || '/' },
   };
+  if (data.tag) options.tag = String(data.tag);
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
