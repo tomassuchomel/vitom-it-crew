@@ -87,7 +87,7 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
       onClick={onClose}
     >
       <div
-        className="bg-white w-full md:max-w-3xl md:rounded-xl shadow-2xl flex flex-col md:max-h-[92vh]"
+        className="bg-white w-full md:max-w-3xl md:rounded-xl shadow-2xl flex flex-col h-full md:h-auto md:max-h-[92vh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Hlavička */}
@@ -338,7 +338,7 @@ function FullEditSection({ task, onSave }) {
             className="w-full px-3 py-2 border border-ink-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
           />
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
             <label className="block text-xs font-medium text-ink-500 mb-1">Priorita</label>
             <select

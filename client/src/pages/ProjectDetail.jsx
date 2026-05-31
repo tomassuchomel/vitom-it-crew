@@ -378,7 +378,7 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
         <Textarea label="Popis" value={form.description} onChange={v => setForm({ ...form, description: v })} />
         <TimelineFlags form={form} setForm={setForm} />
         {!form.no_timeline && (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input label="Začátek *" type="date" value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} required={!form.no_timeline} />
             <Input label="Termín (nepovinné)" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} />
           </div>

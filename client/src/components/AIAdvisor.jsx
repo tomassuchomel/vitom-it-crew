@@ -85,7 +85,7 @@ export default function AIAdvisor() {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="fixed bottom-5 right-5 z-40 flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white shadow-lg rounded-full pl-3 pr-4 py-2.5 transition"
+        className="fixed bottom-24 right-4 sm:bottom-5 sm:right-5 z-40 flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white shadow-lg rounded-full pl-3 pr-4 py-2.5 transition"
         title="Otevřít AI poradce"
       >
         <span className="text-xl">🤖</span>
@@ -102,7 +102,7 @@ export default function AIAdvisor() {
   const s = STATUS_STYLE[status] || STATUS_STYLE.ok;
 
   return (
-    <div className="fixed bottom-5 right-5 z-40 w-[420px] max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-2xl border border-cream-200 flex flex-col" style={{ maxHeight: 'calc(100vh - 2.5rem)' }}>
+    <div className="fixed bottom-2 right-2 left-2 sm:bottom-5 sm:right-5 sm:left-auto sm:w-[420px] z-40 bg-white rounded-2xl shadow-2xl border border-cream-200 flex flex-col" style={{ maxHeight: 'calc(100vh - 2.5rem)' }}>
       {/* Hlavička */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-cream-200 bg-brand-500 text-white rounded-t-2xl">
         <div className="flex items-center gap-2">

@@ -129,7 +129,7 @@ function CreateProjectModal({ open, onClose, users, onCreated }) {
         <TimelineFlags form={form} setForm={setForm} />
         {/* Datumy schované, když projekt nemá časové ohraničení */}
         {!form.no_timeline && (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input label="Začátek *" type="date" value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} required={!form.no_timeline} />
             <Input label="Termín (nepovinné)" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} />
           </div>

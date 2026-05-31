@@ -139,7 +139,7 @@ export default function SuggestedTasksModal({ suggestion, sourceNote, sourceScop
                         placeholder="Kontext (volitelně)"
                         rows={2} className="w-full border border-cream-300 rounded px-2 py-1 text-xs" />
 
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <select value={r.assignee_id || ''} onChange={(e) => setRow(i, { assignee_id: e.target.value })}
                           className="border border-cream-300 rounded px-1.5 py-1 text-xs">
                           <option value="">— kdo —</option>

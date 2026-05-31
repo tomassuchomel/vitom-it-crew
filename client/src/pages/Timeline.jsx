@@ -92,7 +92,7 @@ export default function Timeline() {
         }
       />
 
-      <div className="p-8 space-y-8">
+      <div className="p-4 sm:p-8 space-y-6 sm:space-y-8">
         {projects.length === 0 ? (
           <div className="bg-white p-8 rounded-xl text-center text-ink-500">
             Zatím žádné projekty. <Link to="/projects" className="text-brand-500 underline">Přidej první</Link>.
@@ -198,8 +198,8 @@ function GanttChart({ projects, zoom, forecastEnabled }) {
   return (
     <div className="bg-white rounded-xl shadow-sm border border-cream-200 overflow-hidden">
       <div className="flex">
-        {/* Sticky levý sloupec se jmény projektů */}
-        <div className="w-72 shrink-0 border-r border-cream-200 bg-cream-50">
+        {/* Sticky levý sloupec se jmény projektů (na mobilu užší) */}
+        <div className="w-40 sm:w-72 shrink-0 border-r border-cream-200 bg-cream-50">
           <div className="px-4 py-2.5 text-xs font-semibold text-ink-500 uppercase tracking-wide border-b border-cream-200 h-14 flex items-end pb-2">
             Projekt
           </div>

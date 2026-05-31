@@ -76,7 +76,7 @@ export default function TaskCompletionDialog({ task, onConfirm, onCancel }) {
           {/* Přehled odhadů – pro orientaci */}
           <div className="bg-cream-100 rounded-lg p-3 text-sm">
             <div className="text-xs text-ink-500 uppercase tracking-wide mb-2">Pro porovnání</div>
-            <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="grid grid-cols-3 gap-2 sm:gap-3 text-center">
               <div>
                 <div className="text-[10px] text-ink-500 uppercase">Manual</div>
                 <div className="font-semibold text-ink-700">{fmtNum(task.estimated_h)} h</div>

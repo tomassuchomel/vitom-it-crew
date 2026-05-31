@@ -620,8 +620,8 @@ function UsersAdminSection() {
         </div>
       </div>
 
-      <div className="bg-white border border-cream-200 rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white border border-cream-200 rounded-lg overflow-x-auto">
+        <table className="w-full text-sm min-w-[600px]">
           <thead className="bg-cream-100 text-left text-xs uppercase tracking-wider text-ink-600">
             <tr>
               <th className="px-3 py-2"></th>
