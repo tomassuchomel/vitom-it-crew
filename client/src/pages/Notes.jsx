@@ -577,30 +577,33 @@ function MainNoteRow({ note, active, selected, onSelect, onDelete }) {
   const sharedWithMe = !!note.shared;
   const iShareIt = (note.share_count || 0) > 0;
   const preview = notePreview(note.content);
+  // Zvýraznění: plná Cerise = právě editovaná poznámka. Světlá Cerise =
+  // root předek aktuálně editované podpoznámky.
+  let highlightClass = 'hover:bg-cream-50';
+  if (selected) highlightClass = 'bg-accent-500 text-white';
+  else if (active) highlightClass = 'bg-accent-100';
   return (
     <li
       onClick={onSelect}
-      className={`group px-3 py-2.5 cursor-pointer border-b border-cream-100 last:border-0 transition ${
-        active || selected ? 'bg-brand-50' : 'hover:bg-cream-50'
-      }`}
+      className={`group px-3 py-2.5 cursor-pointer border-b border-cream-100 last:border-0 transition ${highlightClass}`}
     >
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">
-          {/* Titulek tučně */}
-          <div className="text-sm font-semibold text-ink-800 truncate flex items-center gap-1">
+          {/* Titulek tučně. Při selected (bg-accent-500) text bílý, jinak ink-800. */}
+          <div className={`text-sm font-semibold truncate flex items-center gap-1 ${selected ? 'text-white' : 'text-ink-800'}`}>
             {(sharedWithMe || iShareIt) && <span title={sharedWithMe ? 'Sdíleno s tebou' : 'Sdílíš s ostatními'}>🔗</span>}
-            <span className="truncate">{note.title || <span className="text-ink-400 italic font-normal">(bez názvu)</span>}</span>
+            <span className="truncate">{note.title || <span className={`italic font-normal ${selected ? 'text-white/70' : 'text-ink-400'}`}>(bez názvu)</span>}</span>
           </div>
           {/* Náhled + meta řádek */}
-          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-ink-400">
+          <div className={`flex items-center gap-2 mt-0.5 text-[11px] ${selected ? 'text-white/80' : 'text-ink-400'}`}>
             <span className="whitespace-nowrap">{noteDate(note.updated_at || note.created_at)}</span>
             <span className="truncate">{preview || (childCount > 0 ? `${childCount} podpoznámek` : 'žádný text')}</span>
           </div>
           {sharedWithMe && note.author_name && (
-            <div className="text-[10px] text-ink-400 mt-0.5">od {note.author_name}</div>
+            <div className={`text-[10px] mt-0.5 ${selected ? 'text-white/70' : 'text-ink-400'}`}>od {note.author_name}</div>
           )}
         </div>
-        {childCount > 0 && <span className="text-ink-300 text-sm mt-0.5">›</span>}
+        {childCount > 0 && <span className={`text-sm mt-0.5 ${selected ? 'text-white/60' : 'text-ink-300'}`}>›</span>}
         {onDelete && (
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
@@ -641,7 +644,7 @@ function NoteTree({ nodes, depth, selectedId, collapsed, onSelect, onAddChild, o
           <li key={n.id}>
             <div
               className={`group flex items-center gap-1 pr-1 rounded transition ${
-                isSelected ? 'bg-brand-50 text-brand-700' : 'hover:bg-cream-50'
+                isSelected ? 'bg-accent-500 text-white' : 'hover:bg-cream-50'
               }`}
               style={{ paddingLeft: depth * 4 }}
             >
@@ -651,16 +654,16 @@ function NoteTree({ nodes, depth, selectedId, collapsed, onSelect, onAddChild, o
                 className={`w-4 text-xs ${hasChildren ? 'text-ink-400 hover:text-ink-700' : 'text-transparent'}`}
               >{hasChildren ? (isCollapsed ? '▸' : '▾') : '•'}</button>
 
-              {/* Title + datum – click selects */}
+              {/* Title + datum – click selects. Při isSelected (bg-accent-500) text bílý. */}
               <button
                 onClick={() => onSelect(n.id)}
                 className="flex-1 text-left py-1.5 min-w-0"
                 title={n.title}
               >
                 <div className="text-sm truncate">
-                  {n.title || <span className="text-ink-400 italic">(bez názvu)</span>}
+                  {n.title || <span className={`italic ${isSelected ? 'text-white/70' : 'text-ink-400'}`}>(bez názvu)</span>}
                 </div>
-                <div className="text-[10px] text-ink-400 truncate">
+                <div className={`text-[10px] truncate ${isSelected ? 'text-white/80' : 'text-ink-400'}`}>
                   {noteDate(n.updated_at || n.created_at)}
                   {notePreview(n.content) ? ` · ${notePreview(n.content, 30)}` : ''}
                 </div>
