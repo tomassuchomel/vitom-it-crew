@@ -6,13 +6,13 @@ const router = Router();
 
 // Pole, která logujeme do audit logu (PUT). Manager_id je číslo, name jmenné mapování níže.
 const TRACKED_FIELDS = ['name', 'description', 'start_date', 'due_date', 'status', 'manager_id',
-                        'budget', 'repo_url', 'no_timeline', 'hidden_from_timeline'];
+                        'responsible_id', 'budget', 'repo_url', 'no_timeline', 'hidden_from_timeline'];
 
 // Human-readable popisky polí (pro audit log v UI)
 const FIELD_LABELS = {
   name: 'Název', description: 'Popis',
   start_date: 'Začátek', due_date: 'Termín', status: 'Stav',
-  manager_id: 'Manager', budget: 'Rozpočet',
+  manager_id: 'Manager', responsible_id: 'Zodpovědnost', budget: 'Rozpočet',
   repo_url: 'GitHub repo URL',
   no_timeline: 'Bez časového ohraničení',
   hidden_from_timeline: 'Skryto v Timeline',
@@ -60,9 +60,11 @@ router.get('/', requireAuth, async (req, res) => {
       (SELECT COALESCE(SUM(te.hours * u.hourly_rate), 0)
          FROM time_entries te JOIN users u ON u.id = te.user_id
          WHERE te.project_id = p.id) AS cost_so_far,
-      mu.name AS manager_name
+      mu.name AS manager_name,
+      ru.name AS responsible_name
     FROM projects p
     LEFT JOIN users mu ON mu.id = p.manager_id
+    LEFT JOIN users ru ON ru.id = p.responsible_id
     WHERE p.team_id = $1
     ORDER BY effective_due_date NULLS LAST, p.created_at DESC
   `, [req.team_id]);
@@ -75,7 +77,7 @@ router.get('/', requireAuth, async (req, res) => {
 router.get('/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const pR = await query(`
-    SELECT p.*, mu.name AS manager_name,
+    SELECT p.*, mu.name AS manager_name, ru.name AS responsible_name,
       COALESCE(p.due_date,
         (SELECT MIN(t.due_date) FROM tasks t
           WHERE t.project_id = p.id AND t.status != 'done' AND t.due_date IS NOT NULL)
@@ -86,7 +88,9 @@ router.get('/:id', requireAuth, async (req, res) => {
         ELSE NULL
       END AS due_source,
       (SELECT COALESCE(SUM(t.estimated_h), 0) FROM tasks t WHERE t.project_id = p.id) AS estimated_h_total
-    FROM projects p LEFT JOIN users mu ON mu.id = p.manager_id
+    FROM projects p
+    LEFT JOIN users mu ON mu.id = p.manager_id
+    LEFT JOIN users ru ON ru.id = p.responsible_id
     WHERE p.id = $1
   `, [id]);
   const project = pR.rows[0];
@@ -135,7 +139,7 @@ router.post('/', requireAuth, async (req, res) => {
   if (!can.manageProjects(req.user)) return res.status(403).json({ error: 'forbidden' });
   if (!req.team_id) return res.status(400).json({ error: 'no_team_context', message: 'Pro vytvoření projektu musíš být členem nějakého teamu.' });
   const {
-    name, description, start_date, due_date, manager_id, budget, repo_url,
+    name, description, start_date, due_date, manager_id, responsible_id, budget, repo_url,
     no_timeline, hidden_from_timeline,
   } = req.body || {};
   if (!name) return res.status(400).json({ error: 'missing_fields' });
@@ -147,16 +151,18 @@ router.post('/', requireAuth, async (req, res) => {
   const repoCheck = validateRepoUrl(repo_url);
   if (!repoCheck.ok) return res.status(400).json({ error: 'invalid_repo_url', message: repoCheck.error });
   const r = await query(`
-    INSERT INTO projects (name, description, start_date, due_date, manager_id, budget, repo_url, team_id,
+    INSERT INTO projects (name, description, start_date, due_date, manager_id, responsible_id, budget, repo_url, team_id,
                           no_timeline, hidden_from_timeline)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     RETURNING *
   `, [
     name, description || null,
     // Pokud no_timeline, start/due ignorujeme (uložíme NULL)
     noTimeline ? null : start_date,
     noTimeline ? null : (due_date || null),
-    manager_id || req.user.id, budget || null, repoCheck.value, req.team_id,
+    manager_id || req.user.id,
+    responsible_id || null,
+    budget || null, repoCheck.value, req.team_id,
     noTimeline, !!hidden_from_timeline,
   ]);
   const project = r.rows[0];
@@ -221,12 +227,12 @@ router.put('/:id', requireAuth, async (req, res) => {
   const r = await query(`
     UPDATE projects SET
       name = $1, description = $2, start_date = $3, due_date = $4,
-      status = $5, manager_id = $6, budget = $7, repo_url = $8,
-      no_timeline = $9, hidden_from_timeline = $10
-    WHERE id = $11
+      status = $5, manager_id = $6, responsible_id = $7, budget = $8, repo_url = $9,
+      no_timeline = $10, hidden_from_timeline = $11
+    WHERE id = $12
     RETURNING *
   `, [next.name, next.description, finalStartDate, finalDueDate,
-      next.status, next.manager_id || null, nullableNum(next.budget),
+      next.status, next.manager_id || null, next.responsible_id || null, nullableNum(next.budget),
       next.repo_url || null, noTimeline, !!next.hidden_from_timeline, id]);
 
   // Log každé změny zvlášť

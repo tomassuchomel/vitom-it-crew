@@ -92,7 +92,9 @@ export default function ProjectsList() {
 
 function CreateProjectModal({ open, onClose, users, onCreated }) {
   const empty = {
-    name: '', description: '', start_date: '', due_date: '', manager_id: '', budget: '', repo_url: '',
+    name: '', description: '', start_date: '', due_date: '',
+    manager_id: '', responsible_id: '',
+    budget: '', repo_url: '',
     no_timeline: false, hidden_from_timeline: false,
   };
   const [form, setForm] = useState(empty);
@@ -106,6 +108,7 @@ function CreateProjectModal({ open, onClose, users, onCreated }) {
       await projectsApi.create({
         ...form,
         manager_id: form.manager_id ? Number(form.manager_id) : null,
+        responsible_id: form.responsible_id ? Number(form.responsible_id) : null,
         budget: form.budget ? Number(form.budget) : null,
         repo_url: form.repo_url ? form.repo_url.trim() : null,
       });
@@ -134,8 +137,10 @@ function CreateProjectModal({ open, onClose, users, onCreated }) {
             <Input label="Termín (nepovinné)" type="date" value={form.due_date} onChange={v => setForm({ ...form, due_date: v })} />
           </div>
         )}
-        <Select label="Project manager" value={form.manager_id} onChange={v => setForm({ ...form, manager_id: v })}
+        <Select label="Manager (schvaluje review)" value={form.manager_id} onChange={v => setForm({ ...form, manager_id: v })}
           options={[{ value: '', label: '—' }, ...users.filter(u => ['admin', 'manager'].includes(u.role)).map(u => ({ value: u.id, label: u.name }))]} />
+        <Select label="Zodpovědná osoba (zařizuje projekt)" value={form.responsible_id} onChange={v => setForm({ ...form, responsible_id: v })}
+          options={[{ value: '', label: '—' }, ...users.map(u => ({ value: u.id, label: u.name }))]} />
         <Input label="Rozpočet (Kč)" type="number" value={form.budget} onChange={v => setForm({ ...form, budget: v })} />
         <div>
           <Input label="GitHub repo URL (pro AI agenta)"

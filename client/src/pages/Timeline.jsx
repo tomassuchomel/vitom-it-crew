@@ -265,9 +265,14 @@ function ProjectLabel({ project }) {
   const isDone = project.status === 'done';
   const cd = countdown(project.effective_due_date);
   return (
-    <Link to={`/projects/${project.id}`} className="block px-4 py-3 text-sm border-b border-cream-100 hover:bg-cream-100 transition" style={{ height: 64 }}>
+    <Link to={`/projects/${project.id}`} className="block px-4 py-3 text-sm border-b border-cream-100 hover:bg-cream-100 transition" style={{ height: 80 }}>
       <div className="font-medium text-ink-800 truncate">{project.name}</div>
-      <div className="text-xs text-ink-500 truncate">{project.manager_name || '—'}</div>
+      <div className="text-[11px] text-ink-500 truncate">
+        <span className="text-ink-400">Manager:</span> {project.manager_name || '—'}
+      </div>
+      <div className="text-[11px] text-ink-500 truncate">
+        <span className="text-ink-400">Zodpovědnost:</span> {project.responsible_name || '—'}
+      </div>
       {!isDone ? (
         <div className={`text-[10px] font-semibold mt-0.5 ${cd.overdue ? 'text-red-600' : cd.days <= 3 ? 'text-red-500' : cd.days <= 7 ? 'text-accent-600' : 'text-emerald-600'}`}>
           {cd.overdue ? '⚠ ' : '⏱ '}{cd.text}
@@ -355,7 +360,7 @@ function ProjectRow({ project, layout, colorIdx, forecastEnabled }) {
   const projectedDateLabel = fmtCs(forecastEndDate);
 
   return (
-    <div className="relative border-b border-cream-100 hover:bg-cream-50/50 transition" style={{ height: showForecast ? 82 : 64 }}>
+    <div className="relative border-b border-cream-100 hover:bg-cream-50/50 transition" style={{ height: showForecast ? 96 : 80 }}>
       {/* Hlavní bar */}
       <div
         className="absolute rounded-lg shadow-sm flex items-center px-2 text-xs text-white overflow-hidden"
@@ -516,7 +521,12 @@ function UndatedProjects({ projects }) {
             className="bg-white rounded-xl border border-cream-200 hover:shadow-md hover:border-cream-300 transition p-4 block"
           >
             <div className="font-medium text-ink-800 truncate">{p.name}</div>
-            <div className="text-xs text-ink-500 truncate mt-0.5">{p.manager_name || '—'}</div>
+            <div className="text-[11px] text-ink-500 truncate mt-0.5">
+              <span className="text-ink-400">Manager:</span> {p.manager_name || '—'}
+            </div>
+            <div className="text-[11px] text-ink-500 truncate">
+              <span className="text-ink-400">Zodpovědnost:</span> {p.responsible_name || '—'}
+            </div>
             <div className="text-[11px] text-ink-500 mt-2 flex gap-3">
               <span>{p.done_count}/{p.task_count} hotovo</span>
               <span>·</span>

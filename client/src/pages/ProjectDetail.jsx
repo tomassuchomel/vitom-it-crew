@@ -218,6 +218,7 @@ export default function ProjectDetail() {
             <h3 className="font-semibold text-ink-800 mb-3">Detaily</h3>
             <Row label="Stav" value={PROJECT_STATUS_LABEL[project.status] || project.status} />
             <Row label="Manager" value={project.manager_name || '—'} />
+            <Row label="Zodpovědnost" value={project.responsible_name || '—'} />
             <Row label="Začátek" value={fmtDate(project.start_date)} />
             <Row
               label="Termín"
@@ -323,7 +324,7 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
   const [form, setForm] = useState({
     name: '', description: '',
     start_date: '', due_date: '',
-    status: 'active', manager_id: '', budget: '', repo_url: '',
+    status: 'active', manager_id: '', responsible_id: '', budget: '', repo_url: '',
     no_timeline: false, hidden_from_timeline: false,
   });
   const [err, setErr] = useState(null);
@@ -338,6 +339,7 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
         due_date:   project.due_date   ? fmtDate(project.due_date)   : '',
         status: project.status || 'active',
         manager_id: project.manager_id || '',
+        responsible_id: project.responsible_id || '',
         budget: project.budget != null ? String(project.budget) : '',
         repo_url: project.repo_url || '',
         no_timeline: !!project.no_timeline,
@@ -354,6 +356,7 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
       await projectsApi.update(project.id, {
         ...form,
         manager_id: form.manager_id ? Number(form.manager_id) : null,
+        responsible_id: form.responsible_id ? Number(form.responsible_id) : null,
         budget: form.budget ? Number(form.budget) : null,
         repo_url: form.repo_url ? form.repo_url.trim() : null,
       });
@@ -389,8 +392,12 @@ function EditProjectModal({ open, onClose, project, users, onSaved }) {
             { value: 'done', label: 'Hotovo' },
             { value: 'cancelled', label: 'Zrušeno' },
           ]} />
-          <Select label="Manager" value={form.manager_id} onChange={v => setForm({ ...form, manager_id: v })}
+          <Select label="Manager (schvaluje review)" value={form.manager_id} onChange={v => setForm({ ...form, manager_id: v })}
             options={[{ value: '', label: '—' }, ...users.filter(u => ['admin', 'manager'].includes(u.role)).map(u => ({ value: u.id, label: u.name }))]} />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Select label="Zodpovědná osoba" value={form.responsible_id} onChange={v => setForm({ ...form, responsible_id: v })}
+            options={[{ value: '', label: '—' }, ...users.map(u => ({ value: u.id, label: u.name }))]} />
         </div>
         <Input label="Rozpočet (Kč)" type="number" value={form.budget} onChange={v => setForm({ ...form, budget: v })} />
         <div>
