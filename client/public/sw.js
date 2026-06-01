@@ -9,7 +9,7 @@
 // Pozn.: žádný offline data layer ve vrstvě 2 – appka offline ukáže shell, ale
 // jakákoliv akce (load notes/tasks/...) selže. To je vědomě jednoduché.
 
-const VERSION = 'vitom-it-crew-v3';
+const VERSION = 'vitom-it-crew-v4';
 const SHELL = 'shell-' + VERSION;
 
 const SHELL_ASSETS = [
@@ -45,13 +45,18 @@ self.addEventListener('message', (event) => {
 });
 
 // Web Push — server posílá JSON { title, body, url, tag, icon }.
-// iOS Safari je citlivé:
-//   - prázdný body schová notifikaci do tichého centra → vždy aspoň „."
-//   - undefined v options crashuje JSON serializaci → stavíme cleanly
-//   - requireInteraction drží notifikaci viditelnou, dokud user nezareaguje
+// Diagnostika: console.log na všech krocích, aby user viděl v DevTools.
 self.addEventListener('push', (event) => {
+  console.log('[SW push] event received', { hasData: !!event.data });
   let data = {};
-  try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
+  try {
+    const raw = event.data ? event.data.text() : '';
+    console.log('[SW push] raw payload:', raw);
+    data = raw ? JSON.parse(raw) : {};
+  } catch (err) {
+    console.warn('[SW push] parse error:', err.message);
+    data = {};
+  }
   const title = String(data.title || 'VITOM').trim() || 'VITOM';
   const body  = String(data.body  || 'Nová událost').trim() || 'Nová událost';
   const options = {
@@ -62,7 +67,12 @@ self.addEventListener('push', (event) => {
     data: { url: data.url || '/' },
   };
   if (data.tag) options.tag = String(data.tag);
-  event.waitUntil(self.registration.showNotification(title, options));
+  console.log('[SW push] showing notification:', title, body);
+  event.waitUntil(
+    self.registration.showNotification(title, options)
+      .then(() => console.log('[SW push] notification shown OK'))
+      .catch((err) => console.error('[SW push] showNotification FAILED:', err))
+  );
 });
 
 // Klik na notifikaci → otevři appku na url (nebo focusni existující tab).

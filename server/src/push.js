@@ -49,22 +49,28 @@ export async function sendToUser(userId, payload) {
 
   let sent = 0, removed = 0;
   await Promise.all(r.rows.map(async (sub) => {
+    // Endpoint hostname pro identifikaci providera (apple/google/mozilla).
+    const provider = (() => {
+      try { return new URL(sub.endpoint).hostname; } catch { return 'unknown'; }
+    })();
     try {
-      await webpush.sendNotification({
+      const result = await webpush.sendNotification({
         endpoint: sub.endpoint,
         keys: { p256dh: sub.p256dh, auth: sub.auth },
       }, body);
       sent++;
+      console.log(`[push] OK → ${provider} → user=${userId} status=${result.statusCode}`);
     } catch (err) {
       const status = err.statusCode;
-      // 404/410 = subscription je dead (uninstall, expired). Smaž.
       if (status === 404 || status === 410) {
         await query('DELETE FROM push_subscriptions WHERE id = $1', [sub.id]).catch(() => {});
         removed++;
+        console.log(`[push] EXPIRED ${status} → ${provider} → smazáno`);
       } else {
-        console.warn(`[push] sendNotification failed (${status})`, err.message?.slice(0, 120));
+        console.warn(`[push] FAILED → ${provider} → status=${status} → ${err.message?.slice(0, 200)}`);
       }
     }
   }));
+  console.log(`[push] sendToUser(${userId}) done: sent=${sent} removed=${removed}`);
   return { sent, removed };
 }
