@@ -9,7 +9,7 @@
 // Pozn.: žádný offline data layer ve vrstvě 2 – appka offline ukáže shell, ale
 // jakákoliv akce (load notes/tasks/...) selže. To je vědomě jednoduché.
 
-const VERSION = 'vitom-it-crew-v4';
+const VERSION = 'vitom-it-crew-v5';
 const SHELL = 'shell-' + VERSION;
 
 const SHELL_ASSETS = [
@@ -40,9 +40,19 @@ self.addEventListener('activate', (event) => {
 });
 
 // Klient zavolá tohle, když user klikne „Aktualizovat" v UpdatePromptu.
+// + diagnostika: GET_VERSION pro zobrazení v UI.
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data?.type === 'GET_VERSION') {
+    event.source?.postMessage({ type: 'VERSION', version: VERSION });
+  }
 });
+
+// Broadcast helper — pošle všem otevřeným klientům zprávu o push události.
+async function notifyAllClients(payload) {
+  const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' });
+  clients.forEach((c) => c.postMessage(payload));
+}
 
 // Web Push — server posílá JSON { title, body, url, tag, icon }.
 // Diagnostika: console.log na všech krocích, aby user viděl v DevTools.
@@ -70,8 +80,14 @@ self.addEventListener('push', (event) => {
   console.log('[SW push] showing notification:', title, body);
   event.waitUntil(
     self.registration.showNotification(title, options)
-      .then(() => console.log('[SW push] notification shown OK'))
-      .catch((err) => console.error('[SW push] showNotification FAILED:', err))
+      .then(async () => {
+        console.log('[SW push] notification shown OK');
+        await notifyAllClients({ type: 'PUSH_RECEIVED', ok: true, title, body, at: Date.now() });
+      })
+      .catch(async (err) => {
+        console.error('[SW push] showNotification FAILED:', err);
+        await notifyAllClients({ type: 'PUSH_RECEIVED', ok: false, error: String(err), at: Date.now() });
+      })
   );
 });
 
