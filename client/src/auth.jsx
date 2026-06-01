@@ -36,11 +36,6 @@ export function AuthProvider({ children }) {
       setUser(d.user);
       return d.user;
     },
-    devLogin: async (userId) => {
-      const d = await authApi.devLogin(userId);
-      setUser(d.user);
-      return d.user;
-    },
     changePassword: async (currentPassword, newPassword) => {
       await authApi.changePassword(currentPassword, newPassword);
       await refreshMe();

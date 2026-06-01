@@ -30,8 +30,6 @@ export const teams = {
 export const auth = {
   me:        () => api.get('/auth/me').then(r => r.data),
   config:    () => api.get('/auth/config').then(r => r.data),
-  devUsers:  () => api.get('/auth/dev-users').then(r => r.data),
-  devLogin:  (userId) => api.post('/auth/dev-login', { userId }).then(r => r.data),
   login:     (email, password) => api.post('/auth/login', { email, password }).then(r => r.data),
   changePassword: (currentPassword, newPassword) =>
     api.post('/auth/change-password', { currentPassword, newPassword }).then(r => r.data),

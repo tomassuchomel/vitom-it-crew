@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { auth as authApi } from '../api.js';
-import { useAuth, ROLE_LABELS } from '../auth.jsx';
+import { useAuth } from '../auth.jsx';
 import VitomLogo from '../components/VitomLogo.jsx';
 
 export default function Login() {
-  const { user, login, devLogin } = useAuth();
+  const { user, login } = useAuth();
   const nav = useNavigate();
   const [config, setConfig] = useState({ googleEnabled: false });
   const [email, setEmail] = useState('');
@@ -14,21 +14,12 @@ export default function Login() {
   const [backendErr, setBackendErr] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const [showDev, setShowDev] = useState(false);
-  const [devUsers, setDevUsers] = useState([]);
-
   useEffect(() => {
     if (user) nav('/');
     authApi.config().then(setConfig).catch((e) => {
       setBackendErr(e.message || 'Backend nedostupný');
     });
   }, [user]);
-
-  useEffect(() => {
-    if (showDev && devUsers.length === 0) {
-      authApi.devUsers().then(d => setDevUsers(d.users)).catch(() => {});
-    }
-  }, [showDev]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -39,18 +30,6 @@ export default function Login() {
     } catch (e) {
       const code = e.response?.data?.error;
       setError(code === 'invalid_credentials' ? 'Špatný email nebo heslo.' : 'Přihlášení selhalo.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDevLogin = async (userId) => {
-    setLoading(true); setError(null);
-    try {
-      await devLogin(userId);
-      nav('/');
-    } catch (e) {
-      setError(e.response?.data?.error || 'Login selhal');
     } finally {
       setLoading(false);
     }
@@ -123,41 +102,9 @@ export default function Login() {
         {error && <div className="mt-4 text-sm text-red-600 text-center">{error}</div>}
 
         <div className="mt-6 text-xs text-ink-500 text-center">
-          Výchozí heslo pro nové účty: <code className="bg-cream-100 px-1.5 py-0.5 rounded">ITCrew23</code>
+          Nové účty mají výchozí heslo <code className="bg-cream-100 px-1.5 py-0.5 rounded">ITCrew23</code>.
           <div className="mt-1 text-ink-400">Po prvním přihlášení si nastavíš vlastní.</div>
         </div>
-
-        <div className="mt-6 border-t border-cream-200 pt-4 text-center">
-          <button
-            type="button"
-            onClick={() => setShowDev(s => !s)}
-            className="text-xs text-ink-400 hover:text-ink-600 underline"
-          >
-            {showDev ? 'Skrýt dev login' : 'Dev login (bez hesla)'}
-          </button>
-        </div>
-
-        {showDev && (
-          <div className="mt-3 space-y-2">
-            {devUsers.length === 0 && (
-              <div className="text-xs text-ink-400 text-center py-2">Načítám…</div>
-            )}
-            {devUsers.map(u => (
-              <button
-                key={u.id}
-                onClick={() => handleDevLogin(u.id)}
-                disabled={loading}
-                className="w-full flex items-center justify-between px-3 py-2 bg-cream-100 hover:bg-cream-50 hover:border-brand-500 border border-cream-200 rounded-lg transition disabled:opacity-50 text-sm"
-              >
-                <span className="text-left">
-                  <div className="font-medium text-ink-800">{u.name}</div>
-                  <div className="text-xs text-ink-500">{ROLE_LABELS[u.role]}</div>
-                </span>
-                <span className="text-accent-500">→</span>
-              </button>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );

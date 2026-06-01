@@ -89,29 +89,6 @@ router.post('/change-password', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-// DEV LOGIN – ponecháno pro rychlé testování bez hesla
-router.post('/dev-login', async (req, res) => {
-  const { userId } = req.body || {};
-  if (!userId) return res.status(400).json({ error: 'missing_user_id' });
-  const r = await query(
-    `SELECT id, email, name, first_name, last_name, role, hourly_rate, active,
-            must_change_password, avatar_updated_at
-     FROM users WHERE id = $1 AND active = TRUE`,
-    [userId]
-  );
-  const user = r.rows[0];
-  if (!user) return res.status(404).json({ error: 'user_not_found' });
-  const token = signToken(user);
-  res.cookie('tf_token', token, COOKIE_OPTS);
-  res.json({ user: publicUser(user) });
-});
-
-// Seznam pro dev-login dropdown
-router.get('/dev-users', async (req, res) => {
-  const r = await query('SELECT id, name, email, role FROM users WHERE active = TRUE ORDER BY id');
-  res.json({ users: r.rows });
-});
-
 // LOGOUT
 router.post('/logout', (req, res) => {
   res.clearCookie('tf_token', COOKIE_OPTS);
