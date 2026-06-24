@@ -232,6 +232,12 @@ export async function migrate() {
                      WHERE table_name='users' AND column_name='can_see_all_teams') THEN
         ALTER TABLE users ADD COLUMN can_see_all_teams BOOLEAN NOT NULL DEFAULT FALSE;
       END IF;
+      -- Failsafe pro source_note_id (přidáno 2026-06): propojení tasks → notes.
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='tasks' AND column_name='source_note_id') THEN
+        ALTER TABLE tasks ADD COLUMN source_note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL;
+        CREATE INDEX IF NOT EXISTS idx_tasks_source_note ON tasks(source_note_id) WHERE source_note_id IS NOT NULL;
+      END IF;
     END $$;
   `);
   console.log('[db] PostgreSQL schéma připraveno');

@@ -76,6 +76,9 @@ export default function SuggestedTasksModal({ suggestion, sourceNote, sourceScop
           assignee_id: t.assignee_id ? Number(t.assignee_id) : null,
           priority: t.priority || 'normal',
           due_date: t.due_date || null,
+          // Propojení zpět na poznámku → v editoru poznámky se ukáže panel
+          // "Úkoly z této poznámky" se synchronním stavem.
+          source_note_id: sourceNote?.id || null,
         });
         createdByProject[t.project_id] = (createdByProject[t.project_id] || 0) + 1;
       }

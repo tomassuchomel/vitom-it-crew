@@ -18,9 +18,11 @@ import RichTextEditor from '../components/RichTextEditor.jsx';
 import VoiceMeetingModal from '../components/VoiceMeetingModal.jsx';
 import DrawingLayer from '../components/DrawingLayer.jsx';
 import SuggestedTasksModal from '../components/SuggestedTasksModal.jsx';
+import TaskDetailModal from '../components/TaskDetailModal.jsx';
+import { StatusBadge, StatusActions, STATUS_META } from '../components/TaskStatus.jsx';
 import { useTeams } from '../teams.jsx';
-import { useAuth } from '../auth.jsx';
-import { notes as notesApi, users as usersApi } from '../api.js';
+import { useAuth, can } from '../auth.jsx';
+import { notes as notesApi, users as usersApi, tasks as tasksApi } from '../api.js';
 
 export default function Notes() {
   const { currentTeam } = useTeams();
@@ -262,6 +264,7 @@ export default function Notes() {
                   note={selected}
                   scope={scope}
                   currentUserId={user?.id}
+                  currentUser={user}
                   freshlyCreated={selected.id === freshNoteId}
                   onConsumeFresh={() => setFreshNoteId(null)}
                   onSaved={() => load(true)}
@@ -703,7 +706,7 @@ function NoteTree({ nodes, depth, selectedId, collapsed, onSelect, onAddChild, o
 
 // Editor vybrané poznámky. Bohatý text (RichTextEditor) + debounced auto-save.
 // Když je poznámka sdílená a current user není autor → read-only náhled.
-function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShare, scope, freshlyCreated, onConsumeFresh }) {
+function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, currentUser, onShare, scope, freshlyCreated, onConsumeFresh }) {
   const [title, setTitle] = useState(note.title || '');
   const [content, setContent] = useState(note.content || '');
   const [savedAt, setSavedAt] = useState(null);
@@ -714,6 +717,10 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
   const [aiErr, setAiErr] = useState(null);
   const [taskSuggest, setTaskSuggest] = useState(null); // { tasks, projectId, projectName }
   const [createdInfo, setCreatedInfo] = useState(null);  // { count, projectId } po založení
+  // Úkoly, které vznikly z této poznámky (1:1 status s tasks tabulkou).
+  const [noteTasks, setNoteTasks] = useState([]);
+  const [noteTasksLoading, setNoteTasksLoading] = useState(false);
+  const [taskDetailId, setTaskDetailId] = useState(null);
   // Kreslení (tužka)
   const [drawing, setDrawing] = useState(note.drawing || null);
   const [drawMode, setDrawMode] = useState(false);
@@ -731,6 +738,17 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
   // Sdílená poznámka, kterou nevlastním → jen čtu (nemůžu editovat)
   const readOnly = note.shared && note.user_id !== currentUserId;
 
+  // Načte úkoly z této poznámky. Volá se při změně note.id, po vytvoření
+  // úkolů přes suggest_tasks, po změně statusu, a po focusu okna.
+  const refreshNoteTasks = async () => {
+    setNoteTasksLoading(true);
+    try {
+      const d = await notesApi.tasks(note.id);
+      setNoteTasks(d.tasks || []);
+    } catch { /* tichá chyba, panel jen nezobrazí */ }
+    finally { setNoteTasksLoading(false); }
+  };
+
   useEffect(() => {
     setTitle(note.title || '');
     setContent(note.content || '');
@@ -740,6 +758,7 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
     dirtyRef.current = false;
     setSavedAt(null);
     setAiResult(null); setAiErr(null); setTaskSuggest(null); setCreatedInfo(null);
+    refreshNoteTasks();
     // Pokud je poznámka čerstvě vytvořená, autofocus názvu + select all
     // (uživatel rovnou píše název, nemusí klikat na input).
     if (freshlyCreated && titleInputRef.current) {
@@ -783,6 +802,17 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
     setDrawing(null); latestRef.current.drawing = null;
     setDrawKey(k => k + 1); // remount canvasu → čistý
     scheduleSave();
+  };
+
+  // Změna statusu úkolu v panelu "Úkoly z poznámky". Pro review action
+  // (approve/reject) user musí otevřít plný TaskDetailModal — tam je dialog.
+  const handleNoteTaskStatus = async (task, nextStatus) => {
+    try {
+      await tasksApi.update(task.id, { status: nextStatus });
+      refreshNoteTasks();
+    } catch (e) {
+      alert(e.response?.data?.message || 'Změna statusu selhala.');
+    }
   };
 
   // AI zpracování – nejdřív flush rozepsaných změn, ať AI vidí aktuální obsah
@@ -966,6 +996,40 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
         </div>
       </div>
 
+      {/* Úkoly vytvořené z této poznámky (1:1 status sync). */}
+      {noteTasks.length > 0 && (
+        <div className="mt-5 border-t border-cream-200 pt-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-semibold text-ink-800">
+              ✅ Úkoly z této poznámky ({noteTasks.length})
+            </div>
+            <button onClick={refreshNoteTasks} disabled={noteTasksLoading}
+              className="text-[11px] text-ink-400 hover:text-ink-700 disabled:opacity-50">
+              {noteTasksLoading ? 'Načítám…' : '↻ Obnovit'}
+            </button>
+          </div>
+          <ul className="space-y-1.5">
+            {noteTasks.map(t => (
+              <NoteTaskRow key={t.id} task={t} currentUser={currentUser}
+                onOpen={() => setTaskDetailId(t.id)}
+                onChange={handleNoteTaskStatus} />
+            ))}
+          </ul>
+          <div className="text-[10px] text-ink-400 mt-2">
+            Klik na úkol otevře detail (přílohy, komentáře, review akce).
+          </div>
+        </div>
+      )}
+
+      {/* Detail úkolu — z panelu „Úkoly z poznámky" */}
+      {taskDetailId && (
+        <TaskDetailModal
+          task={noteTasks.find(t => t.id === taskDetailId) || { id: taskDetailId }}
+          onClose={() => setTaskDetailId(null)}
+          onChanged={refreshNoteTasks}
+        />
+      )}
+
       {/* Review + založení AI-navržených úkolů */}
       {taskSuggest && (
         <SuggestedTasksModal
@@ -973,7 +1037,7 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
           sourceNote={note}
           sourceScope={scope}
           onClose={() => setTaskSuggest(null)}
-          onCreated={(count, projectId) => setCreatedInfo({ count, projectId })}
+          onCreated={(count, projectId) => { setCreatedInfo({ count, projectId }); refreshNoteTasks(); }}
         />
       )}
 
@@ -992,5 +1056,43 @@ function NoteEditor({ note, onSaved, onAddChild, onDelete, currentUserId, onShar
         />
       )}
     </div>
+  );
+}
+
+// Řádek úkolu v panelu "Úkoly z poznámky". Reuse StatusBadge + StatusActions,
+// aby chování bylo 1:1 s MyTasks (assignee může in_progress → review apod.).
+// Review akce (approve/reject) sem nedáváme — pro ně user otevře plný
+// TaskDetailModal kliknutím na řádek (tam je ReviewTaskDialog s komentářem).
+function NoteTaskRow({ task, currentUser, onOpen, onChange }) {
+  const isAssignee = currentUser?.id === task.assignee_id;
+  const isManagerOrAdmin = currentUser?.role === 'admin'
+    || currentUser?.id === task.project_manager_id;
+  const canChange = isAssignee || isManagerOrAdmin || can.createTasks(currentUser);
+  const meta = STATUS_META[task.status];
+  return (
+    <li className="flex items-center gap-2 border border-cream-200 rounded-lg px-3 py-2 hover:bg-cream-50 transition">
+      <button onClick={onOpen} className="flex-1 text-left min-w-0">
+        <div className="flex items-center gap-2">
+          <StatusBadge status={task.status} compact />
+          <span className={`text-sm truncate ${task.status === 'done' ? 'text-ink-400 line-through' : 'text-ink-800'}`}>
+            {task.title}
+          </span>
+        </div>
+        <div className="text-[11px] text-ink-500 mt-0.5 truncate">
+          {task.project_name}
+          {task.assignee_name && <> · {task.assignee_name}</>}
+          {task.due_date && <> · do {new Date(task.due_date).toLocaleDateString('cs-CZ')}</>}
+        </div>
+      </button>
+      <div className="flex-shrink-0">
+        <StatusActions
+          task={task}
+          onChange={onChange}
+          compact
+          canChange={canChange}
+          canReview={false}
+        />
+      </div>
+    </li>
   );
 }

@@ -224,7 +224,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 // Vytvoření úkolu nebo podúkolu
 router.post('/', requireAuth, async (req, res) => {
   if (!can.createTasks(req.user)) return res.status(403).json({ error: 'forbidden' });
-  const { project_id, parent_id, title, description, assignee_id, status, priority, estimated_h, due_date } = req.body || {};
+  const { project_id, parent_id, title, description, assignee_id, status, priority, estimated_h, due_date, source_note_id } = req.body || {};
   if (!project_id || !title) return res.status(400).json({ error: 'missing_fields' });
 
   // Membership check: project.team_id musí být team, kde je user členem
@@ -247,14 +247,17 @@ router.post('/', requireAuth, async (req, res) => {
   if (aiExtract.error) return res.status(400).json({ error: aiExtract.error, min: aiExtract.min });
   const ai = aiExtract.fields;
 
-  const r = await query(`
+  // Defenzivně: source_note_id mohl být přidán migrací po staré INSERT verzi.
+  // Pokud sloupec ještě chybí v DB schema cache, zkusíme bez něj a hodíme warning.
+  const insertSql = (withSource) => `
     INSERT INTO tasks (
       project_id, parent_id, title, description, assignee_id, status, priority, estimated_h, due_date,
-      ai_assignee, execution_mode, acceptance_criteria, out_of_scope, scope_paths, ai_status
+      ai_assignee, execution_mode, acceptance_criteria, out_of_scope, scope_paths, ai_status${withSource ? ', source_note_id' : ''}
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15${withSource ? ', $16' : ''})
     RETURNING *
-  `, [
+  `;
+  const baseParams = [
     project_id, parent_id || null, title, description || null,
     assignee_id || null, status || 'todo', priority || 'normal',
     estimated_h || null, due_date || null,
@@ -263,7 +266,16 @@ router.post('/', requireAuth, async (req, res) => {
     JSON.stringify(ai.out_of_scope),
     JSON.stringify(ai.scope_paths),
     ai.ai_status,
-  ]);
+  ];
+  let r;
+  try {
+    r = await query(insertSql(true), [...baseParams, source_note_id ? Number(source_note_id) : null]);
+  } catch (err) {
+    if (err.code === '42703') {
+      console.warn('[tasks] source_note_id column missing, falling back without it');
+      r = await query(insertSql(false), baseParams);
+    } else { throw err; }
+  }
   const task = r.rows[0];
   // AI odhad na pozadí (neblokuje response)
   kickoffAIEstimate(task);

@@ -213,6 +213,43 @@ router.post('/ai-ask', requireAuth, async (req, res) => {
 
 // AI zpracování konkrétní poznámky. Body: { action: 'summarize'|'suggest_tasks' }.
 // Vrací návrh (text) – nic nezakládá. Smí autor / čtenář poznámky.
+// Úkoly, které vznikly z této poznámky (přes AI suggest_tasks / Quick Capture).
+// 1:1 status s tasks tabulkou — refetch při změně. Read-only seznam.
+router.get('/:id/tasks', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_id' });
+
+  const note = (await query(`SELECT id, team_id, user_id, visibility FROM notes WHERE id = $1`, [id])).rows[0];
+  if (!note) return res.status(404).json({ error: 'not_found' });
+  const ok = note.visibility === 'personal'
+    ? note.user_id === req.user.id
+    : (req.user.role === 'admin' || note.team_id === req.team_id);
+  if (!ok) return res.status(403).json({ error: 'forbidden' });
+
+  // Defenzivně: kdyby sloupec source_note_id ještě neexistoval (migrace
+  // nedoběhla), vrátíme prázdno místo 500.
+  try {
+    const r = await query(`
+      SELECT t.id, t.title, t.status, t.priority, t.due_date,
+             t.assignee_id, t.completed_at,
+             p.id AS project_id, p.name AS project_name, p.manager_id AS project_manager_id,
+             u.name AS assignee_name
+      FROM tasks t
+      JOIN projects p ON p.id = t.project_id
+      LEFT JOIN users u ON u.id = t.assignee_id
+      WHERE t.source_note_id = $1
+      ORDER BY t.created_at
+    `, [id]);
+    res.json({ tasks: r.rows });
+  } catch (err) {
+    if (err.code === '42703') {
+      console.warn('[notes/:id/tasks] source_note_id column missing — vracím prázdno');
+      return res.json({ tasks: [] });
+    }
+    throw err;
+  }
+});
+
 router.post('/:id/ai-process', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_id' });

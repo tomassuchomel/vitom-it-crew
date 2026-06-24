@@ -109,6 +109,8 @@ export const notes = {
   aiAsk:   (question, history) => api.post('/notes/ai-ask', { question, history }).then(r => r.data),
   // AI zpracování poznámky: action 'summarize' | 'suggest_tasks' → { reply }
   aiProcess: (id, action) => api.post(`/notes/${id}/ai-process`, { action }).then(r => r.data),
+  // Úkoly, které vznikly z této poznámky (přes suggest_tasks / Quick Capture).
+  tasks:     (id) => api.get(`/notes/${id}/tasks`).then(r => r.data),
   // Přepis nahrávky porady přes Whisper → { text }
   transcribe: (audioBlob) => {
     const fd = new FormData();
