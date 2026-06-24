@@ -7,8 +7,9 @@ import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import TaskCompletionDialog from '../components/TaskCompletionDialog.jsx';
 import TimeTriad from '../components/TimeTriad.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge, STATUS_META } from '../components/TaskStatus.jsx';
-import { tasks as tasksApi } from '../api.js';
-import { useAuth } from '../auth.jsx';
+import { tasks as tasksApi, projects as projectsApi } from '../api.js';
+import { useAuth, can } from '../auth.jsx';
+import Modal from '../components/Modal.jsx';
 
 const STATUS = STATUS_META;
 // needs_fix patří doprostřed – je to "vráceno k opravě, hned to vyřeš".
@@ -38,6 +39,8 @@ export default function MyTasks() {
   const [view, setView] = useState(() => localStorage.getItem('myTasks.view') || 'list');
   const [detailTaskId, setDetailTaskId] = useState(null);
   const [completingTask, setCompletingTask] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const canCreate = can.createTasks(user);
 
   useEffect(() => {
     localStorage.setItem('myTasks.view', view);
@@ -103,7 +106,17 @@ export default function MyTasks() {
       <PageHeader
         title="Moje úkoly"
         subtitle={`Úkoly přiřazené ${user.name} – tvůj hlavní pracovní prostor`}
-        actions={<ViewSwitcher value={view} onChange={setView} />}
+        actions={
+          <>
+            {canCreate && (
+              <button
+                onClick={() => setCreating(true)}
+                className="px-3 py-1.5 bg-brand-500 text-white text-sm rounded-lg hover:bg-brand-600 font-medium"
+              >+ Nový úkol</button>
+            )}
+            <ViewSwitcher value={view} onChange={setView} />
+          </>
+        }
       />
 
       <div className="p-8 space-y-4">
@@ -159,7 +172,116 @@ export default function MyTasks() {
           onCancel={() => setCompletingTask(null)}
         />
       )}
+      {creating && (
+        <NewSelfTaskModal
+          assigneeId={user.id}
+          assigneeName={user.name}
+          onClose={() => setCreating(false)}
+          onCreated={() => { setCreating(false); load(); }}
+        />
+      )}
     </div>
+  );
+}
+
+// Modal: rychlý formulář na vytvoření úkolu, který si user přiřadí sám.
+// Project list = projekty aktuálního teamu (POST /tasks ověří team membership).
+function NewSelfTaskModal({ assigneeId, assigneeName, onClose, onCreated }) {
+  const [projects, setProjects] = useState([]);
+  const [form, setForm] = useState({
+    project_id: '', title: '', priority: 'normal',
+    due_date: '', estimated_h: '',
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    projectsApi.list()
+      .then(d => {
+        const active = (d.projects || []).filter(p => p.status === 'active');
+        setProjects(active);
+        // Předvyplň první projekt, pokud user má jen jeden aktivní
+        if (active.length === 1) setForm(f => ({ ...f, project_id: active[0].id }));
+      })
+      .catch(() => setErr('Načtení projektů selhalo.'));
+  }, []);
+
+  const submit = async (e) => {
+    e?.preventDefault();
+    setErr(null);
+    if (!form.project_id) { setErr('Vyber projekt.'); return; }
+    if (!form.title.trim()) { setErr('Vyplň název úkolu.'); return; }
+    setBusy(true);
+    try {
+      await tasksApi.create({
+        project_id: Number(form.project_id),
+        title: form.title.trim(),
+        assignee_id: assigneeId,
+        priority: form.priority,
+        due_date: form.due_date || null,
+        estimated_h: form.estimated_h ? Number(form.estimated_h) : null,
+      });
+      onCreated();
+    } catch (e2) {
+      setErr(e2.response?.data?.message || e2.response?.data?.error || 'Vytvoření selhalo.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={onClose} title="Nový úkol pro sebe"
+      footer={<>
+        <button onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-ink-300">Zrušit</button>
+        <button onClick={submit} disabled={busy}
+          className="px-3 py-1.5 text-sm rounded bg-brand-500 text-white disabled:opacity-50">
+          {busy ? 'Vytvářím…' : 'Vytvořit úkol'}
+        </button>
+      </>}>
+      <form onSubmit={submit} className="space-y-3 text-sm">
+        <label className="block">
+          <span className="text-xs font-medium text-ink-600">Projekt *</span>
+          <select required value={form.project_id} onChange={e => setForm({ ...form, project_id: e.target.value })}
+            className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5">
+            <option value="">— vyber projekt —</option>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-ink-600">Název úkolu *</span>
+          <input type="text" required value={form.title} autoFocus
+            onChange={e => setForm({ ...form, title: e.target.value })}
+            className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5" />
+        </label>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <label className="block">
+            <span className="text-xs font-medium text-ink-600">Priorita</span>
+            <select value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}
+              className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5">
+              <option value="low">Nízká</option>
+              <option value="normal">Normální</option>
+              <option value="high">Vysoká</option>
+              <option value="urgent">Urgent</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-ink-600">Termín</span>
+            <input type="date" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })}
+              className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5" />
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-ink-600">Odhad (h)</span>
+            <input type="number" step="0.25" min="0" value={form.estimated_h}
+              onChange={e => setForm({ ...form, estimated_h: e.target.value })}
+              className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5" />
+          </label>
+        </div>
+        <div className="text-[11px] text-ink-500">
+          Úkol bude přiřazen tobě (<strong>{assigneeName}</strong>) ve stavu <em>Čeká</em>.
+        </div>
+        {err && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{err}</div>}
+      </form>
+    </Modal>
   );
 }
 
