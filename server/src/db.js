@@ -221,6 +221,17 @@ export async function migrate() {
                      WHERE table_name='users' AND column_name='avatar_updated_at') THEN
         ALTER TABLE users ADD COLUMN avatar_updated_at TIMESTAMPTZ;
       END IF;
+      -- Failsafe pro responsible_id (přidáno 2026-06): kdyby file migrace
+      -- nedoběhla nebo schema cache je stale, sloupec se přidá tady.
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='projects' AND column_name='responsible_id') THEN
+        ALTER TABLE projects ADD COLUMN responsible_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      END IF;
+      -- Failsafe pro can_see_all_teams (přidáno 2026-05): stejně.
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='users' AND column_name='can_see_all_teams') THEN
+        ALTER TABLE users ADD COLUMN can_see_all_teams BOOLEAN NOT NULL DEFAULT FALSE;
+      END IF;
     END $$;
   `);
   console.log('[db] PostgreSQL schéma připraveno');

@@ -41,7 +41,10 @@ router.get('/', requireAuth, async (req, res) => {
   const showCosts = can.seeCosts(req.user);
   // Filter na current team. Bez team kontextu (user není v žádném teamu) vrátíme prázdno.
   if (!req.team_id) return res.json({ projects: [] });
-  const r = await query(`
+
+  // Hlavní query s responsible_name. Pokud sloupec ještě neexistuje
+  // (migrace nedoběhla), zachytíme PostgreSQL 42703 a zkusíme fallback.
+  const buildQuery = (withResponsible) => `
     SELECT p.*,
       COALESCE(p.due_date,
         (SELECT MIN(t.due_date) FROM tasks t
@@ -60,14 +63,27 @@ router.get('/', requireAuth, async (req, res) => {
       (SELECT COALESCE(SUM(te.hours * u.hourly_rate), 0)
          FROM time_entries te JOIN users u ON u.id = te.user_id
          WHERE te.project_id = p.id) AS cost_so_far,
-      mu.name AS manager_name,
-      ru.name AS responsible_name
+      mu.name AS manager_name
+      ${withResponsible ? ', ru.name AS responsible_name' : ''}
     FROM projects p
     LEFT JOIN users mu ON mu.id = p.manager_id
-    LEFT JOIN users ru ON ru.id = p.responsible_id
+    ${withResponsible ? 'LEFT JOIN users ru ON ru.id = p.responsible_id' : ''}
     WHERE p.team_id = $1
     ORDER BY effective_due_date NULLS LAST, p.created_at DESC
-  `, [req.team_id]);
+  `;
+
+  let r;
+  try {
+    r = await query(buildQuery(true), [req.team_id]);
+  } catch (err) {
+    // 42703 = undefined_column. Migrace responsible_id ještě nedoběhla — fallback.
+    if (err.code === '42703') {
+      console.warn('[projects] responsible_id column missing, falling back without it');
+      r = await query(buildQuery(false), [req.team_id]);
+    } else {
+      throw err;
+    }
+  }
   const projects = r.rows;
   if (!showCosts) projects.forEach(p => { delete p.cost_so_far; delete p.budget; });
   res.json({ projects });
@@ -76,8 +92,9 @@ router.get('/', requireAuth, async (req, res) => {
 // Detail + úkoly
 router.get('/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
-  const pR = await query(`
-    SELECT p.*, mu.name AS manager_name, ru.name AS responsible_name,
+  // Defenzivně proti scénáři, kdy migrace responsible_id nedoběhla.
+  const buildDetailQuery = (withResp) => `
+    SELECT p.*, mu.name AS manager_name${withResp ? ', ru.name AS responsible_name' : ''},
       COALESCE(p.due_date,
         (SELECT MIN(t.due_date) FROM tasks t
           WHERE t.project_id = p.id AND t.status != 'done' AND t.due_date IS NOT NULL)
@@ -90,9 +107,20 @@ router.get('/:id', requireAuth, async (req, res) => {
       (SELECT COALESCE(SUM(t.estimated_h), 0) FROM tasks t WHERE t.project_id = p.id) AS estimated_h_total
     FROM projects p
     LEFT JOIN users mu ON mu.id = p.manager_id
-    LEFT JOIN users ru ON ru.id = p.responsible_id
+    ${withResp ? 'LEFT JOIN users ru ON ru.id = p.responsible_id' : ''}
     WHERE p.id = $1
-  `, [id]);
+  `;
+  let pR;
+  try {
+    pR = await query(buildDetailQuery(true), [id]);
+  } catch (err) {
+    if (err.code === '42703') {
+      console.warn('[projects/:id] responsible_id column missing, falling back');
+      pR = await query(buildDetailQuery(false), [id]);
+    } else {
+      throw err;
+    }
+  }
   const project = pR.rows[0];
   if (!project) return res.status(404).json({ error: 'not_found' });
   // Cross-team access: user musí být členem teamu, do kterého projekt patří.
