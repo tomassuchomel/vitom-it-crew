@@ -264,8 +264,15 @@ function GanttChart({ projects, zoom, forecastEnabled }) {
 function ProjectLabel({ project }) {
   const isDone = project.status === 'done';
   const cd = countdown(project.effective_due_date);
+  // height 100 + leading-tight → 4 řádky (název + manager + zodpovědnost + countdown)
+  // se bezpečně vejdou bez overflow do dalšího řádku.
   return (
-    <Link to={`/projects/${project.id}`} className="block px-4 py-3 text-sm border-b border-cream-100 hover:bg-cream-100 transition" style={{ height: 80 }}>
+    <Link
+      to={`/projects/${project.id}`}
+      className="block px-4 py-2.5 text-sm border-b border-cream-100 hover:bg-cream-100 transition flex flex-col justify-center leading-tight gap-0.5"
+      style={{ height: 100 }}
+      title={project.name}
+    >
       <div className="font-medium text-ink-800 truncate">{project.name}</div>
       <div className="text-[11px] text-ink-500 truncate">
         <span className="text-ink-400">Manager:</span> {project.manager_name || '—'}
@@ -274,11 +281,11 @@ function ProjectLabel({ project }) {
         <span className="text-ink-400">Zodpovědnost:</span> {project.responsible_name || '—'}
       </div>
       {!isDone ? (
-        <div className={`text-[10px] font-semibold mt-0.5 ${cd.overdue ? 'text-red-600' : cd.days <= 3 ? 'text-red-500' : cd.days <= 7 ? 'text-accent-600' : 'text-emerald-600'}`}>
+        <div className={`text-[10px] font-semibold ${cd.overdue ? 'text-red-600' : cd.days <= 3 ? 'text-red-500' : cd.days <= 7 ? 'text-accent-600' : 'text-emerald-600'}`}>
           {cd.overdue ? '⚠ ' : '⏱ '}{cd.text}
         </div>
       ) : (
-        <div className="text-[10px] text-emerald-600 font-semibold mt-0.5">✅ Hotovo</div>
+        <div className="text-[10px] text-emerald-600 font-semibold">✅ Hotovo</div>
       )}
     </Link>
   );
@@ -360,7 +367,7 @@ function ProjectRow({ project, layout, colorIdx, forecastEnabled }) {
   const projectedDateLabel = fmtCs(forecastEndDate);
 
   return (
-    <div className="relative border-b border-cream-100 hover:bg-cream-50/50 transition" style={{ height: showForecast ? 96 : 80 }}>
+    <div className="relative border-b border-cream-100 hover:bg-cream-50/50 transition" style={{ height: 100 }}>
       {/* Hlavní bar */}
       <div
         className="absolute rounded-lg shadow-sm flex items-center px-2 text-xs text-white overflow-hidden"
