@@ -33,6 +33,18 @@ export function isMailerConfigured() {
   return !!(c.clientId && c.clientSecret && c.tenantId && c.mailbox);
 }
 
+// Volá se ze startu serveru — log + early sanity check.
+export function describeMailerConfig() {
+  const c = cfg();
+  return {
+    has_client_id:     !!c.clientId,
+    has_client_secret: !!c.clientSecret,
+    has_tenant_id:     !!c.tenantId,
+    has_mailbox:       !!c.mailbox,
+    mailbox:           c.mailbox || '(not set)',
+  };
+}
+
 // Token cache — Graph access token žije ~60 min. Žádný retry, při expiry
 // se sám refreshne při dalším volání.
 let tokenCache = { token: null, exp: 0 };
@@ -104,11 +116,11 @@ export async function sendMail({ to, subject, html, text }) {
     if (!r.ok) {
       const errBody = await r.text();
       console.warn(`[mail] Graph sendMail ${r.status}: ${errBody.slice(0, 300)}`);
-      // Token mohl vypršet mezi cache a teď — zkusíme jednou znova
       if (r.status === 401) tokenCache = { token: null, exp: 0 };
       return { ok: false, error: `graph_${r.status}` };
     }
-    // sendMail vrací 202 Accepted bez body
+    // sendMail vrací 202 Accepted bez body — explicitně logujeme úspěch
+    console.log(`[mail] sent OK → ${to} (subject: ${String(subject).slice(0, 80)})`);
     return { ok: true };
   } catch (err) {
     console.warn('[mail] send failed', err.message);

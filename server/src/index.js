@@ -142,6 +142,16 @@ async function start() {
     } else if (cfgDesc.enabled && v.ok) {
       console.log(`     → web preflight: ready ✅ (worker musí běžet samostatně)`);
     }
+
+    // Mailer config — startup sanity
+    import('./mailer.js').then(({ describeMailerConfig }) => {
+      const m = describeMailerConfig();
+      console.log(`\n   Mailer (M365 Graph):`);
+      console.log(`     MICROSOFT_CLIENT_ID:     ${m.has_client_id ? '✅' : '❌ chybí'}`);
+      console.log(`     MICROSOFT_CLIENT_SECRET: ${m.has_client_secret ? '✅' : '❌ chybí'}`);
+      console.log(`     MICROSOFT_TENANT_ID:     ${m.has_tenant_id ? '✅' : '❌ chybí'}`);
+      console.log(`     MAIL_M365_MAILBOX:       ${m.has_mailbox ? `✅ ${m.mailbox}` : '❌ chybí'}`);
+    }).catch(() => {});
   });
 }
 start();
