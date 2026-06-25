@@ -33,7 +33,7 @@ function validateApiKey() {
 // Sběr kontextu z DB
 // scope: 'team' (default) – filtruj na teamId; 'all' – napříč všemi týmy (executive coach).
 // Když scope='team' a teamId není, vrátíme prázdný kontext (žádný team = nic neukazujeme).
-export async function buildContext({ teamId, scope = 'team' } = {}) {
+export async function buildContext({ teamId, scope = 'team', userId } = {}) {
   const filterAll = scope === 'all';
   if (!filterAll && !teamId) {
     return { today: new Date().toISOString().slice(0, 10), projects: [], velocity: [], accuracy: [] };
@@ -87,13 +87,91 @@ export async function buildContext({ teamId, scope = 'team' } = {}) {
 
   const accuracy = await computeAccuracy();
 
+  // Poznámky pro AI Coach kontext — admin/scope=all napříč všemi týmy,
+  // ostatní jen jejich current team (visibility='team' + 'personal' = user.id).
+  // userId je potřeba pro personal scope filter.
+  const notes = userId
+    ? await loadNotesForCoach({ scope, teamId, userId })
+    : [];
+
   return {
     today: new Date().toISOString().slice(0, 10),
     scope,
     projects,
     velocity: velocityR.rows,
     accuracy,
+    notes,
   };
+}
+
+// Načte poznámky pro AI Coach. Per scope:
+//   - 'team': team-visible + uživatelovy personal v current teamu
+//   - 'all':  všechny týmy, kde je user členem (admin globálně)
+// Limit 50 nejnovějších poznámek, content stripped, max 800 chars per body.
+async function loadNotesForCoach({ scope, teamId, userId }) {
+  const filterAll = scope === 'all';
+  // Zjisti, jestli je admin (může vidět všechno) nebo "jen člen".
+  const adminR = await query(`SELECT role FROM users WHERE id = $1`, [userId]);
+  const isAdmin = adminR.rows[0]?.role === 'admin';
+
+  let sql, params;
+  if (filterAll) {
+    if (isAdmin) {
+      // Admin: úplně všechny team-visible poznámky napříč týmy + svoje personal
+      sql = `
+        SELECT n.id, n.title, n.content, n.team_id, n.visibility, n.updated_at,
+               t.name AS team_name, u.name AS author_name
+        FROM notes n
+        LEFT JOIN teams t ON t.id = n.team_id
+        LEFT JOIN users u ON u.id = n.user_id
+        WHERE (n.visibility = 'team' OR (n.visibility = 'personal' AND n.user_id = $1))
+        ORDER BY n.updated_at DESC
+        LIMIT 50
+      `;
+      params = [userId];
+    } else {
+      // Cross-team pro non-admin: poznámky z týmů, kde je user členem
+      sql = `
+        SELECT n.id, n.title, n.content, n.team_id, n.visibility, n.updated_at,
+               t.name AS team_name, u.name AS author_name
+        FROM notes n
+        LEFT JOIN teams t ON t.id = n.team_id
+        LEFT JOIN users u ON u.id = n.user_id
+        WHERE n.team_id IN (SELECT team_id FROM team_members WHERE user_id = $1)
+          AND (n.visibility = 'team' OR (n.visibility = 'personal' AND n.user_id = $1))
+        ORDER BY n.updated_at DESC
+        LIMIT 50
+      `;
+      params = [userId];
+    }
+  } else {
+    // 'team' scope: current team
+    if (!teamId) return [];
+    sql = `
+      SELECT n.id, n.title, n.content, n.team_id, n.visibility, n.updated_at,
+             t.name AS team_name, u.name AS author_name
+      FROM notes n
+      LEFT JOIN teams t ON t.id = n.team_id
+      LEFT JOIN users u ON u.id = n.user_id
+      WHERE n.team_id = $1
+        AND (n.visibility = 'team' OR (n.visibility = 'personal' AND n.user_id = $2))
+      ORDER BY n.updated_at DESC
+      LIMIT 50
+    `;
+    params = [teamId, userId];
+  }
+
+  const r = await query(sql, params);
+  // Strip HTML + omez délku, ať se prompt vejde
+  return r.rows.map(n => ({
+    id: n.id,
+    title: n.title || '(bez názvu)',
+    team_name: n.team_name,
+    author_name: n.author_name,
+    visibility: n.visibility,
+    updated_at: n.updated_at,
+    content: stripHtml(n.content || '').slice(0, 800),
+  }));
 }
 
 // Per-uživatel agregace přesnosti odhadu. Bere v úvahu jen dokončené úkoly s actual_h.
@@ -163,10 +241,10 @@ FORMÁT ODPOVĚDI – výhradně validní JSON (nic dalšího okolo):
   "recommendations": ["...", "..."]
 }`;
 
-export async function getAdvice({ teamId, scope = 'team' } = {}) {
+export async function getAdvice({ teamId, scope = 'team', userId } = {}) {
   const keyCheck = validateApiKey();
   if (!keyCheck.ok) return { error: keyCheck.reason, message: keyCheck.message };
-  const ctx = await buildContext({ teamId, scope });
+  const ctx = await buildContext({ teamId, scope, userId });
   if (ctx.projects.length === 0) {
     return {
       status: 'ok',
@@ -557,13 +635,19 @@ Odpověz česky, max 5 odrážek nebo 3 věty. Buď věcný, nevymýšlej nic, c
   return { reply: data.content?.[0]?.text || '', usage: data.usage };
 }
 
-export async function chat(messages, { teamId, scope = 'team' } = {}) {
+export async function chat(messages, { teamId, scope = 'team', userId } = {}) {
   const keyCheck = validateApiKey();
   if (!keyCheck.ok) return { error: keyCheck.reason, message: keyCheck.message };
-  const ctx = await buildContext({ teamId, scope });
+  const ctx = await buildContext({ teamId, scope, userId });
   const scopeNote = scope === 'all'
-    ? 'KONTEXT: vidíš data ZE VŠECH TÝMŮ. U projektů je team_name.'
+    ? 'KONTEXT: vidíš data ZE VŠECH TÝMŮ. U projektů i poznámek je team_name.'
     : 'KONTEXT: vidíš data JEDNOHO konkrétního týmu.';
+  // Poznámky jako oddělená sekce — title + zkrácený text + meta.
+  // Když je hodně poznámek, držíme limit z buildContext (50, 800 chars each).
+  const notesSection = ctx.notes?.length > 0
+    ? `\nPOZNÁMKY (může jich být víc, autoritativní zdroj):\n${JSON.stringify(ctx.notes)}`
+    : '\nPOZNÁMKY: (žádné nejsou v dostupném scope)';
+
   const systemWithCtx = `${SYSTEM_PROMPT}
 
 ${scopeNote}
@@ -571,7 +655,11 @@ DATA, KE KTERÝM MŮŽEŠ ODKAZOVAT (nemůžeš měnit, jen analyzovat):
 DATUM: ${ctx.today}
 PROJEKTY: ${JSON.stringify(ctx.projects)}
 TEMPO: ${JSON.stringify(ctx.velocity)}
-ACCURACY: ${JSON.stringify(ctx.accuracy)}
+ACCURACY: ${JSON.stringify(ctx.accuracy)}${notesSection}
+
+Pokud se user ptá na obsah poznámek, čerpej z POZNÁMKY sekce. Cituj
+konkrétní titulky („V poznámce „X" píše se …"), nevymýšlej. Když odpověď
+v poznámkách není, řekni to.
 
 V chatu odpovídej krátce a věcně, plain text (ne JSON).`;
 

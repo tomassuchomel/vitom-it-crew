@@ -31,7 +31,7 @@ router.get('/advice', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'forbidden', message: 'Executive view dostupný jen pro privilegované uživatele.' });
   }
   try {
-    const result = await getAdvice({ teamId: req.team_id, scope });
+    const result = await getAdvice({ teamId: req.team_id, scope, userId: req.user.id });
     res.json(result);
   } catch (err) {
     console.error('[ai/advice]', err);
@@ -52,7 +52,7 @@ router.post('/chat', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'forbidden', message: 'Executive chat dostupný jen pro privilegované uživatele.' });
   }
   try {
-    const result = await chat(messages, { teamId: req.team_id, scope });
+    const result = await chat(messages, { teamId: req.team_id, scope, userId: req.user.id });
     res.json(result);
   } catch (err) {
     console.error('[ai/chat]', err);
