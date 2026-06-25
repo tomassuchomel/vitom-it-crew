@@ -39,7 +39,29 @@ function validateRepoUrl(v) {
 // termín se zase ztratí a projekt spadne na konec seznamu.
 router.get('/', requireAuth, async (req, res) => {
   const showCosts = can.seeCosts(req.user);
-  // Filter na current team. Bez team kontextu (user není v žádném teamu) vrátíme prázdno.
+  const scopeAll = req.query.scope === 'all';
+
+  // Cross-team scope: admin/manager/senior_dev (= can.createTasks) může vidět
+  // projekty napříč VŠEMI týmy, kde je členem (admin globálně). Pro výběr
+  // projektu při zakládání úkolu — user.role je už ověřena dál v POST /tasks.
+  if (scopeAll) {
+    if (!can.createTasks(req.user)) return res.status(403).json({ error: 'forbidden' });
+    const isAdmin = req.user.role === 'admin';
+    const r = await query(`
+      SELECT p.id, p.name, p.team_id, p.status, p.due_date,
+             t.name AS team_name,
+             mu.name AS manager_name
+      FROM projects p
+      JOIN teams t ON t.id = p.team_id
+      LEFT JOIN users mu ON mu.id = p.manager_id
+      ${isAdmin ? '' : 'JOIN team_members tm ON tm.team_id = p.team_id AND tm.user_id = $1'}
+      WHERE p.status = 'active'
+      ORDER BY t.name, p.name
+    `, isAdmin ? [] : [req.user.id]);
+    return res.json({ projects: r.rows });
+  }
+
+  // Default: filter na current team. Bez team kontextu (user není v žádném teamu) vrátíme prázdno.
   if (!req.team_id) return res.json({ projects: [] });
 
   // Hlavní query s responsible_name. Pokud sloupec ještě neexistuje

@@ -7,7 +7,7 @@ import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import TaskCompletionDialog from '../components/TaskCompletionDialog.jsx';
 import TimeTriad from '../components/TimeTriad.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge, STATUS_META } from '../components/TaskStatus.jsx';
-import { tasks as tasksApi, projects as projectsApi } from '../api.js';
+import { tasks as tasksApi, projects as projectsApi, users as usersApi } from '../api.js';
 import { useAuth, can } from '../auth.jsx';
 import Modal from '../components/Modal.jsx';
 
@@ -173,9 +173,8 @@ export default function MyTasks() {
         />
       )}
       {creating && (
-        <NewSelfTaskModal
-          assigneeId={user.id}
-          assigneeName={user.name}
+        <NewTaskModal
+          currentUser={user}
           onClose={() => setCreating(false)}
           onCreated={() => { setCreating(false); load(); }}
         />
@@ -184,39 +183,70 @@ export default function MyTasks() {
   );
 }
 
-// Modal: rychlý formulář na vytvoření úkolu, který si user přiřadí sám.
-// Project list = projekty aktuálního teamu (POST /tasks ověří team membership).
-function NewSelfTaskModal({ assigneeId, assigneeName, onClose, onCreated }) {
+// Modal: rychlý formulář na vytvoření úkolu.
+// Pro admin/manager (can.createTasks): projekty napříč VŠEMI týmy + libovolný
+// assignee z teamu vybraného projektu. Default assignee = currentUser.
+// Pro ostatní: jen current team + assignee = sám.
+function NewTaskModal({ currentUser, onClose, onCreated }) {
+  const isManagerOrAdmin = can.createTasks(currentUser);
   const [projects, setProjects] = useState([]);
+  const [assignees, setAssignees] = useState([]);
   const [form, setForm] = useState({
-    project_id: '', title: '', priority: 'normal',
+    project_id: '',
+    assignee_id: currentUser.id,
+    title: '', priority: 'normal',
     due_date: '', estimated_h: '',
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
+  // Načti projekty — cross-team pro manažery+, current team pro ostatní.
   useEffect(() => {
-    projectsApi.list()
+    const loader = isManagerOrAdmin ? projectsApi.listAll() : projectsApi.list();
+    loader
       .then(d => {
-        const active = (d.projects || []).filter(p => p.status === 'active');
+        const active = (d.projects || []).filter(p => !p.status || p.status === 'active');
         setProjects(active);
-        // Předvyplň první projekt, pokud user má jen jeden aktivní
         if (active.length === 1) setForm(f => ({ ...f, project_id: active[0].id }));
       })
       .catch(() => setErr('Načtení projektů selhalo.'));
-  }, []);
+  }, [isManagerOrAdmin]);
+
+  // Po vybrání projektu načti assignees z jeho týmu (jinak cross-team výběr
+  // by nedávaly seznam možností). Default assignee = currentUser, pokud je
+  // členem; jinak první z listu.
+  useEffect(() => {
+    if (!form.project_id) { setAssignees([]); return; }
+    const proj = projects.find(p => String(p.id) === String(form.project_id));
+    if (!proj?.team_id) {
+      // Fallback (single-team scope): current team users
+      usersApi.list().then(d => setAssignees(d.users || [])).catch(() => setAssignees([]));
+      return;
+    }
+    usersApi.listInTeam(proj.team_id)
+      .then(d => {
+        const list = d.users || [];
+        setAssignees(list);
+        // Pokud current user NENÍ v teamu projektu, předvyplnit prvním
+        if (!list.some(u => u.id === currentUser.id)) {
+          setForm(f => ({ ...f, assignee_id: list[0]?.id || '' }));
+        }
+      })
+      .catch(() => setAssignees([]));
+  }, [form.project_id, projects, currentUser.id]);
 
   const submit = async (e) => {
     e?.preventDefault();
     setErr(null);
     if (!form.project_id) { setErr('Vyber projekt.'); return; }
     if (!form.title.trim()) { setErr('Vyplň název úkolu.'); return; }
+    if (!form.assignee_id) { setErr('Vyber, komu úkol patří.'); return; }
     setBusy(true);
     try {
       await tasksApi.create({
         project_id: Number(form.project_id),
         title: form.title.trim(),
-        assignee_id: assigneeId,
+        assignee_id: Number(form.assignee_id),
         priority: form.priority,
         due_date: form.due_date || null,
         estimated_h: form.estimated_h ? Number(form.estimated_h) : null,
@@ -230,7 +260,7 @@ function NewSelfTaskModal({ assigneeId, assigneeName, onClose, onCreated }) {
   };
 
   return (
-    <Modal open={true} onClose={onClose} title="Nový úkol pro sebe"
+    <Modal open={true} onClose={onClose} title="Nový úkol"
       footer={<>
         <button onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-ink-300">Zrušit</button>
         <button onClick={submit} disabled={busy}
@@ -240,11 +270,30 @@ function NewSelfTaskModal({ assigneeId, assigneeName, onClose, onCreated }) {
       </>}>
       <form onSubmit={submit} className="space-y-3 text-sm">
         <label className="block">
-          <span className="text-xs font-medium text-ink-600">Projekt *</span>
+          <span className="text-xs font-medium text-ink-600">
+            Projekt *{isManagerOrAdmin && <span className="text-ink-400 ml-1">(napříč všemi tvými týmy)</span>}
+          </span>
           <select required value={form.project_id} onChange={e => setForm({ ...form, project_id: e.target.value })}
             className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5">
             <option value="">— vyber projekt —</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {projects.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.name}{p.team_name ? ` · ${p.team_name}` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-ink-600">Komu *</span>
+          <select required value={form.assignee_id || ''} onChange={e => setForm({ ...form, assignee_id: e.target.value })}
+            className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5"
+            disabled={!form.project_id}>
+            {assignees.length === 0 && <option value="">— vyber projekt nejdřív —</option>}
+            {assignees.map(u => (
+              <option key={u.id} value={u.id}>
+                {u.name}{u.id === currentUser.id ? ' (já)' : ''}
+              </option>
+            ))}
           </select>
         </label>
         <label className="block">
@@ -275,9 +324,6 @@ function NewSelfTaskModal({ assigneeId, assigneeName, onClose, onCreated }) {
               onChange={e => setForm({ ...form, estimated_h: e.target.value })}
               className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5" />
           </label>
-        </div>
-        <div className="text-[11px] text-ink-500">
-          Úkol bude přiřazen tobě (<strong>{assigneeName}</strong>) ve stavu <em>Čeká</em>.
         </div>
         {err && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{err}</div>}
       </form>

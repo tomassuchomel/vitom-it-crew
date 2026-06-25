@@ -38,6 +38,9 @@ export const auth = {
 
 export const projects = {
   list:    () => api.get('/projects').then(r => r.data),
+  // Cross-team: pro admin/manager/senior_dev — projekty napříč všemi týmy,
+  // kde je user členem (admin globálně). Pro zakládání úkolu mezi týmy.
+  listAll: () => api.get('/projects', { params: { scope: 'all' } }).then(r => r.data),
   get:     (id) => api.get(`/projects/${id}`).then(r => r.data),
   edits:   (id) => api.get(`/projects/${id}/edits`).then(r => r.data),
   create:  (data) => api.post('/projects', data).then(r => r.data),
@@ -209,6 +212,9 @@ export const time = {
 export const users = {
   // Default: team-scoped (jen členové current teamu).
   list:    () => api.get('/users').then(r => r.data),
+  // Členové konkrétního týmu — pro cross-team task creation (assignee dropdown
+  // po výběru projektu z jiného týmu). Server ověří, že user je členem.
+  listInTeam: (teamId) => api.get('/users', { params: { team_id: teamId } }).then(r => r.data),
   // Admin-only: všichni useři + jejich team membership v poli `teams`.
   // Použij v /admin sekci pro globální správu napříč teamy.
   listAll: () => api.get('/users', { params: { scope: 'all' } }).then(r => r.data),

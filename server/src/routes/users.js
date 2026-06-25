@@ -67,8 +67,25 @@ router.get('/', requireAuth, async (req, res) => {
     return res.json({ users: r.rows.map(u => ({ ...publicUser(u, { includeRate: showRates }), teams: u.teams })) });
   }
 
+  // ?team_id=N → členové konkrétního týmu (pro cross-team task creation,
+  // kde user vybírá assignee z teamu vybraného projektu).
+  // Permission: user musí být členem dané team_id (nebo admin). Bez tohoto
+  // by manager mohl vyzkoumat členy jiných týmů.
+  const askedTeamId = Number(req.query.team_id);
+  let teamFilter = req.team_id;
+  if (Number.isInteger(askedTeamId) && askedTeamId > 0) {
+    if (req.user.role !== 'admin') {
+      const ok = await query(
+        `SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2 LIMIT 1`,
+        [askedTeamId, req.user.id]
+      );
+      if (ok.rows.length === 0) return res.status(403).json({ error: 'forbidden' });
+    }
+    teamFilter = askedTeamId;
+  }
+
   // Default: jen členové current teamu. Bez team kontextu vrátíme prázdno.
-  if (!req.team_id) return res.json({ users: [] });
+  if (!teamFilter) return res.json({ users: [] });
   const r = await query(
     `SELECT u.id, u.email, u.name, u.first_name, u.last_name, u.role, u.hourly_rate, u.active,
             u.must_change_password, u.avatar_updated_at,
@@ -77,7 +94,7 @@ router.get('/', requireAuth, async (req, res) => {
      JOIN team_members tm ON tm.user_id = u.id
      WHERE tm.team_id = $1 AND u.active = TRUE
      ORDER BY u.name`,
-    [req.team_id]
+    [teamFilter]
   );
   res.json({ users: r.rows.map(u => ({ ...publicUser(u, { includeRate: showRates }), team_role: u.current_team_role })) });
 });
