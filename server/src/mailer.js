@@ -1,73 +1,124 @@
-// Email helper přes Resend API (https://resend.com).
-// Když chybí RESEND_API_KEY, email se jen zaloguje (graceful degradation).
+// Email helper přes Microsoft Graph API (Client Credentials Flow).
+// Server se přihlásí sám sebe (žádný per-user OAuth) a posílá z konkrétní
+// mailbox v M365 tenantu.
+//
+// Vyžadované Azure App registration permissions (Application, ne Delegated):
+//   - Mail.Send  (admin consent granted)
+// Doporučeno: Application Access Policy v M365 PowerShell, aby aplikace mohla
+// posílat JEN z MAIL_M365_MAILBOX, ne ze všech schránek.
 //
 // Env:
-//   RESEND_API_KEY  — API klíč z Resend dashboardu (začíná re_...)
-//   MAIL_FROM       — odesílatel, např. "VITOM <noreply@vitom.cz>"
-//                     Domain musí být ověřená v Resend, jinak Resend hodí 403.
-//   APP_BASE_URL    — public URL appky (pro odkazy v emailu),
-//                     např. "https://it.realitniekosystem.cz"
+//   MICROSOFT_CLIENT_ID      — Azure App ID (sdílí s Email C OAuth)
+//   MICROSOFT_CLIENT_SECRET  — Azure App secret
+//   MICROSOFT_TENANT_ID      — Azure tenant GUID
+//   MAIL_M365_MAILBOX        — odesílatel, např. "notifikace@vitom.cz"
+//   APP_BASE_URL             — public URL appky (pro odkazy v emailu)
 
 import { query } from './db.js';
 
-const RESEND_API = 'https://api.resend.com/emails';
+const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
 function cfg() {
   return {
-    apiKey: process.env.RESEND_API_KEY?.trim(),
-    from:   process.env.MAIL_FROM?.trim() || 'VITOM <onboarding@resend.dev>',
-    base:   (process.env.APP_BASE_URL?.trim() || 'https://it.realitniekosystem.cz').replace(/\/$/, ''),
+    clientId:     process.env.MICROSOFT_CLIENT_ID?.trim(),
+    clientSecret: process.env.MICROSOFT_CLIENT_SECRET?.trim(),
+    tenantId:     process.env.MICROSOFT_TENANT_ID?.trim(),
+    mailbox:      process.env.MAIL_M365_MAILBOX?.trim(),
+    base:         (process.env.APP_BASE_URL?.trim() || 'https://it.realitniekosystem.cz').replace(/\/$/, ''),
   };
 }
 
 export function isMailerConfigured() {
-  return !!cfg().apiKey;
+  const c = cfg();
+  return !!(c.clientId && c.clientSecret && c.tenantId && c.mailbox);
 }
 
-// Odeslání jednoho emailu. Vrací { ok, id?, error? }.
-// Nikdy nethrow — caller (hooks v routes) je fire-and-forget.
+// Token cache — Graph access token žije ~60 min. Žádný retry, při expiry
+// se sám refreshne při dalším volání.
+let tokenCache = { token: null, exp: 0 };
+
+async function getAppAccessToken() {
+  const c = cfg();
+  if (!isMailerConfigured()) return null;
+  // 60s buffer před expirací, ať nepošleme s right-on-edge tokenem.
+  if (tokenCache.token && tokenCache.exp - 60_000 > Date.now()) {
+    return tokenCache.token;
+  }
+  const r = await fetch(`https://login.microsoftonline.com/${c.tenantId}/oauth2/v2.0/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: c.clientId,
+      client_secret: c.clientSecret,
+      scope: 'https://graph.microsoft.com/.default',
+      grant_type: 'client_credentials',
+    }),
+  });
+  if (!r.ok) {
+    const txt = await r.text();
+    console.warn(`[mail] token request failed ${r.status}: ${txt.slice(0, 300)}`);
+    return null;
+  }
+  const d = await r.json();
+  const expiresMs = (Number(d.expires_in) || 3600) * 1000;
+  tokenCache = { token: d.access_token, exp: Date.now() + expiresMs };
+  return d.access_token;
+}
+
+// Odeslání jednoho emailu přes Graph /users/{mailbox}/sendMail.
+// Vrací { ok, error? }. Nikdy nethrow — caller (hooks v routes) je fire-and-forget.
 export async function sendMail({ to, subject, html, text }) {
-  const { apiKey, from } = cfg();
-  if (!apiKey) {
-    console.log(`[mail] (no key) by sent: to=${to} subject=${subject}`);
-    return { ok: false, error: 'no_api_key' };
+  const c = cfg();
+  if (!isMailerConfigured()) {
+    console.log(`[mail] (no config) by sent: to=${to} subject=${subject}`);
+    return { ok: false, error: 'no_config' };
   }
   if (!to) return { ok: false, error: 'no_recipient' };
+
+  const token = await getAppAccessToken();
+  if (!token) return { ok: false, error: 'no_token' };
+
+  const body = {
+    message: {
+      subject: String(subject || '(no subject)').slice(0, 255),
+      body: {
+        contentType: html ? 'HTML' : 'Text',
+        content: html || text || '',
+      },
+      toRecipients: [{ emailAddress: { address: to } }],
+    },
+    // saveToSentItems=false → schránka notifikace@vitom.cz se nezaplní
+    // tisíci odeslaných mailů. Můžeš změnit na true, pokud chceš audit log v M365.
+    saveToSentItems: 'false',
+  };
+
   try {
-    const r = await fetch(RESEND_API, {
+    const r = await fetch(`${GRAPH_BASE}/users/${encodeURIComponent(c.mailbox)}/sendMail`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        from, to: [to], subject,
-        html: html || `<pre>${text || ''}</pre>`,
-        text: text || stripHtml(html || ''),
-      }),
+      body: JSON.stringify(body),
     });
     if (!r.ok) {
       const errBody = await r.text();
-      console.warn(`[mail] Resend ${r.status}: ${errBody.slice(0, 300)}`);
-      return { ok: false, error: `resend_${r.status}` };
+      console.warn(`[mail] Graph sendMail ${r.status}: ${errBody.slice(0, 300)}`);
+      // Token mohl vypršet mezi cache a teď — zkusíme jednou znova
+      if (r.status === 401) tokenCache = { token: null, exp: 0 };
+      return { ok: false, error: `graph_${r.status}` };
     }
-    const d = await r.json();
-    return { ok: true, id: d.id };
+    // sendMail vrací 202 Accepted bez body
+    return { ok: true };
   } catch (err) {
     console.warn('[mail] send failed', err.message);
     return { ok: false, error: 'fetch_failed' };
   }
 }
 
-function stripHtml(s) {
-  return String(s).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-}
-
-// Načti preference uživatele. Pokud řádek neexistuje, vrátíme všechny TRUE
-// (= migrace default).
+// Načti preference uživatele. Pokud řádek neexistuje, vrátíme všechny TRUE.
+// Defenzivně: 42703 (sloupec email_daily_summary chybí) → fallback bez něj.
 export async function getNotificationPrefs(userId) {
-  // Defenzivně: kdyby email_daily_summary sloupec ještě neexistoval (migrace
-  // nedoběhla), spadneme na query bez něj a default TRUE.
   try {
     const r = await query(
       `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question,
@@ -95,12 +146,10 @@ export async function getNotificationPrefs(userId) {
   };
 }
 
-// Pomocný builder pro HTML šablonu. Centralizovaný — jeden look pro všechny.
-// Link otevře appku s otevřeným úkolem (TaskDetailModal přes ?taskId=N).
+// HTML šablona pro jednorázové task-related emaily. Link otevře appku
+// s otevřeným úkolem (TaskDetailModal přes ?taskId=N).
 export function buildTaskEmailHtml({ title, body, taskId, ctaLabel = 'Otevřít úkol' }) {
   const { base } = cfg();
-  // Cíl: stránka MyTasks s query ?taskId=N → frontend modal se sám otevře
-  // (TaskDetailModal handler v MyTasks už podobnou logiku má).
   const url = `${base}/my-tasks?taskId=${taskId}`;
   return `<!DOCTYPE html>
 <html><body style="font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; background: #eee9e4; padding: 24px; color: #1f3a40;">
@@ -111,7 +160,7 @@ export function buildTaskEmailHtml({ title, body, taskId, ctaLabel = 'Otevřít 
     <a href="${url}" style="display: inline-block; background: #0c363e; color: white; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px;">${escapeHtml(ctaLabel)} →</a>
     <div style="margin-top: 24px; padding-top: 12px; border-top: 1px solid #e2dcd3; font-size: 11px; color: #8a9b9f;">
       Odkaz: <a href="${url}" style="color: #0c363e;">${url}</a><br />
-      Tyto notifikace si můžeš vypnout v profilu → Notifikace.
+      Tyto notifikace si můžeš vypnout v profilu → Notifikace e‑mailem.
     </div>
   </div>
 </body></html>`;
