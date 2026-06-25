@@ -66,17 +66,32 @@ function stripHtml(s) {
 // Načti preference uživatele. Pokud řádek neexistuje, vrátíme všechny TRUE
 // (= migrace default).
 export async function getNotificationPrefs(userId) {
-  const r = await query(
-    `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question
-     FROM user_notification_prefs WHERE user_id = $1`,
-    [userId]
-  );
-  if (r.rows[0]) return r.rows[0];
+  // Defenzivně: kdyby email_daily_summary sloupec ještě neexistoval (migrace
+  // nedoběhla), spadneme na query bez něj a default TRUE.
+  try {
+    const r = await query(
+      `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question,
+              email_daily_summary
+       FROM user_notification_prefs WHERE user_id = $1`,
+      [userId]
+    );
+    if (r.rows[0]) return r.rows[0];
+  } catch (err) {
+    if (err.code === '42703') {
+      const r = await query(
+        `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question
+         FROM user_notification_prefs WHERE user_id = $1`,
+        [userId]
+      );
+      if (r.rows[0]) return { ...r.rows[0], email_daily_summary: true };
+    } else { throw err; }
+  }
   return {
     email_task_assigned: true,
     email_task_returned: true,
     email_task_approved: true,
     email_new_question:  true,
+    email_daily_summary: true,
   };
 }
 

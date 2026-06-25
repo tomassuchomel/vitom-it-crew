@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { notifications as notifApi } from '../api.js';
 
 const EVENTS = [
+  { key: 'email_daily_summary', label: 'Denní souhrn (AI reminder)', emoji: '☀️', hint: 'Každé ráno v 8:05: hlavní doporučení + seznam úkolů dle priority.' },
   { key: 'email_task_assigned', label: 'Nový úkol pro mě',     emoji: '✅', hint: 'Někdo mi přiřadí nový úkol.' },
   { key: 'email_task_returned', label: 'Úkol vrácen k opravě', emoji: '🔄', hint: 'Manažer mi vrátí úkol k přepracování.' },
   { key: 'email_task_approved', label: 'Úkol schválen',        emoji: '🎉', hint: 'Manažer schválí úkol, který jsem dokončil.' },

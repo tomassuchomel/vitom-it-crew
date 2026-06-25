@@ -250,6 +250,11 @@ export async function migrate() {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
       END IF;
+      -- Failsafe pro daily summary opt-in (přidáno 2026-06):
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='user_notification_prefs' AND column_name='email_daily_summary') THEN
+        ALTER TABLE user_notification_prefs ADD COLUMN email_daily_summary BOOLEAN NOT NULL DEFAULT TRUE;
+      END IF;
     END $$;
   `);
   console.log('[db] PostgreSQL schéma připraveno');
