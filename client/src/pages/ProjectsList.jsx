@@ -8,12 +8,24 @@ import { useAuth, can } from '../auth.jsx';
 const STATUS_LABEL = { active: 'Aktivní', done: 'Hotovo', cancelled: 'Zrušeno' };
 const STATUS_COLOR = { active: 'bg-blue-100 text-blue-700', done: 'bg-emerald-100 text-emerald-700', cancelled: 'bg-slate-200 text-slate-600' };
 
+// Filter pills. 'open' = pouze aktivní (default, hotové a zrušené schované).
+const STATUS_FILTERS = [
+  { value: 'open',      label: 'Otevřené' },
+  { value: 'active',    label: '🔵 Aktivní' },
+  { value: 'done',      label: '✅ Hotové' },
+  { value: 'cancelled', label: '⛌ Zrušené' },
+  { value: 'all',       label: 'Vše' },
+];
+
 export default function ProjectsList() {
   const { user } = useAuth();
   const [projects, setProjects] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
+  // Default 'open' = skrýt hotové a zrušené (per zadání usera).
+  // localStorage si pamatuje volbu mezi otevřeními.
+  const [statusFilter, setStatusFilter] = useState(() => localStorage.getItem('projectsList.filter') || 'open');
 
   const load = () => {
     setLoading(true);
@@ -23,13 +35,30 @@ export default function ProjectsList() {
   };
   useEffect(load, []);
 
+  useEffect(() => {
+    localStorage.setItem('projectsList.filter', statusFilter);
+  }, [statusFilter]);
+
   if (loading) return <div className="p-6 text-slate-500">Načítám…</div>;
+
+  // 'open' = 'active' (skryje done/cancelled), ostatní filtruje doslova, 'all' nefiltruje.
+  const visible = statusFilter === 'all'
+    ? projects
+    : projects.filter(p => statusFilter === 'open' ? p.status === 'active' : p.status === statusFilter);
+
+  // Pomocný count per filter pro badge na pills.
+  const countByStatus = projects.reduce((acc, p) => { acc[p.status] = (acc[p.status] || 0) + 1; return acc; }, {});
+  const filterCount = (val) => {
+    if (val === 'all')  return projects.length;
+    if (val === 'open') return countByStatus.active || 0;
+    return countByStatus[val] || 0;
+  };
 
   return (
     <div>
       <PageHeader
         title="Projekty"
-        subtitle={`${projects.length} projekt(ů)`}
+        subtitle={`${visible.length} z ${projects.length} projekt(ů)`}
         actions={can.manageProjects(user) && (
           <button
             onClick={() => setModal(true)}
@@ -38,8 +67,25 @@ export default function ProjectsList() {
         )}
       />
 
+      <div className="px-6 pt-4 flex flex-wrap gap-1.5">
+        {STATUS_FILTERS.map(f => (
+          <button key={f.value} onClick={() => setStatusFilter(f.value)}
+            className={`px-3 py-1 text-xs rounded-full border transition ${
+              statusFilter === f.value
+                ? 'bg-brand-500 text-white border-brand-500'
+                : 'bg-white text-ink-600 border-cream-300 hover:bg-cream-50'
+            }`}>
+            {f.label} <span className="ml-1 opacity-70">({filterCount(f.value)})</span>
+          </button>
+        ))}
+      </div>
+
       <div className="p-6 grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-        {projects.map(p => (
+        {visible.length === 0 ? (
+          <div className="col-span-full bg-white border border-cream-200 rounded-xl p-8 text-center text-ink-400 text-sm">
+            Žádné projekty v této kategorii.
+          </div>
+        ) : visible.map(p => (
           <Link
             key={p.id}
             to={`/projects/${p.id}`}

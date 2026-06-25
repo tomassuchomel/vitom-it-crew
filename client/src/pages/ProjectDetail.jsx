@@ -57,6 +57,9 @@ export default function ProjectDetail() {
   const [aiDetailTask, setAiDetailTask] = useState(null);  // null | task – pro TaskDetailModal s AI panelem
   const [editOpen, setEditOpen] = useState(false);
   const [reviewing, setReviewing] = useState(null);    // null | { task, verdict } pro ReviewTaskDialog
+  // Status filter pro úkoly. 'open' default = skrýt done/cancelled.
+  const [taskFilter, setTaskFilter] = useState(() => localStorage.getItem('projectDetail.taskFilter') || 'open');
+  useEffect(() => { localStorage.setItem('projectDetail.taskFilter', taskFilter); }, [taskFilter]);
   const [edits, setEdits] = useState([]);
   const [editsLoading, setEditsLoading] = useState(false);
 
@@ -93,11 +96,24 @@ export default function ProjectDetail() {
   const { project, tasks } = data;
 
   // Postavíme strom: top-level úkoly a jejich podúkoly
-  const topTasks = tasks.filter(t => !t.parent_id);
+  const topTasksRaw = tasks.filter(t => !t.parent_id);
   const childMap = tasks.reduce((m, t) => {
     if (t.parent_id) (m[t.parent_id] = m[t.parent_id] || []).push(t);
     return m;
   }, {});
+  // Status filter: 'open' (default) = skryje done/cancelled (per zadání).
+  // Aplikuje se i na children — pokud parent splňuje filter, ale žádný child
+  // splňuje, zůstane parent viditelný bez sub-rows (TaskRow to zvládne).
+  const taskMatchesFilter = (t) => {
+    if (taskFilter === 'all') return true;
+    if (taskFilter === 'open') return t.status !== 'done' && t.status !== 'cancelled';
+    return t.status === taskFilter;
+  };
+  const topTasks = topTasksRaw.filter(taskMatchesFilter);
+  const filteredChildMap = Object.fromEntries(
+    Object.entries(childMap).map(([pid, list]) => [pid, list.filter(taskMatchesFilter)])
+  );
+  const countTasksByStatus = tasks.reduce((acc, t) => { acc[t.status] = (acc[t.status] || 0) + 1; return acc; }, {});
 
   const handleStatusChange = async (task, status) => {
     // Předání k review (in_progress → review) vyžaduje actual_h – otevři dialog
@@ -172,7 +188,7 @@ export default function ProjectDetail() {
       <div className="p-6 grid gap-6 grid-cols-1 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-4">
           <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-3">
               <h2 className="text-lg font-semibold text-slate-800">Úkoly</h2>
               {can.createTasks(user) && (
                 <button
@@ -182,15 +198,39 @@ export default function ProjectDetail() {
               )}
             </div>
 
+            {/* Status filter pills */}
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              {[
+                { value: 'open',        label: 'Otevřené', countSelector: (c) => (c.todo||0) + (c.in_progress||0) + (c.review||0) + (c.needs_fix||0) },
+                { value: 'todo',        label: '⏸ Čeká',         countSelector: (c) => c.todo || 0 },
+                { value: 'in_progress', label: '▶ V práci',      countSelector: (c) => c.in_progress || 0 },
+                { value: 'review',      label: '👀 Review',     countSelector: (c) => c.review || 0 },
+                { value: 'needs_fix',   label: '🔄 Vrácené',     countSelector: (c) => c.needs_fix || 0 },
+                { value: 'done',        label: '✅ Hotové',      countSelector: (c) => c.done || 0 },
+                { value: 'all',         label: 'Vše',           countSelector: (c) => tasks.length },
+              ].map(f => (
+                <button key={f.value} onClick={() => setTaskFilter(f.value)}
+                  className={`px-2.5 py-1 text-xs rounded-full border transition ${
+                    taskFilter === f.value
+                      ? 'bg-brand-500 text-white border-brand-500'
+                      : 'bg-white text-ink-600 border-cream-300 hover:bg-cream-50'
+                  }`}>
+                  {f.label} <span className="ml-1 opacity-70">({f.countSelector(countTasksByStatus)})</span>
+                </button>
+              ))}
+            </div>
+
             {topTasks.length === 0 ? (
-              <div className="text-sm text-slate-400 italic">Zatím žádné úkoly.</div>
+              <div className="text-sm text-slate-400 italic">
+                {tasks.length === 0 ? 'Zatím žádné úkoly.' : 'Žádné úkoly v této kategorii.'}
+              </div>
             ) : (
               <ul className="divide-y divide-slate-100">
                 {topTasks.map(t => (
                   <TaskRow
                     key={t.id}
                     task={t}
-                    children={childMap[t.id] || []}
+                    children={filteredChildMap[t.id] || []}
                     user={user}
                     onStatusChange={handleStatusChange}
                     onReview={handleReview}
