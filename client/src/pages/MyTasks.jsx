@@ -2,6 +2,7 @@
 // Kliknutí na úkol otevře plný TaskDetailModal (editace, status, poznámka, přílohy, dotazy).
 // Stránka Projekty je pak jen "big picture" a kliknutí v MyTasks nás tam nepřesměrovává.
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import TaskCompletionDialog from '../components/TaskCompletionDialog.jsx';
@@ -41,10 +42,24 @@ export default function MyTasks() {
   const [completingTask, setCompletingTask] = useState(null);
   const [creating, setCreating] = useState(false);
   const canCreate = can.createTasks(user);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
     localStorage.setItem('myTasks.view', view);
   }, [view]);
+
+  // Deep-link z emailu: /my-tasks?taskId=N → otevři TaskDetailModal automaticky.
+  useEffect(() => {
+    const tid = Number(searchParams.get('taskId'));
+    if (Number.isInteger(tid) && tid > 0) {
+      setDetailTaskId(tid);
+      // Vyčisti query, ať refresh nebo zavření modal ne-reopens
+      const next = new URLSearchParams(searchParams);
+      next.delete('taskId');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Načteme vždy všechny úkoly přiřazené mně – filtr aplikujeme čistě na klientu.
   // To zabraňuje dřívějšímu bugu, kdy se filtr na backend zaměňoval s view a nepřepočítával se UI.

@@ -9,6 +9,7 @@ import {
   normalizeJsonArray,
 } from '../taskModel.js';
 import { preflightTask } from '../aiAgent/preflight.js';
+import { sendMail, buildTaskEmailHtml, getNotificationPrefs } from '../mailer.js';
 
 // Minimální délka popisu, pokud je úkol přiřazen AI agentovi.
 // Bez kontextu agent nemůže rozumně pracovat.
@@ -285,7 +286,37 @@ router.post('/', requireAuth, async (req, res) => {
   const { auto_enqueued, ai_preflight } = await maybeAutoEnqueue(task, req.user.id);
   if (auto_enqueued) task.ai_status = 'queued';
   res.json({ task, auto_enqueued, ai_preflight });
+
+  // Email assignee (fire-and-forget). Jen pokud assignee != creator a má pref ON.
+  if (task.assignee_id && task.assignee_id !== req.user.id) {
+    notifyTaskAssigned(task, req.user).catch(e => console.warn('[mail/task-assigned]', e.message));
+  }
 });
+
+async function notifyTaskAssigned(task, creator) {
+  const prefs = await getNotificationPrefs(task.assignee_id);
+  if (!prefs.email_task_assigned) return;
+  const r = await query(`SELECT email, name FROM users WHERE id = $1 AND active = TRUE`, [task.assignee_id]);
+  const assignee = r.rows[0];
+  if (!assignee?.email) return;
+  const projR = await query(`SELECT name FROM projects WHERE id = $1`, [task.project_id]);
+  const projectName = projR.rows[0]?.name || '';
+  const html = buildTaskEmailHtml({
+    title: `✅ Nový úkol: ${task.title}`,
+    body: `<p><strong>${escapeForBody(creator.name || 'Někdo')}</strong> ti přiřadil úkol v projektu <strong>${escapeForBody(projectName)}</strong>.</p>`
+      + (task.description ? `<p style="background:#f9f6f1;padding:10px;border-radius:6px;font-size:13px;color:#365156;">${escapeForBody(task.description).slice(0, 500)}</p>` : ''),
+    taskId: task.id,
+  });
+  await sendMail({
+    to: assignee.email,
+    subject: `VITOM: Nový úkol — ${task.title}`,
+    html,
+  });
+}
+
+function escapeForBody(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+}
 
 // Pomocná funkce: spočítá hodnoty completed_at / completed_by / actual_h podle změny stavu.
 // - Přechod na 'done': nastav completed_at = NOW(), completed_by = aktuální user, actual_h = body.actual_h (může být null = "neznámo")

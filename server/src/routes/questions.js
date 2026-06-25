@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { query } from '../db.js';
 import { requireAuth, can } from '../auth.js';
 import { sendToUser } from '../push.js';
+import { sendMail, getNotificationPrefs } from '../mailer.js';
 
 const router = Router();
 
@@ -120,8 +121,47 @@ router.post('/', requireAuth, async (req, res) => {
       url: `/questions?questionId=${ins.rows[0].id}`,
       tag: `question-${ins.rows[0].id}`,
     }).catch(err => console.warn('[push/question]', err.message));
+
+    // Email notifikace recipienta (per user opt-in).
+    notifyQuestionByEmail({
+      toUserId: Number(to_user_id),
+      questionText: question,
+      asker: req.user,
+      taskId: task_id || null,
+    }).catch(err => console.warn('[mail/question]', err.message));
   }
 });
+
+async function notifyQuestionByEmail({ toUserId, questionText, asker, taskId }) {
+  const prefs = await getNotificationPrefs(toUserId);
+  if (!prefs.email_new_question) return;
+  const r = await query(`SELECT email FROM users WHERE id = $1 AND active = TRUE`, [toUserId]);
+  const email = r.rows[0]?.email;
+  if (!email) return;
+  const base = (process.env.APP_BASE_URL?.trim() || 'https://it.realitniekosystem.cz').replace(/\/$/, '');
+  // Adresát dotazu jde rovnou do Questions sekce — tam vidí celý dotaz, kontext
+  // úkolu i odpovědní pole. Pro vrácený úkol vede link na /my-tasks?taskId=N.
+  const url = `${base}/questions`;
+  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+  const html = `<!DOCTYPE html>
+<html><body style="font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; background: #eee9e4; padding: 24px; color: #1f3a40;">
+  <div style="max-width: 560px; margin: 0 auto; background: white; border-radius: 12px; padding: 24px;">
+    <div style="font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #e72b78; font-weight: bold;">VITOM IT Crew</div>
+    <h2 style="margin: 12px 0 8px; color: #0c363e; font-size: 20px;">💬 Nový dotaz</h2>
+    <p style="font-size: 14px;"><strong>${esc(asker.name || 'Někdo')}</strong> se tě ptá${taskId ? ' k úkolu' : ''}:</p>
+    <p style="background:#f9f6f1;padding:12px;border-radius:6px;font-size:14px;color:#365156;border-left:3px solid #e72b78;">${esc(questionText)}</p>
+    <a href="${url}" style="display: inline-block; background: #0c363e; color: white; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px;">Odpovědět →</a>
+    <div style="margin-top: 24px; padding-top: 12px; border-top: 1px solid #e2dcd3; font-size: 11px; color: #8a9b9f;">
+      Tyto notifikace si můžeš vypnout v profilu → Notifikace.
+    </div>
+  </div>
+</body></html>`;
+  await sendMail({
+    to: email,
+    subject: `VITOM: Nový dotaz od ${asker.name || 'kolegy'}`,
+    html,
+  });
+}
 
 // Odpověď
 router.post('/:id/answer', requireAuth, async (req, res) => {

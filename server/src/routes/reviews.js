@@ -13,6 +13,7 @@ import { Router } from 'express';
 import { query } from '../db.js';
 import { requireAuth, can } from '../auth.js';
 import { sendToUser } from '../push.js';
+import { sendMail, buildTaskEmailHtml, getNotificationPrefs } from '../mailer.js';
 
 const router = Router();
 
@@ -92,8 +93,44 @@ router.post('/tasks/:id/review', requireAuth, async (req, res) => {
       ? { title: '✅ Úkol schválen', body: `„${task.title}" v ${task.project_name}`, url, tag: `task-${id}` }
       : { title: '🔄 Úkol vrácen k opravě', body: `„${task.title}": ${cleanComment?.slice(0, 100) || ''}`, url: `/needs-fix?taskId=${id}`, tag: `task-${id}` };
     sendToUser(task.assignee_id, payload).catch(err => console.warn('[push/review]', err.message));
+
+    // Email notifikace (per user opt-in). Liší se text per verdict.
+    notifyReviewByEmail({ verdict, task, comment: cleanComment, reviewer: req.user })
+      .catch(err => console.warn('[mail/review]', err.message));
   }
 });
+
+async function notifyReviewByEmail({ verdict, task, comment, reviewer }) {
+  const prefs = await getNotificationPrefs(task.assignee_id);
+  const wantsIt = verdict === 'approved' ? prefs.email_task_approved : prefs.email_task_returned;
+  if (!wantsIt) return;
+  const r = await query(`SELECT email FROM users WHERE id = $1 AND active = TRUE`, [task.assignee_id]);
+  const email = r.rows[0]?.email;
+  if (!email) return;
+  const isApproved = verdict === 'approved';
+  const title = isApproved
+    ? `✅ Úkol schválen: ${task.title}`
+    : `🔄 Úkol vrácen k opravě: ${task.title}`;
+  const body = isApproved
+    ? `<p><strong>${escapeForBody(reviewer.name || 'Manager')}</strong> schválil tvůj úkol jako hotový. 🎉</p>`
+    : `<p><strong>${escapeForBody(reviewer.name || 'Manager')}</strong> ti úkol vrátil k opravě.</p>`
+      + (comment ? `<p style="background:#fef3c7;padding:10px;border-radius:6px;font-size:13px;color:#92400e;"><strong>Komentář:</strong><br>${escapeForBody(comment)}</p>` : '');
+  const html = buildTaskEmailHtml({
+    title,
+    body: body + `<p style="color:#5b7177;font-size:12px;">Projekt: ${escapeForBody(task.project_name || '')}</p>`,
+    taskId: task.id,
+    ctaLabel: isApproved ? 'Zobrazit úkol' : 'Otevřít k opravě',
+  });
+  await sendMail({
+    to: email,
+    subject: isApproved ? `VITOM: Úkol schválen — ${task.title}` : `VITOM: Vrácený úkol — ${task.title}`,
+    html,
+  });
+}
+
+function escapeForBody(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+}
 
 /**
  * Vrátí seznam úkolů ve stavu 'needs_fix', kde je aktuální uživatel

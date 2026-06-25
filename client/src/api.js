@@ -156,6 +156,12 @@ export const email = {
   extractTasks: (msgId) => api.post(`/email/${encodeURIComponent(msgId)}/extract-tasks`, {}, { timeout: 60000 }).then(r => r.data),
 };
 
+// Per-user email notification preferences (Resend integration).
+export const notifications = {
+  get:    () => api.get('/notifications/me').then(r => r.data),
+  update: (prefs) => api.put('/notifications/me', prefs).then(r => r.data),
+};
+
 // Web Push — VAPID klíč + (un)subscribe. Backend server/src/routes/push.js.
 export const push = {
   vapidKey:    () => api.get('/push/vapid-public-key').then(r => r.data),
