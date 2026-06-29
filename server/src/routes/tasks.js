@@ -163,17 +163,17 @@ router.get('/mine', requireAuth, async (req, res) => {
     params.push(status);
     extra += ` AND t.status = $${params.length}`;
   }
-  // Filter na current team – „Moje úkoly" ukazuje jen tasky z teamu, ve kterém právě jsem.
-  // Pokud user není v žádném teamu (req.team_id chybí), vrátíme prázdno.
-  if (!req.team_id) return res.json({ tasks: [] });
-  params.push(req.team_id);
-  const teamFilter = ` AND p.team_id = $${params.length}`;
+  // ŽÁDNÝ team filter — admin/manager může přiřadit úkol napříč týmy,
+  // assignee musí svůj úkol vidět bez ohledu na current team. Bezpečnost:
+  // user vidí JEN to, co je jeho (t.assignee_id = userId), ne sourozenecké
+  // úkoly toho projektu. Cross-team team_name pro UI badge.
   const r = await query(`
     SELECT t.*,
       p.name AS project_name,
       p.due_date AS project_due_date,
       p.manager_id AS project_manager_id,
       p.team_id AS project_team_id,
+      tm.name AS project_team_name,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.to_user_id = $1 AND q.status = 'pending') AS pending_questions_for_me,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q,
@@ -181,7 +181,8 @@ router.get('/mine', requireAuth, async (req, res) => {
       (SELECT COALESCE(SUM(te.hours), 0) FROM time_entries te WHERE te.task_id = t.id)     AS logged_hours
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
-    WHERE t.assignee_id = $2 ${extra}${teamFilter}
+    LEFT JOIN teams tm ON tm.id = p.team_id
+    WHERE t.assignee_id = $2 ${extra}
     ORDER BY
       CASE t.status WHEN 'in_progress' THEN 0 WHEN 'review' THEN 1 WHEN 'todo' THEN 2 WHEN 'done' THEN 3 END,
       CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 END,
@@ -192,7 +193,9 @@ router.get('/mine', requireAuth, async (req, res) => {
 
 // GET /api/tasks/:id – detail jednoho úkolu s computed fields jako u /mine.
 // Používá Questions (klik na zdrojový úkol otevře TaskDetailModal inline).
-// Cross-team check: admin vidí všechno, jinak musí být task v current teamu.
+// Cross-team check: admin vidí všechno; člen teamu projektu vidí; ASSIGNEE
+// vidí svůj úkol i z jiného teamu (cross-team host přístup) — vidí jen ten
+// jeden úkol, ne sourozence / projekt / tým.
 router.get('/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_id' });
@@ -202,6 +205,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       p.due_date AS project_due_date,
       p.manager_id AS project_manager_id,
       p.team_id AS project_team_id,
+      tm.name AS project_team_name,
       u.name AS assignee_name,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.to_user_id = $1 AND q.status = 'pending') AS pending_questions_for_me,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
@@ -210,13 +214,17 @@ router.get('/:id', requireAuth, async (req, res) => {
       (SELECT COALESCE(SUM(te.hours), 0) FROM time_entries te WHERE te.task_id = t.id) AS logged_hours
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
+    LEFT JOIN teams tm ON tm.id = p.team_id
     LEFT JOIN users u ON u.id = t.assignee_id
     WHERE t.id = $2
   `, [req.user.id, id]);
   const task = r.rows[0];
   if (!task) return res.status(404).json({ error: 'not_found' });
-  // Cross-team protection: jen admin nebo členové teamu projektu.
-  if (req.user.role !== 'admin' && task.project_team_id !== req.team_id) {
+  // Autorizace: admin nebo členem teamu projektu nebo přímý assignee.
+  const isAdmin    = req.user.role === 'admin';
+  const isInTeam   = task.project_team_id === req.team_id;
+  const isAssignee = task.assignee_id === req.user.id;
+  if (!isAdmin && !isInTeam && !isAssignee) {
     return res.status(403).json({ error: 'forbidden', message: 'Úkol patří do jiného teamu' });
   }
   res.json({ task });
@@ -294,11 +302,27 @@ router.post('/', requireAuth, async (req, res) => {
 });
 
 async function notifyTaskAssigned(task, creator) {
+  console.log(`[mail/task-assigned] hook fired: task=${task.id} assignee=${task.assignee_id} creator=${creator.id}`);
   const prefs = await getNotificationPrefs(task.assignee_id);
-  if (!prefs.email_task_assigned) return;
-  const r = await query(`SELECT email, name FROM users WHERE id = $1 AND active = TRUE`, [task.assignee_id]);
+  if (!prefs.email_task_assigned) {
+    console.log(`[mail/task-assigned] SKIP: user ${task.assignee_id} opted out (email_task_assigned=false)`);
+    return;
+  }
+  const r = await query(`SELECT email, name, active FROM users WHERE id = $1`, [task.assignee_id]);
   const assignee = r.rows[0];
-  if (!assignee?.email) return;
+  if (!assignee) {
+    console.log(`[mail/task-assigned] SKIP: user ${task.assignee_id} not found in DB`);
+    return;
+  }
+  if (!assignee.active) {
+    console.log(`[mail/task-assigned] SKIP: user ${task.assignee_id} (${assignee.name}) is NOT active`);
+    return;
+  }
+  if (!assignee.email) {
+    console.log(`[mail/task-assigned] SKIP: user ${task.assignee_id} (${assignee.name}) has NULL email`);
+    return;
+  }
+  console.log(`[mail/task-assigned] proceeding: sending to ${assignee.email}`);
   const projR = await query(`SELECT name FROM projects WHERE id = $1`, [task.project_id]);
   const projectName = projR.rows[0]?.name || '';
   const html = buildTaskEmailHtml({

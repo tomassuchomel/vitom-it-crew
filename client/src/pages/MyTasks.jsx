@@ -10,6 +10,7 @@ import TimeTriad from '../components/TimeTriad.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge, STATUS_META } from '../components/TaskStatus.jsx';
 import { tasks as tasksApi, projects as projectsApi, users as usersApi } from '../api.js';
 import { useAuth, can } from '../auth.jsx';
+import { useTeams } from '../teams.jsx';
 import Modal from '../components/Modal.jsx';
 
 const STATUS = STATUS_META;
@@ -34,6 +35,7 @@ const STATUS_TABS = [
 
 export default function MyTasks() {
   const { user } = useAuth();
+  const { currentTeam } = useTeams();
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -161,6 +163,7 @@ export default function MyTasks() {
           <ListView
             tasks={filteredTasks}
             filter={filter}
+            currentTeamId={currentTeam?.id}
             onStatusChange={handleStatusChange}
             onOpen={(t) => setDetailTaskId(t.id)}
           />
@@ -363,7 +366,7 @@ function ViewSwitcher({ value, onChange }) {
 }
 
 // ---------- LIST VIEW ----------
-function ListView({ tasks, filter, onStatusChange, onOpen }) {
+function ListView({ tasks, filter, currentTeamId, onStatusChange, onOpen }) {
   if (tasks.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-cream-200 p-10 text-center text-ink-400">
@@ -420,6 +423,13 @@ function ListView({ tasks, filter, onStatusChange, onOpen }) {
                   <span className="inline-flex items-center gap-1 text-ink-600">
                     <span>📁</span>{t.project_name}
                   </span>
+                  {/* Host badge: úkol z týmu, kde současný user není členem. */}
+                  {t.project_team_name && currentTeamId && t.project_team_id !== currentTeamId && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-800"
+                      title="Tento úkol je z jiného týmu, kam nemáš plný přístup. Vidíš pouze tento úkol.">
+                      🔒 {t.project_team_name}
+                    </span>
+                  )}
                   {t.due_date && (
                     <span className="inline-flex items-center gap-1">
                       <span>📅</span>{String(t.due_date).slice(0, 10)}
