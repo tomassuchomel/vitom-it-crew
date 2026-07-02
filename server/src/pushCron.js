@@ -25,6 +25,13 @@ function nowPrague() {
   return { h: Number(parts.hour), m: Number(parts.minute), ymd: `${parts.year}-${parts.month}-${parts.day}` };
 }
 
+// Den v týdnu podle Prague TZ. 0=neděle, 1=pondělí, ..., 6=sobota.
+function dayOfWeekPrague() {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' }).format(new Date());
+  const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return map[parts] ?? new Date().getDay();
+}
+
 // Track posledního běhu per-job, aby restart serveru během 5min okna ho neopakoval.
 const lastRun = new Map(); // jobKey -> ymd
 
@@ -106,7 +113,11 @@ async function dailyDigest() {
 // AI reminder asistent — pro každého aktivního usera s open úkoly a
 // email_daily_summary=TRUE pošle email se shrnutím a hlavním doporučením.
 // Cíl: aby všechny úkoly byly včas. Hlavní doporučení nahoře, pak seznam.
-async function dailyEmailSummary() {
+//
+// Per-user schedule: každý user má rozvrh (daily_summary_days + daily_summary_time).
+// Cron se volá každé 4 minuty; tato funkce si sama filtruje, komu POSLAT NYNÍ.
+// Parametr `nowPra` = { h, m, ymd, dayOfWeek } (0=neděle ... 6=sobota) v Praze.
+async function dailyEmailSummary({ h, m, ymd, dayOfWeek } = {}) {
   if (!isMailerConfigured()) return { sent: 0, skipped: 'no_mailer' };
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) return { sent: 0, skipped: 'no_anthropic_key' };
@@ -126,6 +137,24 @@ async function dailyEmailSummary() {
     try {
       const prefs = await getNotificationPrefs(u.id);
       if (prefs.email_daily_summary === false) continue;
+
+      // Per-user schedule check: dnes v jeho dnech + současný čas v ±5 min okně
+      // jeho preferovaného času. Kdyby prefs neměl schedule (starý DB), použij default.
+      const days = Array.isArray(prefs.daily_summary_days) && prefs.daily_summary_days.length > 0
+        ? prefs.daily_summary_days.map(Number)
+        : [1,2,3,4,5];
+      const timeStr = /^\d{1,2}:\d{2}$/.test(prefs.daily_summary_time || '') ? prefs.daily_summary_time : '08:05';
+      if (!days.includes(dayOfWeek)) continue;
+      const [Ht, Mt] = timeStr.split(':').map(Number);
+      // Delta v minutách od uživatelova času (< 0 = ještě neuplynul, > 5 = už moc pozdě)
+      const nowTotalMin = h * 60 + m;
+      const userTotalMin = Ht * 60 + Mt;
+      const delta = nowTotalMin - userTotalMin;
+      if (delta < 0 || delta >= 5) continue;
+      // Dedup per user per den — ať restart serveru neposílá dvakrát
+      const dedupKey = `email-summary-${u.id}`;
+      if (lastRun.get(dedupKey) === ymd) continue;
+      lastRun.set(dedupKey, ymd);
 
       // Open úkoly seřazené dle priority + due_date (NULL last).
       const tasksR = await query(`
@@ -298,11 +327,11 @@ async function tick() {
         console.log(`[pushCron] daily digest sent=${r.sent}`);
       }
     }
-    // Email daily summary (vyžaduje mailer + Anthropic). Spouští se v 8:05,
-    // ať se neproblamuje s push digestem v 8:00 (oba dělají hodně requestů).
-    if (h === 8 && m >= 5 && m < 10 && lastRun.get('email-summary') !== ymd) {
-      lastRun.set('email-summary', ymd);
-      const r = await dailyEmailSummary();
+    // Email daily summary — per-user schedule check probíhá uvnitř funkce.
+    // Voláme každý tick a funkce si sama filtruje, komu POSLAT NYNÍ podle
+    // jeho zvolených dnů + časů.
+    const r = await dailyEmailSummary({ h, m, ymd, dayOfWeek: dayOfWeekPrague() });
+    if (r.sent > 0 || (r.skipped && r.skipped !== 'no_mailer' && r.skipped !== 'no_anthropic_key')) {
       console.log(`[pushCron] daily email summary sent=${r.sent}${r.skipped ? ` skipped=${r.skipped}` : ''}`);
     }
   } catch (err) {

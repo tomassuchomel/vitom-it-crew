@@ -131,22 +131,35 @@ export async function sendMail({ to, subject, html, text }) {
 // Načti preference uživatele. Pokud řádek neexistuje, vrátíme všechny TRUE.
 // Defenzivně: 42703 (sloupec email_daily_summary chybí) → fallback bez něj.
 export async function getNotificationPrefs(userId) {
+  // Defenzivně: schedule sloupce mohly být přidané pozdější migrací.
   try {
     const r = await query(
       `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question,
-              email_daily_summary
+              email_daily_summary, daily_summary_days, daily_summary_time
        FROM user_notification_prefs WHERE user_id = $1`,
       [userId]
     );
     if (r.rows[0]) return r.rows[0];
   } catch (err) {
     if (err.code === '42703') {
-      const r = await query(
-        `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question
-         FROM user_notification_prefs WHERE user_id = $1`,
-        [userId]
-      );
-      if (r.rows[0]) return { ...r.rows[0], email_daily_summary: true };
+      try {
+        const r = await query(
+          `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question,
+                  email_daily_summary
+           FROM user_notification_prefs WHERE user_id = $1`,
+          [userId]
+        );
+        if (r.rows[0]) return { ...r.rows[0], daily_summary_days: [1,2,3,4,5], daily_summary_time: '08:05' };
+      } catch (err2) {
+        if (err2.code === '42703') {
+          const r = await query(
+            `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question
+             FROM user_notification_prefs WHERE user_id = $1`,
+            [userId]
+          );
+          if (r.rows[0]) return { ...r.rows[0], email_daily_summary: true, daily_summary_days: [1,2,3,4,5], daily_summary_time: '08:05' };
+        } else { throw err2; }
+      }
     } else { throw err; }
   }
   return {
@@ -155,6 +168,8 @@ export async function getNotificationPrefs(userId) {
     email_task_approved: true,
     email_new_question:  true,
     email_daily_summary: true,
+    daily_summary_days:  [1,2,3,4,5],
+    daily_summary_time:  '08:05',
   };
 }
 

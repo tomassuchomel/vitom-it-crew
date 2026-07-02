@@ -244,6 +244,13 @@ export async function migrate() {
                      WHERE table_name='tasks' AND column_name='parent_hidden') THEN
         ALTER TABLE tasks ADD COLUMN parent_hidden BOOLEAN NOT NULL DEFAULT TRUE;
       END IF;
+      -- Failsafe pro per-user schedule denního shrnutí (přidáno 2026-07):
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='user_notification_prefs' AND column_name='daily_summary_days') THEN
+        ALTER TABLE user_notification_prefs
+          ADD COLUMN daily_summary_days JSONB NOT NULL DEFAULT '[1,2,3,4,5]'::jsonb,
+          ADD COLUMN daily_summary_time TEXT NOT NULL DEFAULT '08:05';
+      END IF;
       -- Failsafe pro user_notification_prefs (přidáno 2026-06):
       IF NOT EXISTS (SELECT 1 FROM information_schema.tables
                      WHERE table_name='user_notification_prefs') THEN
