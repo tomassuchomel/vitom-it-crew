@@ -19,6 +19,7 @@ const NAV = [
   { to: '/needs-fix', label: 'Vrácené k opravě',   icon: '🔄', badge: 'needsFix' },
   { to: '/review',    label: 'Review k dokončení', icon: '👀', badge: 'reviewQueue', requireManager: true },
   { to: '/questions', label: 'Dotazy k vyřešení',  icon: '💬', badge: 'inboxPending' },
+  { to: '/answers',   label: 'Odpovědi na dotazy', icon: '📩', badge: 'answersUnread' },
   { to: '/notes',     label: 'Poznámky',           icon: '📝' },
   { to: '/email',     label: 'Email',              icon: '📧' },
   { to: '/time',      label: 'Hodiny',             icon: '⏱️' },
@@ -34,7 +35,7 @@ export default function Layout({ children }) {
   const nav = useNavigate();
   const location = useLocation();
   const { currentTeam } = useTeams();
-  const [counts, setCounts] = useState({ inboxPending: 0, sentPending: 0, reviewQueue: 0, needsFix: 0 });
+  const [counts, setCounts] = useState({ inboxPending: 0, sentPending: 0, reviewQueue: 0, needsFix: 0, answersUnread: 0 });
   // Mobile drawer: na malých obrazovkách je sidebar schovaný; hamburger ho otevře.
   // lg+ má sidebar pořád viditelný (původní desktop UX).
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);

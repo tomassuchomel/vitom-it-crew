@@ -79,6 +79,7 @@ export const questions = {
   answer:  (id, answer) => api.post(`/questions/${id}/answer`, { answer }).then(r => r.data),
   reopen:  (id) => api.post(`/questions/${id}/reopen`).then(r => r.data),
   remove:  (id) => api.delete(`/questions/${id}`).then(r => r.data),
+  markAnswersRead: () => api.post('/questions/mark-answers-read').then(r => r.data),
 };
 
 export const ai = {

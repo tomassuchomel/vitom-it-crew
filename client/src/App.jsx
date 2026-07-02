@@ -19,6 +19,7 @@ import Admin from './pages/Admin.jsx';
 import Scoreboard from './pages/Scoreboard.jsx';
 import Notes from './pages/Notes.jsx';
 import EmailPage from './pages/Email.jsx';
+import AnsweredQuestions from './pages/AnsweredQuestions.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 
 function ProtectedRoutes() {
@@ -50,6 +51,7 @@ function ProtectedRoutes() {
         <Route path="/notes" element={<Notes />} />
         <Route path="/email" element={<EmailPage />} />
         <Route path="/questions" element={<Questions />} />
+        <Route path="/answers" element={<AnsweredQuestions />} />
         <Route path="/time" element={<TimeTracking />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/ai" element={<AIPage />} />

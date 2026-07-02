@@ -41,6 +41,10 @@ router.get('/', requireAuth, async (req, res) => {
   } else if (box === 'sent') {
     params.push(req.user.id);
     filters.push(`q.from_user_id = $${params.length}`);
+  } else if (box === 'answered-to-me') {
+    // Nová stránka "Odpovědi na dotazy" — odpovědi na moje položené dotazy.
+    params.push(req.user.id);
+    filters.push(`q.from_user_id = $${params.length} AND q.status = 'answered'`);
   } else if (box === 'all') {
     if (!can.seeAllHours(req.user)) return res.status(403).json({ error: 'forbidden' });
   } else {
@@ -74,6 +78,18 @@ router.get('/', requireAuth, async (req, res) => {
 
 // Počty
 router.get('/counts', requireAuth, async (req, res) => {
+  // Defenzivně: pokud sloupec answer_read ještě neexistuje, vrátíme 0.
+  let answersUnread = 0;
+  try {
+    const ar = await query(
+      `SELECT COUNT(*)::int AS c FROM questions
+       WHERE from_user_id = $1 AND status = 'answered' AND answer_read = FALSE`,
+      [req.user.id]
+    );
+    answersUnread = Number(ar.rows[0]?.c || 0);
+  } catch (err) {
+    if (err.code !== '42703') throw err;
+  }
   const r = await query(`
     SELECT
       (SELECT COUNT(*) FROM questions WHERE to_user_id = $1 AND status = 'pending')   AS inbox_pending,
@@ -89,7 +105,24 @@ router.get('/counts', requireAuth, async (req, res) => {
     inboxTotal:   Number(row.inbox_total),
     sentTotal:    Number(row.sent_total),
     mineTotal:    Number(row.mine_total),
+    answersUnread,
   });
+});
+
+// Označí VŠECHNY moje answered dotazy za přečtené. Voláno po otevření
+// stránky "Odpovědi na dotazy".
+router.post('/mark-answers-read', requireAuth, async (req, res) => {
+  try {
+    await query(
+      `UPDATE questions SET answer_read = TRUE
+       WHERE from_user_id = $1 AND status = 'answered' AND answer_read = FALSE`,
+      [req.user.id]
+    );
+  } catch (err) {
+    if (err.code !== '42703') throw err;
+    // Sloupec ještě neexistuje — no-op
+  }
+  res.json({ ok: true });
 });
 
 // Vytvoření dotazu
@@ -174,7 +207,8 @@ router.post('/:id/answer', requireAuth, async (req, res) => {
   }
   const { answer } = req.body || {};
   if (!answer?.trim()) return res.status(400).json({ error: 'missing_answer' });
-  await query(`UPDATE questions SET answer = $1, status = 'answered', answered_at = NOW() WHERE id = $2`,
+  // answer_read=FALSE → v "Odpovědi na dotazy" se ukáže jako unread
+  await query(`UPDATE questions SET answer = $1, status = 'answered', answered_at = NOW(), answer_read = FALSE WHERE id = $2`,
     [answer.trim(), id]);
   const r = await query(`${SELECT_FULL} WHERE q.id = $1`, [id]);
   res.json({ question: r.rows[0] });
@@ -189,7 +223,7 @@ router.post('/:id/reopen', requireAuth, async (req, res) => {
   if (cur.from_user_id !== req.user.id && cur.to_user_id !== req.user.id && !can.seeAllHours(req.user)) {
     return res.status(403).json({ error: 'forbidden' });
   }
-  await query(`UPDATE questions SET status = 'pending', answered_at = NULL WHERE id = $1`, [id]);
+  await query(`UPDATE questions SET status = 'pending', answered_at = NULL, answer_read = FALSE WHERE id = $1`, [id]);
   const r = await query(`${SELECT_FULL} WHERE q.id = $1`, [id]);
   res.json({ question: r.rows[0] });
 });

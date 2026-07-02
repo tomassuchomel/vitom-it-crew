@@ -251,6 +251,14 @@ export async function migrate() {
           ADD COLUMN daily_summary_days JSONB NOT NULL DEFAULT '[1,2,3,4,5]'::jsonb,
           ADD COLUMN daily_summary_time TEXT NOT NULL DEFAULT '08:05';
       END IF;
+      -- Failsafe pro unread flag odpovědí na dotazy (přidáno 2026-07):
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='questions' AND column_name='answer_read') THEN
+        ALTER TABLE questions ADD COLUMN answer_read BOOLEAN NOT NULL DEFAULT FALSE;
+        CREATE INDEX IF NOT EXISTS idx_questions_answer_unread
+          ON questions(from_user_id)
+          WHERE status = 'answered' AND answer_read = FALSE;
+      END IF;
       -- Failsafe pro user_notification_prefs (přidáno 2026-06):
       IF NOT EXISTS (SELECT 1 FROM information_schema.tables
                      WHERE table_name='user_notification_prefs') THEN
