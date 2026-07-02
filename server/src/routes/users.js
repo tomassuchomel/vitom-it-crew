@@ -48,6 +48,22 @@ router.get('/', requireAuth, async (req, res) => {
   const showRates = can.seeCosts(req.user);
   const scopeAll = req.query.scope === 'all';
 
+  // ?scope=my-teams → distinct členové VŠECH týmů, kde je current user členem.
+  // Pro cross-team subtask: Patricia (host) přidá podúkol pro svůj Management
+  // tým, dropdown assignee ukáže její kolegy napříč jejími týmy.
+  if (req.query.scope === 'my-teams') {
+    const r = await query(`
+      SELECT DISTINCT u.id, u.email, u.name, u.first_name, u.last_name, u.role, u.hourly_rate, u.active,
+             u.must_change_password, u.avatar_updated_at
+      FROM users u
+      JOIN team_members tm ON tm.user_id = u.id
+      WHERE u.active = TRUE
+        AND tm.team_id IN (SELECT team_id FROM team_members WHERE user_id = $1)
+      ORDER BY u.name
+    `, [req.user.id]);
+    return res.json({ users: r.rows.map(u => publicUser(u, { includeRate: showRates })) });
+  }
+
   // scope=all = admin přehled napříč teamy
   if (scopeAll) {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });

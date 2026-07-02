@@ -221,6 +221,9 @@ export const users = {
   // Členové konkrétního týmu — pro cross-team task creation (assignee dropdown
   // po výběru projektu z jiného týmu). Server ověří, že user je členem.
   listInTeam: (teamId) => api.get('/users', { params: { team_id: teamId } }).then(r => r.data),
+  // Distinct členové VŠECH mých týmů — pro cross-team podúkoly, kdy Patricia
+  // (host úkolu z jiného týmu) přiděluje podúkol svému kolegovi.
+  listAcrossMyTeams: () => api.get('/users', { params: { scope: 'my-teams' } }).then(r => r.data),
   // Admin-only: všichni useři + jejich team membership v poli `teams`.
   // Použij v /admin sekci pro globální správu napříč teamy.
   listAll: () => api.get('/users', { params: { scope: 'all' } }).then(r => r.data),

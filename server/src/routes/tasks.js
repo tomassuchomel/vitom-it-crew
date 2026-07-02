@@ -174,6 +174,8 @@ router.get('/mine', requireAuth, async (req, res) => {
       p.manager_id AS project_manager_id,
       p.team_id AS project_team_id,
       tm.name AS project_team_name,
+      -- Pro cross-team subtask masking: členství aktuálního usera v projektově teamu
+      (EXISTS (SELECT 1 FROM team_members tmc WHERE tmc.user_id = $1 AND tmc.team_id = p.team_id)) AS user_is_team_member,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.to_user_id = $1 AND q.status = 'pending') AS pending_questions_for_me,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q,
@@ -188,7 +190,20 @@ router.get('/mine', requireAuth, async (req, res) => {
       CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 END,
       t.due_date NULLS LAST, t.due_date ASC
   `, params);
-  res.json({ tasks: r.rows });
+  const isAdmin = req.user.role === 'admin';
+  const tasks = r.rows.map(t => {
+    // Cross-team subtask masking: pokud subtask má parent_hidden=TRUE a
+    // aktuální user je jen host assignee (ne admin, ne člen projektově teamu),
+    // vymažeme parent + project info, aby řešitel nezjistil origin.
+    if (t.parent_id && t.parent_hidden && !isAdmin && !t.user_is_team_member) {
+      t.parent_id = null;
+      t.project_name = '(mimo tým)';
+      t.project_team_name = null;
+    }
+    delete t.user_is_team_member;
+    return t;
+  });
+  res.json({ tasks });
 });
 
 // GET /api/tasks/:id – detail jednoho úkolu s computed fields jako u /mine.
@@ -227,26 +242,57 @@ router.get('/:id', requireAuth, async (req, res) => {
   if (!isAdmin && !isInTeam && !isAssignee) {
     return res.status(403).json({ error: 'forbidden', message: 'Úkol patří do jiného teamu' });
   }
+  // Skrytí parent info pro cross-team subtask assignee.
+  // Když je task subtask (má parent_id), parent_hidden=TRUE a user je JEN
+  // subtask assignee (ne parent assignee ani člen týmu, ani admin) →
+  // vymažeme parent_id a project_name, aby řešitel nezjistil, z kterého
+  // úkolu/projektu podúkol vznikl.
+  if (task.parent_id && task.parent_hidden) {
+    let isParentAssignee = false;
+    if (task.parent_id) {
+      const pa = await query('SELECT assignee_id FROM tasks WHERE id = $1', [task.parent_id]);
+      isParentAssignee = pa.rows[0]?.assignee_id === req.user.id;
+    }
+    if (!isAdmin && !isInTeam && !isParentAssignee) {
+      // Řešitel podúkolu — parent info se nesmí projevit
+      task.parent_id = null;
+      task.project_name = '(mimo tým)';
+      task.project_team_name = null;
+    }
+  }
   res.json({ task });
 });
 
 // Vytvoření úkolu nebo podúkolu
 router.post('/', requireAuth, async (req, res) => {
   if (!can.createTasks(req.user)) return res.status(403).json({ error: 'forbidden' });
-  const { project_id, parent_id, title, description, assignee_id, status, priority, estimated_h, due_date, source_note_id } = req.body || {};
+  const { project_id, parent_id, title, description, assignee_id, status, priority, estimated_h, due_date, source_note_id, parent_hidden } = req.body || {};
   if (!project_id || !title) return res.status(400).json({ error: 'missing_fields' });
 
-  // Membership check: project.team_id musí být team, kde je user členem
-  // (nebo je globální admin). Dovoluje cross-team úkoly z poznámky/quick capture,
-  // ale neproblematicky.
+  // Autorizace vytvoření:
+  //  a) admin globálně
+  //  b) user je členem teamu projektu (běžný případ)
+  //  c) SUBTASK: user je assignee parent_id → cross-team podúkol
+  //     (Patricia dostane úkol z IT, přidá podúkol pro svůj Management tým)
   if (req.user.role !== 'admin') {
-    const ok = await query(`
+    const memberR = await query(`
       SELECT 1 FROM projects p
       JOIN team_members tm ON tm.team_id = p.team_id
       WHERE p.id = $1 AND tm.user_id = $2
       LIMIT 1
     `, [Number(project_id), req.user.id]);
-    if (ok.rows.length === 0) {
+    const isTeamMember = memberR.rows.length > 0;
+
+    let isParentAssignee = false;
+    if (!isTeamMember && parent_id) {
+      const pr = await query(
+        `SELECT 1 FROM tasks WHERE id = $1 AND assignee_id = $2 LIMIT 1`,
+        [Number(parent_id), req.user.id]
+      );
+      isParentAssignee = pr.rows.length > 0;
+    }
+
+    if (!isTeamMember && !isParentAssignee) {
       return res.status(403).json({ error: 'not_team_member', message: 'Nejsi členem teamu tohoto projektu.' });
     }
   }
@@ -256,14 +302,14 @@ router.post('/', requireAuth, async (req, res) => {
   if (aiExtract.error) return res.status(400).json({ error: aiExtract.error, min: aiExtract.min });
   const ai = aiExtract.fields;
 
-  // Defenzivně: source_note_id mohl být přidán migrací po staré INSERT verzi.
-  // Pokud sloupec ještě chybí v DB schema cache, zkusíme bez něj a hodíme warning.
-  const insertSql = (withSource) => `
+  // Defenzivně: source_note_id + parent_hidden mohly být přidány migrací
+  // až po staré INSERT verzi. Fallback bez nich → warning.
+  const insertSql = ({ withSource, withHidden }) => `
     INSERT INTO tasks (
       project_id, parent_id, title, description, assignee_id, status, priority, estimated_h, due_date,
-      ai_assignee, execution_mode, acceptance_criteria, out_of_scope, scope_paths, ai_status${withSource ? ', source_note_id' : ''}
+      ai_assignee, execution_mode, acceptance_criteria, out_of_scope, scope_paths, ai_status${withSource ? ', source_note_id' : ''}${withHidden ? ', parent_hidden' : ''}
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15${withSource ? ', $16' : ''})
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15${withSource ? `, $${withHidden ? 16 : 16}` : ''}${withHidden ? `, $${withSource ? 17 : 16}` : ''})
     RETURNING *
   `;
   const baseParams = [
@@ -276,13 +322,22 @@ router.post('/', requireAuth, async (req, res) => {
     JSON.stringify(ai.scope_paths),
     ai.ai_status,
   ];
+  const hiddenVal = parent_hidden === false ? false : true; // default TRUE
+  const sourceVal = source_note_id ? Number(source_note_id) : null;
   let r;
   try {
-    r = await query(insertSql(true), [...baseParams, source_note_id ? Number(source_note_id) : null]);
+    r = await query(insertSql({ withSource: true, withHidden: true }), [...baseParams, sourceVal, hiddenVal]);
   } catch (err) {
     if (err.code === '42703') {
-      console.warn('[tasks] source_note_id column missing, falling back without it');
-      r = await query(insertSql(false), baseParams);
+      // Zkusíme s vypnutými sloupci — kdyby chybělo obé nebo jen jedno
+      console.warn('[tasks] optional column missing, falling back:', err.message?.slice(0, 100));
+      try {
+        r = await query(insertSql({ withSource: true, withHidden: false }), [...baseParams, sourceVal]);
+      } catch (err2) {
+        if (err2.code === '42703') {
+          r = await query(insertSql({ withSource: false, withHidden: false }), baseParams);
+        } else { throw err2; }
+      }
     } else { throw err; }
   }
   const task = r.rows[0];

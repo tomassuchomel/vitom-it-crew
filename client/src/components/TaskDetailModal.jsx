@@ -13,6 +13,7 @@ import AiAgentPanel from './AiAgentPanel.jsx';
 import ReviewTaskDialog from './ReviewTaskDialog.jsx';
 import ReviewHistory from './ReviewHistory.jsx';
 import LinkifyText from './LinkifyText.jsx';
+import AddSubtaskModal from './AddSubtaskModal.jsx';
 
 const PRIORITY_OPTIONS = [
   { value: 'low',    label: '⬇ Nízká' },
@@ -27,6 +28,7 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
   const [completingTask, setCompletingTask] = useState(null);
   // null | { task, verdict } – pro ReviewTaskDialog (manager schvaluje/vrací)
   const [reviewing, setReviewing] = useState(null);
+  const [addingSubtask, setAddingSubtask] = useState(false);
 
   // Sync, pokud parent dodá nový úkol
   useEffect(() => { setTask(initialTask); }, [initialTask?.id]);
@@ -136,6 +138,22 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
             <ReviewHistory taskId={task.id} />
           )}
 
+          {/* + Podúkol — pro assignee, manager, admin. Skryto pokud task je
+              už podúkol (nechceme deep nesting) nebo je hotovo. */}
+          {!task.parent_id && task.status !== 'done' && (canEditFull || isMyTask) && (
+            <div className="pt-2">
+              <button
+                onClick={() => setAddingSubtask(true)}
+                className="text-sm px-3 py-1.5 rounded-lg border border-brand-500 text-brand-500 hover:bg-brand-50 font-medium"
+              >
+                + Přidat podúkol
+              </button>
+              <span className="text-[11px] text-ink-400 ml-2">
+                Rozděl úkol na kroky. Podúkol můžeš zadat komukoli ze svých týmů.
+              </span>
+            </div>
+          )}
+
           {/* Časový odhad vs realita – manual + AI + actual na jednom místě */}
           <Section title="Časový odhad vs realita" subtitle="Manuální odhad zadavatele, odhad AI a skutečný čas po dokončení.">
             <div className="bg-cream-100 rounded-lg p-3">
@@ -194,6 +212,17 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
           task={completingTask}
           onConfirm={handleCompletionConfirm}
           onCancel={() => setCompletingTask(null)}
+        />
+      )}
+
+      {addingSubtask && (
+        <AddSubtaskModal
+          parentTask={task}
+          onClose={() => setAddingSubtask(false)}
+          onCreated={() => {
+            setAddingSubtask(false);
+            onChanged?.();
+          }}
         />
       )}
     </div>

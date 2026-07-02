@@ -238,6 +238,12 @@ export async function migrate() {
         ALTER TABLE tasks ADD COLUMN source_note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL;
         CREATE INDEX IF NOT EXISTS idx_tasks_source_note ON tasks(source_note_id) WHERE source_note_id IS NOT NULL;
       END IF;
+      -- Failsafe pro parent_hidden (přidáno 2026-06): skrytí parent úkolu
+      -- pro řešitele podúkolu (cross-team scénáře).
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='tasks' AND column_name='parent_hidden') THEN
+        ALTER TABLE tasks ADD COLUMN parent_hidden BOOLEAN NOT NULL DEFAULT TRUE;
+      END IF;
       -- Failsafe pro user_notification_prefs (přidáno 2026-06):
       IF NOT EXISTS (SELECT 1 FROM information_schema.tables
                      WHERE table_name='user_notification_prefs') THEN
