@@ -20,6 +20,8 @@ import Scoreboard from './pages/Scoreboard.jsx';
 import Notes from './pages/Notes.jsx';
 import EmailPage from './pages/Email.jsx';
 import AnsweredQuestions from './pages/AnsweredQuestions.jsx';
+import Napadnik from './pages/Napadnik.jsx';
+import NapadnikForm from './pages/NapadnikForm.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 
 function ProtectedRoutes() {
@@ -49,6 +51,7 @@ function ProtectedRoutes() {
         <Route path="/review" element={<Review />} />
         <Route path="/needs-fix" element={<NeedsFix />} />
         <Route path="/notes" element={<Notes />} />
+        <Route path="/napadnik" element={<Napadnik />} />
         <Route path="/email" element={<EmailPage />} />
         <Route path="/questions" element={<Questions />} />
         <Route path="/answers" element={<AnsweredQuestions />} />
@@ -71,6 +74,8 @@ export default function App() {
       <TeamProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          {/* Veřejný formulář Nápadníku — bez přihlášení, samostatná stránka. */}
+          <Route path="/napadnik-form" element={<NapadnikForm />} />
           <Route path="/*" element={<ProtectedRoutes />} />
         </Routes>
         {/* PWA — když SW najde novou verzi, ukáže toast „Aktualizovat". */}

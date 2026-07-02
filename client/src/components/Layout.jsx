@@ -21,6 +21,7 @@ const NAV = [
   { to: '/questions', label: 'Dotazy k vyřešení',  icon: '💬', badge: 'inboxPending' },
   { to: '/answers',   label: 'Odpovědi na dotazy', icon: '📩', badge: 'answersUnread' },
   { to: '/notes',     label: 'Poznámky',           icon: '📝' },
+  { to: '/napadnik',  label: 'Nápadník',           icon: '💡' },
   { to: '/email',     label: 'Email',              icon: '📧' },
   { to: '/time',      label: 'Hodiny',             icon: '⏱️' },
   { to: '/reports',   label: 'Reporty',            icon: '📊', requireSeeAll: true },

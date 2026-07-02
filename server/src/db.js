@@ -244,6 +244,11 @@ export async function migrate() {
                      WHERE table_name='tasks' AND column_name='parent_hidden') THEN
         ALTER TABLE tasks ADD COLUMN parent_hidden BOOLEAN NOT NULL DEFAULT TRUE;
       END IF;
+      -- Failsafe pro attachments.idea_id (přidáno 2026-07): nápadník přílohy.
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='attachments' AND column_name='idea_id') THEN
+        ALTER TABLE attachments ADD COLUMN idea_id BIGINT;
+      END IF;
       -- Failsafe pro per-user schedule denního shrnutí (přidáno 2026-07):
       IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                      WHERE table_name='user_notification_prefs' AND column_name='daily_summary_days') THEN

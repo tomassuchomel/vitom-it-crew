@@ -163,6 +163,18 @@ export const notifications = {
   update: (prefs) => api.put('/notifications/me', prefs).then(r => r.data),
 };
 
+// Nápadník — sběr, řízení a schvalování interních návrhů.
+// Public endpoint (bez auth) je pro veřejný formulář.
+export const ideas = {
+  list:      () => api.get('/ideas').then(r => r.data),
+  get:       (id) => api.get(`/ideas/${id}`).then(r => r.data),
+  patch:     (id, data) => api.patch(`/ideas/${id}`, data).then(r => r.data),
+  meta:      () => api.get('/ideas/_meta/enums').then(r => r.data),
+  // Public — vytvoří axios request bez authorization header (jen cookie), server
+  // sám nemá requireAuth. Používá standardní baseURL.
+  submitPublic: (payload) => api.post('/ideas/public', payload).then(r => r.data),
+};
+
 // Web Push — VAPID klíč + (un)subscribe. Backend server/src/routes/push.js.
 export const push = {
   vapidKey:    () => api.get('/push/vapid-public-key').then(r => r.data),
