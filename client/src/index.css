@@ -2,6 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Tisk / PDF: skryj UI chrome, tabulky a karty přeteč po celé stránce. */
+@media print {
+  aside, nav, .print\:hidden { display: none !important; }
+  main { overflow: visible !important; padding-top: 0 !important; background: white !important; }
+  body { background: white !important; color: black !important; }
+  a { color: inherit !important; text-decoration: none !important; }
+  .print\:break-inside-avoid { break-inside: avoid; }
+}
+
 html, body, #root { height: 100%; }
 body {
   font-family: 'Source Sans 3', 'Source Sans Pro', -apple-system, BlinkMacSystemFont, sans-serif;

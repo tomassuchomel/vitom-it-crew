@@ -38,6 +38,28 @@ async function sendIdeaMail(userId, email, prefKey, subject, title, body) {
   }
 }
 
+// Cloudflare Turnstile server-side verify. Když TURNSTILE_SECRET není nastaven,
+// vrací true (bypass — dev/local i nasazení bez klíčů funguje). Token je z FE.
+async function verifyTurnstile(token, remoteIp) {
+  const secret = process.env.TURNSTILE_SECRET;
+  if (!secret) return true;
+  if (!token) return false;
+  try {
+    const params = new URLSearchParams();
+    params.set('secret', secret);
+    params.set('response', token);
+    if (remoteIp) params.set('remoteip', remoteIp);
+    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST', body: params,
+    });
+    const data = await r.json();
+    return !!data.success;
+  } catch (err) {
+    console.warn('[turnstile] verify failed', err.message);
+    return false;
+  }
+}
+
 // Management role = admin globálně NEBO člen týmu se slug='management'.
 async function isManagement(userId, userRole) {
   if (userRole === 'admin') return true;
@@ -119,6 +141,13 @@ router.post('/public', async (req, res) => {
   if (!trim(b.solution_proposal)) errors.solution_proposal = 'Navrhni řešení.';
   if (Object.keys(errors).length > 0) {
     return res.status(400).json({ error: 'validation', fields: errors });
+  }
+
+  // Cloudflare Turnstile ověření (spam ochrana). Přeskočí se, když
+  // TURNSTILE_SECRET není nastaven (dev / lokální).
+  const tsOk = await verifyTurnstile(b.turnstile_token, req.ip);
+  if (!tsOk) {
+    return res.status(400).json({ error: 'turnstile_failed', message: 'Ověření anti‑spam selhalo. Zkus prosím znovu.' });
   }
 
   const r = await query(`
@@ -244,6 +273,59 @@ router.get('/_stats', requireAuth, async (req, res) => {
     top_proposers: topProposers.rows,
     by_pm_recommendation: byRec.rows,
   });
+});
+
+// GET /ideas/_export.csv — CSV export všech nápadů. Management-only
+// (obsahuje interní PM poznámky, garanty, analytická pole).
+router.get('/_export.csv', requireAuth, async (req, res) => {
+  const mgr = await isManagement(req.user.id, req.user.role);
+  if (!mgr) return res.status(403).json({ error: 'forbidden' });
+
+  const r = await query(`
+    SELECT i.*,
+      gu.name AS garant_name,
+      lp.name AS linked_project_name,
+      lt.name AS linked_project_team_name,
+      a.time_current_h_per_month, a.time_after_h_per_month,
+      a.financial_savings, a.onetime_costs_kc, a.complexity, a.summary
+    FROM ideas i
+    LEFT JOIN users gu ON gu.id = i.garant_id
+    LEFT JOIN projects lp ON lp.id = i.linked_project_id
+    LEFT JOIN teams lt ON lt.id = i.linked_project_team_id
+    LEFT JOIN idea_analysis a ON a.idea_id = i.id
+    ORDER BY i.created_at DESC
+  `);
+
+  const cols = [
+    'id', 'created_at', 'state', 'title', 'department', 'category',
+    'proposer_name', 'proposer_email',
+    'problem_description', 'solution_proposal', 'impact_scope',
+    'estimated_time_savings', 'external_link',
+    'garant_name', 'priority', 'pm_recommendation', 'pm_note',
+    'linked_project_name', 'linked_project_team_name',
+    'time_current_h_per_month', 'time_after_h_per_month',
+    'financial_savings', 'onetime_costs_kc', 'complexity', 'summary',
+  ];
+  const esc = (v) => {
+    if (v == null) return '';
+    const s = String(v);
+    // Excel-safe: uvozovky zdvojit, vše obalit, konce řádků respektovat.
+    return `"${s.replace(/"/g, '""')}"`;
+  };
+  const header = cols.join(';');
+  const rows = r.rows.map(row => cols.map(c => esc(row[c])).join(';'));
+  // BOM aby Excel poznal UTF-8; oddělovač ; kvůli čárkám v textech (cs-CZ locale).
+  const csv = '﻿' + [header, ...rows].join('\r\n');
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="napadnik-${stamp}.csv"`);
+  res.send(csv);
+});
+
+// Meta: pro klienta — Turnstile site key (pokud je nastaven).
+router.get('/_meta/turnstile', (req, res) => {
+  res.json({ site_key: process.env.TURNSTILE_SITE_KEY || null });
 });
 
 // Auth endpoint: detail 1 nápadu.

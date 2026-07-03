@@ -1,7 +1,7 @@
 // Veřejný formulář Nápadníku — bez přihlášení.
-// Fáze 5 přidá Cloudflare Turnstile antispam ochranu.
+// Fáze 5: Cloudflare Turnstile antispam.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ideas as ideasApi } from '../api.js';
 import VitomLogo from '../components/VitomLogo.jsx';
 
@@ -35,21 +35,67 @@ export default function NapadnikForm() {
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState(false);
   const [globalErr, setGlobalErr] = useState(null);
+  // Cloudflare Turnstile: token generovaný widgetem; siteKey z BE meta.
+  // Když siteKey není nastaven, widget se nezobrazí a BE Turnstile skip-uje.
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [turnstileKey, setTurnstileKey] = useState(null); // null | 'no' | siteKeyStr
+  const tsContainerRef = useRef(null);
+  const tsWidgetId = useRef(null);
 
   useEffect(() => {
     ideasApi.meta().then(setMeta).catch(() => {});
+    ideasApi.turnstileMeta()
+      .then(d => setTurnstileKey(d.site_key || 'no'))
+      .catch(() => setTurnstileKey('no'));
   }, []);
+
+  // Načti Turnstile skript + vyrender widget, když je siteKey k dispozici.
+  useEffect(() => {
+    if (!turnstileKey || turnstileKey === 'no' || !tsContainerRef.current) return;
+    const render = () => {
+      if (!window.turnstile || tsWidgetId.current) return;
+      tsWidgetId.current = window.turnstile.render(tsContainerRef.current, {
+        sitekey: turnstileKey,
+        callback: (t) => setTurnstileToken(t || ''),
+        'expired-callback': () => setTurnstileToken(''),
+        'error-callback': () => setTurnstileToken(''),
+      });
+    };
+    if (window.turnstile) { render(); return; }
+    // Skript ještě není nahraný — přidej ho a zavolej render až po loadu.
+    if (!document.querySelector('script[data-turnstile]')) {
+      const s = document.createElement('script');
+      s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+      s.async = true; s.defer = true; s.dataset.turnstile = '1';
+      s.onload = render;
+      document.head.appendChild(s);
+    } else {
+      // Skript už načítá jiný place — poll na window.turnstile.
+      const int = setInterval(() => {
+        if (window.turnstile) { clearInterval(int); render(); }
+      }, 200);
+      return () => clearInterval(int);
+    }
+  }, [turnstileKey]);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   const submit = async (e) => {
     e.preventDefault();
+    if (turnstileKey && turnstileKey !== 'no' && !turnstileToken) {
+      setGlobalErr('Prosím dokonči anti‑spam ověření (checkbox).');
+      return;
+    }
     setBusy(true); setErrors({}); setGlobalErr(null);
     try {
-      await ideasApi.submitPublic(form);
+      await ideasApi.submitPublic({ ...form, turnstile_token: turnstileToken });
       setSuccess(true);
     } catch (err) {
-      if (err.response?.status === 400 && err.response.data?.fields) {
+      if (err.response?.data?.error === 'turnstile_failed') {
+        setGlobalErr(err.response.data.message || 'Anti‑spam ověření selhalo.');
+        window.turnstile?.reset(tsWidgetId.current);
+        setTurnstileToken('');
+      } else if (err.response?.status === 400 && err.response.data?.fields) {
         setErrors(err.response.data.fields);
         setGlobalErr('Vyplň prosím povinná pole.');
       } else {
@@ -177,6 +223,12 @@ export default function NapadnikForm() {
               placeholder="https://…"
               className={inputCls('external_link', errors)} />
           </Field>
+
+          {turnstileKey && turnstileKey !== 'no' && (
+            <div className="pt-2">
+              <div ref={tsContainerRef} />
+            </div>
+          )}
 
           <div className="pt-2 flex items-center justify-end gap-3">
             <button type="submit" disabled={busy}

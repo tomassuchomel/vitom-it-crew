@@ -176,6 +176,8 @@ export const ideas = {
   saveAnalysis: (id, data) => api.put(`/ideas/${id}/analysis`, data).then(r => r.data),
   report:       () => api.get('/ideas/_report').then(r => r.data),
   stats:        () => api.get('/ideas/_stats').then(r => r.data),
+  turnstileMeta:() => api.get('/ideas/_meta/turnstile').then(r => r.data),
+  exportCsvUrl: () => `${api.defaults.baseURL}/ideas/_export.csv`,
   submitPublic: (payload) => api.post('/ideas/public', payload).then(r => r.data),
 };
 

@@ -98,10 +98,22 @@ export default function Napadnik() {
           ? 'Management report — přehled a rozhodnutí'
           : `${filtered.length} z ${ideas.length} nápadů — sběr, schvalování a řízení`}
         actions={
-          <a href="/napadnik-form" target="_blank" rel="noreferrer"
-            className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded-lg hover:bg-brand-600">
-            🔗 Veřejný formulář
-          </a>
+          <div className="flex flex-wrap gap-2 print:hidden">
+            {isMgmt && (
+              <a href={ideasApi.exportCsvUrl()} download
+                className="px-3 py-1.5 text-sm bg-white border border-ink-300 text-ink-700 rounded-lg hover:bg-cream-50">
+                ⬇ Export CSV
+              </a>
+            )}
+            <button type="button" onClick={() => window.print()}
+              className="px-3 py-1.5 text-sm bg-white border border-ink-300 text-ink-700 rounded-lg hover:bg-cream-50">
+              🖨 Tisk / PDF
+            </button>
+            <a href="/napadnik-form" target="_blank" rel="noreferrer"
+              className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded-lg hover:bg-brand-600">
+              🔗 Veřejný formulář
+            </a>
+          </div>
         }
       />
       <div className="px-6 pt-4 flex gap-2 border-b border-cream-200 overflow-x-auto">
