@@ -47,13 +47,15 @@ export default function Napadnik() {
   const [filter, setFilter] = useState('open');
   const [search, setSearch] = useState('');
 
-  const load = () => {
-    setLoading(true);
+  // silent=true refresh: neschovává tabulku (aby rozbalený detail
+  // nezmizel a nezpůsobil re-mount, který resetuje jeho interní state).
+  const load = (silent = false) => {
+    if (!silent) setLoading(true);
     ideasApi.list()
       .then(d => setIdeas(d.ideas || []))
       .finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
 
   const toggleExpand = async (id) => {
     if (expandedId === id) { setExpandedId(null); setDetail(null); return; }
@@ -167,7 +169,7 @@ export default function Napadnik() {
                           {detailLoading ? (
                             <div className="text-ink-500 text-sm">Načítám detail…</div>
                           ) : detail ? (
-                            <IdeaDetail data={detail} onChanged={load} />
+                            <IdeaDetail data={detail} onChanged={() => load(true)} />
                           ) : (
                             <div className="text-ink-400 text-sm">Detail se nenačetl.</div>
                           )}
