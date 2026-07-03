@@ -182,6 +182,70 @@ router.get('/', requireAuth, async (req, res) => {
   res.json({ ideas: r.rows });
 });
 
+// GET /ideas/_report — Management report: aggregace + seznamy pro rozhodování.
+// Vidí jen Management (admin nebo tým 'management').
+// POZOR: statické cesty (`_report`, `_stats`) musí být PŘED dynamic `/:id`,
+// jinak je Express zpracuje jako id="_report" a spadne to na Number(NaN).
+router.get('/_report', requireAuth, async (req, res) => {
+  const mgr = await isManagement(req.user.id, req.user.role);
+  if (!mgr) return res.status(403).json({ error: 'forbidden' });
+
+  const [byState, awaiting, waitAnalysis, active, savings] = await Promise.all([
+    query(`SELECT state, COUNT(*)::int AS n FROM ideas GROUP BY state`),
+    query(`${SELECT_FULL} WHERE i.state IN ('ke_schvaleni','ke_schvaleni_analyzy') ORDER BY i.created_at ASC`),
+    query(`${SELECT_FULL} WHERE i.state = 'schvaleno_ceka_na_analyzu' ORDER BY i.created_at ASC`),
+    query(`${SELECT_FULL} WHERE i.state = 'rozpracovano' ORDER BY i.updated_at DESC`),
+    query(`
+      SELECT
+        COUNT(*)::int AS n_with_analysis,
+        COALESCE(SUM(GREATEST(0, time_current_h_per_month - time_after_h_per_month)), 0)::float
+          AS total_saved_h_per_month,
+        COALESCE(SUM(onetime_costs_kc), 0)::int AS total_onetime_kc
+      FROM idea_analysis a JOIN ideas i ON i.id = a.idea_id
+      WHERE i.state NOT IN ('zamitnuto', 'odlozeno')
+    `),
+  ]);
+  res.json({
+    by_state: Object.fromEntries(byState.rows.map(r => [r.state, r.n])),
+    awaiting_approval: awaiting.rows,
+    waiting_analysis: waitAnalysis.rows,
+    active: active.rows,
+    savings: savings.rows[0],
+  });
+});
+
+// GET /ideas/_stats — data pro Dashboard grafy.
+router.get('/_stats', requireAuth, async (req, res) => {
+  const [byState, byDept, byCat, monthly, topProposers, byRec] = await Promise.all([
+    query(`SELECT state, COUNT(*)::int AS n FROM ideas GROUP BY state`),
+    query(`SELECT department, COUNT(*)::int AS n FROM ideas GROUP BY department ORDER BY n DESC`),
+    query(`SELECT category, COUNT(*)::int AS n FROM ideas GROUP BY category ORDER BY n DESC`),
+    query(`
+      SELECT TO_CHAR(date_trunc('month', created_at), 'YYYY-MM') AS ym,
+             COUNT(*)::int AS n
+      FROM ideas
+      WHERE created_at >= NOW() - INTERVAL '6 months'
+      GROUP BY ym ORDER BY ym ASC
+    `),
+    query(`
+      SELECT proposer_name, COUNT(*)::int AS n
+      FROM ideas
+      GROUP BY proposer_name
+      ORDER BY n DESC, proposer_name ASC
+      LIMIT 5
+    `),
+    query(`SELECT COALESCE(pm_recommendation, '?') AS rec, COUNT(*)::int AS n FROM ideas GROUP BY rec ORDER BY rec`),
+  ]);
+  res.json({
+    by_state:      Object.fromEntries(byState.rows.map(r => [r.state, r.n])),
+    by_department: byDept.rows,
+    by_category:   byCat.rows,
+    monthly_intake: monthly.rows,
+    top_proposers: topProposers.rows,
+    by_pm_recommendation: byRec.rows,
+  });
+});
+
 // Auth endpoint: detail 1 nápadu.
 router.get('/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
@@ -459,69 +523,6 @@ router.put('/:id/analysis', requireAuth, async (req, res) => {
 
   const out = await query('SELECT * FROM idea_analysis WHERE idea_id = $1', [id]);
   res.json({ analysis: out.rows[0] });
-});
-
-// GET /ideas/_report — Management report: aggregace + seznamy pro rozhodování.
-// Vidí jen Management (admin nebo tým 'management').
-router.get('/_report', requireAuth, async (req, res) => {
-  const mgr = await isManagement(req.user.id, req.user.role);
-  if (!mgr) return res.status(403).json({ error: 'forbidden' });
-
-  const [byState, awaiting, waitAnalysis, active, savings] = await Promise.all([
-    query(`SELECT state, COUNT(*)::int AS n FROM ideas GROUP BY state`),
-    query(`${SELECT_FULL} WHERE i.state IN ('ke_schvaleni','ke_schvaleni_analyzy') ORDER BY i.created_at ASC`),
-    query(`${SELECT_FULL} WHERE i.state = 'schvaleno_ceka_na_analyzu' ORDER BY i.created_at ASC`),
-    query(`${SELECT_FULL} WHERE i.state = 'rozpracovano' ORDER BY i.updated_at DESC`),
-    query(`
-      SELECT
-        COUNT(*)::int AS n_with_analysis,
-        COALESCE(SUM(GREATEST(0, time_current_h_per_month - time_after_h_per_month)), 0)::float
-          AS total_saved_h_per_month,
-        COALESCE(SUM(onetime_costs_kc), 0)::int AS total_onetime_kc
-      FROM idea_analysis a JOIN ideas i ON i.id = a.idea_id
-      WHERE i.state NOT IN ('zamitnuto', 'odlozeno')
-    `),
-  ]);
-  res.json({
-    by_state: Object.fromEntries(byState.rows.map(r => [r.state, r.n])),
-    awaiting_approval: awaiting.rows,
-    waiting_analysis: waitAnalysis.rows,
-    active: active.rows,
-    savings: savings.rows[0],
-  });
-});
-
-// GET /ideas/_stats — data pro Dashboard grafy. Public pro každého (jsou to
-// agregace bez PII).
-router.get('/_stats', requireAuth, async (req, res) => {
-  const [byState, byDept, byCat, monthly, topProposers, byRec] = await Promise.all([
-    query(`SELECT state, COUNT(*)::int AS n FROM ideas GROUP BY state`),
-    query(`SELECT department, COUNT(*)::int AS n FROM ideas GROUP BY department ORDER BY n DESC`),
-    query(`SELECT category, COUNT(*)::int AS n FROM ideas GROUP BY category ORDER BY n DESC`),
-    query(`
-      SELECT TO_CHAR(date_trunc('month', created_at), 'YYYY-MM') AS ym,
-             COUNT(*)::int AS n
-      FROM ideas
-      WHERE created_at >= NOW() - INTERVAL '6 months'
-      GROUP BY ym ORDER BY ym ASC
-    `),
-    query(`
-      SELECT proposer_name, COUNT(*)::int AS n
-      FROM ideas
-      GROUP BY proposer_name
-      ORDER BY n DESC, proposer_name ASC
-      LIMIT 5
-    `),
-    query(`SELECT COALESCE(pm_recommendation, '?') AS rec, COUNT(*)::int AS n FROM ideas GROUP BY rec ORDER BY rec`),
-  ]);
-  res.json({
-    by_state:      Object.fromEntries(byState.rows.map(r => [r.state, r.n])),
-    by_department: byDept.rows,
-    by_category:   byCat.rows,
-    monthly_intake: monthly.rows,
-    top_proposers: topProposers.rows,
-    by_pm_recommendation: byRec.rows,
-  });
 });
 
 // Meta: pro klienta — dropdowny (oddělení, kategorie, stavy)
