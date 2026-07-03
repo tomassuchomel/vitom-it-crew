@@ -307,6 +307,93 @@ router.post('/:id/create-project', requireAuth, async (req, res) => {
   res.json({ idea: out.rows[0], project: proj.rows[0] });
 });
 
+// PUT /ideas/:id/analysis — upsert do idea_analysis.
+// Jen garant nebo Management. Povoleno ve stavech schvaleno_ceka_na_analyzu
+// (kdy garant vyplňuje) a ke_schvaleni_analyzy (kdy Management upravuje před schválením).
+router.put('/:id/analysis', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const r = await query(`SELECT id, state, garant_id FROM ideas WHERE id = $1`, [id]);
+  if (r.rows.length === 0) return res.status(404).json({ error: 'not_found' });
+  const idea = r.rows[0];
+
+  const mgr = await isManagement(req.user.id, req.user.role);
+  const isGarant = idea.garant_id && idea.garant_id === req.user.id;
+  if (!mgr && !isGarant) return res.status(403).json({ error: 'forbidden' });
+  if (!['schvaleno_ceka_na_analyzu', 'ke_schvaleni_analyzy'].includes(idea.state)) {
+    return res.status(400).json({ error: 'invalid_state', message: 'Analýzu lze editovat jen ve stavu čekání / před schválením.' });
+  }
+
+  const b = req.body || {};
+  const num = (v) => (v === '' || v == null) ? null : Number(v);
+  const str = (v) => (v == null || v === '') ? null : String(v).trim().slice(0, 5000);
+  const cx  = ['low', 'medium', 'high'].includes(b.complexity) ? b.complexity : null;
+
+  await query(`
+    INSERT INTO idea_analysis (
+      idea_id, time_current_h_per_month, time_after_h_per_month,
+      financial_savings, internal_hourly_cost, onetime_costs_kc, monthly_annual_costs,
+      target_date, complexity, dependencies, risks, summary, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+    ON CONFLICT (idea_id) DO UPDATE SET
+      time_current_h_per_month = EXCLUDED.time_current_h_per_month,
+      time_after_h_per_month   = EXCLUDED.time_after_h_per_month,
+      financial_savings        = EXCLUDED.financial_savings,
+      internal_hourly_cost     = EXCLUDED.internal_hourly_cost,
+      onetime_costs_kc         = EXCLUDED.onetime_costs_kc,
+      monthly_annual_costs     = EXCLUDED.monthly_annual_costs,
+      target_date              = EXCLUDED.target_date,
+      complexity               = EXCLUDED.complexity,
+      dependencies             = EXCLUDED.dependencies,
+      risks                    = EXCLUDED.risks,
+      summary                  = EXCLUDED.summary,
+      updated_at               = NOW()
+  `, [
+    id, num(b.time_current_h_per_month), num(b.time_after_h_per_month),
+    str(b.financial_savings), str(b.internal_hourly_cost),
+    b.onetime_costs_kc === '' || b.onetime_costs_kc == null ? null : Math.round(Number(b.onetime_costs_kc)),
+    str(b.monthly_annual_costs), str(b.target_date), cx,
+    str(b.dependencies), str(b.risks), str(b.summary),
+  ]);
+
+  await query(`
+    INSERT INTO idea_events (idea_id, action, user_id, comment)
+    VALUES ($1, 'edit_analysis', $2, $3)
+  `, [id, req.user.id, 'Aktualizace analýzy.']);
+
+  const out = await query('SELECT * FROM idea_analysis WHERE idea_id = $1', [id]);
+  res.json({ analysis: out.rows[0] });
+});
+
+// GET /ideas/_report — Management report: aggregace + seznamy pro rozhodování.
+// Vidí jen Management (admin nebo tým 'management').
+router.get('/_report', requireAuth, async (req, res) => {
+  const mgr = await isManagement(req.user.id, req.user.role);
+  if (!mgr) return res.status(403).json({ error: 'forbidden' });
+
+  const [byState, awaiting, waitAnalysis, active, savings] = await Promise.all([
+    query(`SELECT state, COUNT(*)::int AS n FROM ideas GROUP BY state`),
+    query(`${SELECT_FULL} WHERE i.state IN ('ke_schvaleni','ke_schvaleni_analyzy') ORDER BY i.created_at ASC`),
+    query(`${SELECT_FULL} WHERE i.state = 'schvaleno_ceka_na_analyzu' ORDER BY i.created_at ASC`),
+    query(`${SELECT_FULL} WHERE i.state = 'rozpracovano' ORDER BY i.updated_at DESC`),
+    query(`
+      SELECT
+        COUNT(*)::int AS n_with_analysis,
+        COALESCE(SUM(GREATEST(0, time_current_h_per_month - time_after_h_per_month)), 0)::float
+          AS total_saved_h_per_month,
+        COALESCE(SUM(onetime_costs_kc), 0)::int AS total_onetime_kc
+      FROM idea_analysis a JOIN ideas i ON i.id = a.idea_id
+      WHERE i.state NOT IN ('zamitnuto', 'odlozeno')
+    `),
+  ]);
+  res.json({
+    by_state: Object.fromEntries(byState.rows.map(r => [r.state, r.n])),
+    awaiting_approval: awaiting.rows,
+    waiting_analysis: waitAnalysis.rows,
+    active: active.rows,
+    savings: savings.rows[0],
+  });
+});
+
 // Meta: pro klienta — dropdowny (oddělení, kategorie, stavy)
 router.get('/_meta/enums', async (req, res) => {
   res.json({ departments: DEPARTMENTS, categories: CATEGORIES, states: VALID_STATES });

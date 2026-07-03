@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import { ideas as ideasApi, users as usersApi } from '../api.js';
 import { useTeams } from '../teams.jsx';
+import { useAuth } from '../auth.jsx';
 
 const STATE_META = {
   zadano:                    { label: 'zadáno',                    cls: 'bg-slate-100 text-slate-700 border-slate-300' },
@@ -46,6 +47,10 @@ export default function Napadnik() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [filter, setFilter] = useState('open');
   const [search, setSearch] = useState('');
+  const [tab, setTab] = useState('wishlist');
+  const { user } = useAuth();
+  const { teams } = useTeams();
+  const isMgmt = user?.role === 'admin' || (teams || []).some(t => t.slug === 'management');
 
   // silent=true refresh: neschovává tabulku (aby rozbalený detail
   // nezmizel a nezpůsobil re-mount, který resetuje jeho interní state).
@@ -89,7 +94,9 @@ export default function Napadnik() {
     <div>
       <PageHeader
         title="Nápadník"
-        subtitle={`${filtered.length} z ${ideas.length} nápadů — sběr, schvalování a řízení`}
+        subtitle={tab === 'report'
+          ? 'Management report — přehled a rozhodnutí'
+          : `${filtered.length} z ${ideas.length} nápadů — sběr, schvalování a řízení`}
         actions={
           <a href="/napadnik-form" target="_blank" rel="noreferrer"
             className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded-lg hover:bg-brand-600">
@@ -97,6 +104,21 @@ export default function Napadnik() {
           </a>
         }
       />
+      {isMgmt && (
+        <div className="px-6 pt-4 flex gap-2 border-b border-cream-200">
+          <button onClick={() => setTab('wishlist')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
+              tab === 'wishlist' ? 'border-brand-500 text-brand-600' : 'border-transparent text-ink-500 hover:text-ink-700'
+            }`}>💡 Wishlist</button>
+          <button onClick={() => setTab('report')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
+              tab === 'report' ? 'border-brand-500 text-brand-600' : 'border-transparent text-ink-500 hover:text-ink-700'
+            }`}>📊 Report</button>
+        </div>
+      )}
+      {tab === 'report' ? (
+        <ReportPanel />
+      ) : (
       <div className="p-6 space-y-4">
         {/* Filtry */}
         <div className="flex flex-wrap gap-2 items-center">
@@ -183,6 +205,7 @@ export default function Napadnik() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -232,7 +255,21 @@ function IdeaDetail({ data, onChanged }) {
     } finally { setSaving(false); }
   };
 
+  const showAnalysis = ['schvaleno_ceka_na_analyzu', 'ke_schvaleni_analyzy', 'schvalena_analyza', 'rozpracovano', 'hotovo'].includes(idea.state);
+  const canEditAnalysis =
+    ['schvaleno_ceka_na_analyzu', 'ke_schvaleni_analyzy'].includes(idea.state) &&
+    (transitions?.isManagement || transitions?.isGarant);
+
   return (
+    <div className="space-y-4 text-sm">
+      {showAnalysis && (
+        <AnalysisPanel
+          ideaId={idea.id}
+          analysis={state.analysis}
+          canEdit={!!canEditAnalysis}
+          onSaved={reload}
+        />
+      )}
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
       {/* Levý sloupec — kontakt + obsah */}
       <div className="bg-white border border-cream-200 rounded-lg p-3">
@@ -352,6 +389,7 @@ function IdeaDetail({ data, onChanged }) {
           ))}
         </ul>
       </div>
+    </div>
     </div>
   );
 }
@@ -482,6 +520,222 @@ function TransitionButton({ transition, ideaId, onDone }) {
             >Zrušit</button>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// AnalysisPanel — celo-šířkový panel nad grid. Ve stavech čeká-na-analýzu /
+// ke_schvaleni_analyzy a s právy garant/Management umožní editaci; jinak
+// jen read-only zobrazení (pokud analýza existuje).
+function AnalysisPanel({ ideaId, analysis, canEdit, onSaved }) {
+  const [expanded, setExpanded] = useState(canEdit || !!analysis);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+  const [form, setForm] = useState(() => analysisFormInit(analysis));
+
+  useEffect(() => { setForm(analysisFormInit(analysis)); }, [analysis]);
+
+  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+
+  const save = async () => {
+    setSaving(true); setErr(null);
+    try {
+      await ideasApi.saveAnalysis(ideaId, form);
+      await onSaved();
+    } catch (e) {
+      setErr(e.response?.data?.message || e.message);
+    } finally { setSaving(false); }
+  };
+
+  const savedH = (analysis && analysis.time_current_h_per_month != null && analysis.time_after_h_per_month != null)
+    ? Math.max(0, Number(analysis.time_current_h_per_month) - Number(analysis.time_after_h_per_month))
+    : null;
+
+  return (
+    <div className="bg-white border border-cream-200 rounded-lg">
+      <button
+        type="button"
+        onClick={() => setExpanded(x => !x)}
+        className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-cream-50"
+      >
+        <span className="text-xs font-semibold text-ink-500 uppercase tracking-wide">
+          📊 Analýza dopadu
+          {savedH != null && <span className="ml-2 text-emerald-600 normal-case">· úspora {savedH} h/měs</span>}
+          {!analysis && !canEdit && <span className="ml-2 text-ink-400 italic normal-case">— zatím nevyplněno</span>}
+        </span>
+        <span className="text-ink-400 text-xs">{expanded ? '▾' : '▸'}</span>
+      </button>
+      {expanded && (
+        <div className="border-t border-cream-100 p-3 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          <NumField label="Hodin/měs teď" val={form.time_current_h_per_month} onChange={set('time_current_h_per_month')} disabled={!canEdit} />
+          <NumField label="Hodin/měs po řešení" val={form.time_after_h_per_month} onChange={set('time_after_h_per_month')} disabled={!canEdit} />
+          <NumField label="Jednorázové náklady (Kč)" val={form.onetime_costs_kc} onChange={set('onetime_costs_kc')} disabled={!canEdit} />
+          <TextField label="Fin. úspora (odhad)" val={form.financial_savings} onChange={set('financial_savings')} disabled={!canEdit} />
+          <TextField label="Interní hodinovka" val={form.internal_hourly_cost} onChange={set('internal_hourly_cost')} disabled={!canEdit} />
+          <TextField label="Měs. / roční náklady" val={form.monthly_annual_costs} onChange={set('monthly_annual_costs')} disabled={!canEdit} />
+          <TextField label="Cíl. datum realizace" val={form.target_date} onChange={set('target_date')} disabled={!canEdit} />
+          <label className="block">
+            <span className="text-ink-500">Složitost</span>
+            <select value={form.complexity || ''} onChange={set('complexity')} disabled={!canEdit}
+              className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-xs">
+              <option value="">—</option>
+              <option value="low">nízká</option>
+              <option value="medium">střední</option>
+              <option value="high">vysoká</option>
+            </select>
+          </label>
+          <TextField label="Závislosti" val={form.dependencies} onChange={set('dependencies')} disabled={!canEdit} />
+          <div className="md:col-span-3">
+            <TextArea label="Rizika" val={form.risks} onChange={set('risks')} disabled={!canEdit} />
+          </div>
+          <div className="md:col-span-3">
+            <TextArea label="Souhrn / doporučení PM" val={form.summary} onChange={set('summary')} disabled={!canEdit} />
+          </div>
+          {canEdit && (
+            <div className="md:col-span-3 flex items-center gap-2 pt-1">
+              <button type="button" onClick={save} disabled={saving}
+                className="px-3 py-1.5 bg-brand-500 text-white rounded text-xs hover:bg-brand-600 disabled:opacity-50">
+                {saving ? 'Ukládám…' : 'Uložit analýzu'}
+              </button>
+              {err && <span className="text-red-600 text-xs">{err}</span>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function analysisFormInit(a) {
+  return {
+    time_current_h_per_month: a?.time_current_h_per_month ?? '',
+    time_after_h_per_month:   a?.time_after_h_per_month ?? '',
+    financial_savings:        a?.financial_savings ?? '',
+    internal_hourly_cost:     a?.internal_hourly_cost ?? '',
+    onetime_costs_kc:         a?.onetime_costs_kc ?? '',
+    monthly_annual_costs:     a?.monthly_annual_costs ?? '',
+    target_date:              a?.target_date ?? '',
+    complexity:               a?.complexity ?? '',
+    dependencies:             a?.dependencies ?? '',
+    risks:                    a?.risks ?? '',
+    summary:                  a?.summary ?? '',
+  };
+}
+
+function NumField({ label, val, onChange, disabled }) {
+  return (
+    <label className="block">
+      <span className="text-ink-500">{label}</span>
+      <input type="number" step="0.5" value={val ?? ''} onChange={onChange} disabled={disabled}
+        className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-xs disabled:bg-cream-50" />
+    </label>
+  );
+}
+function TextField({ label, val, onChange, disabled }) {
+  return (
+    <label className="block">
+      <span className="text-ink-500">{label}</span>
+      <input type="text" value={val ?? ''} onChange={onChange} disabled={disabled}
+        className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-xs disabled:bg-cream-50" />
+    </label>
+  );
+}
+function TextArea({ label, val, onChange, disabled }) {
+  return (
+    <label className="block">
+      <span className="text-ink-500">{label}</span>
+      <textarea value={val ?? ''} onChange={onChange} disabled={disabled} rows={2}
+        className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-xs resize-y disabled:bg-cream-50" />
+    </label>
+  );
+}
+
+// Management report — přehled + akční fronty.
+function ReportPanel() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    ideasApi.report().then(setData).catch(e => setErr(e.response?.data?.error || e.message));
+  }, []);
+  if (err) return <div className="p-6 text-red-600 text-sm">{err}</div>;
+  if (!data) return <div className="p-6 text-ink-500 text-sm">Načítám report…</div>;
+
+  const s = data.by_state || {};
+  const savings = data.savings || {};
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* KPI karty */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Kpi label="Ke schválení" value={(s.ke_schvaleni || 0) + (s.ke_schvaleni_analyzy || 0)} color="text-blue-600" />
+        <Kpi label="Čekají na analýzu" value={s.schvaleno_ceka_na_analyzu || 0} color="text-indigo-600" />
+        <Kpi label="Rozpracované" value={s.rozpracovano || 0} color="text-purple-600" />
+        <Kpi label="Hotové" value={s.hotovo || 0} color="text-emerald-600" />
+      </div>
+
+      {/* Úspory */}
+      <div className="bg-white border border-cream-200 rounded-lg p-4">
+        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">Souhrn úspor (aktivní nápady)</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+          <div>
+            <div className="text-2xl font-bold text-emerald-600">
+              {Math.round(savings.total_saved_h_per_month || 0)} h/měs
+            </div>
+            <div className="text-xs text-ink-500">celková úspora času</div>
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-brand-600">
+              {(savings.total_onetime_kc || 0).toLocaleString('cs-CZ')} Kč
+            </div>
+            <div className="text-xs text-ink-500">jednorázové náklady na realizaci</div>
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-ink-700">{savings.n_with_analysis || 0}</div>
+            <div className="text-xs text-ink-500">nápadů s analýzou</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Akční fronty */}
+      <ReportList title="🎯 Vyžadují schválení" items={data.awaiting_approval} empty="Nic nečeká." />
+      <ReportList title="🔍 Čekají na analýzu" items={data.waiting_analysis} empty="Nic nečeká na analýzu." />
+      <ReportList title="🚀 Rozpracované projekty" items={data.active} empty="Zatím žádný projekt v realizaci." showProject />
+    </div>
+  );
+}
+
+function Kpi({ label, value, color }) {
+  return (
+    <div className="bg-white border border-cream-200 rounded-lg p-3">
+      <div className={`text-2xl font-bold ${color}`}>{value}</div>
+      <div className="text-xs text-ink-500">{label}</div>
+    </div>
+  );
+}
+
+function ReportList({ title, items, empty, showProject }) {
+  return (
+    <div className="bg-white border border-cream-200 rounded-lg p-4">
+      <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">{title} ({items?.length || 0})</div>
+      {(!items || items.length === 0) ? (
+        <div className="text-ink-400 text-xs italic">{empty}</div>
+      ) : (
+        <ul className="divide-y divide-cream-100 text-sm">
+          {items.map(i => (
+            <li key={i.id} className="py-1.5 flex items-center gap-3">
+              <span className="text-[10px] text-ink-400 w-10">#{i.id}</span>
+              <span className="flex-1 truncate">{i.title}</span>
+              <span className="text-xs text-ink-500 truncate max-w-[160px]">{i.department}</span>
+              {showProject && i.linked_project_name && (
+                <span className="text-xs text-emerald-700 truncate max-w-[180px]">→ {i.linked_project_name}</span>
+              )}
+              <span className={`text-[10px] px-2 py-0.5 rounded border ${STATE_META[i.state]?.cls || ''}`}>
+                {STATE_META[i.state]?.label || i.state}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

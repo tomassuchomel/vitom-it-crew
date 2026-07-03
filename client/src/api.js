@@ -173,6 +173,8 @@ export const ideas = {
   transitions:  (id) => api.get(`/ideas/${id}/transitions`).then(r => r.data),
   transition:   (id, to_state, comment) => api.post(`/ideas/${id}/state`, { to_state, comment }).then(r => r.data),
   createProject:(id, team_id, name) => api.post(`/ideas/${id}/create-project`, { team_id, name }).then(r => r.data),
+  saveAnalysis: (id, data) => api.put(`/ideas/${id}/analysis`, data).then(r => r.data),
+  report:       () => api.get('/ideas/_report').then(r => r.data),
   submitPublic: (payload) => api.post('/ideas/public', payload).then(r => r.data),
 };
 
