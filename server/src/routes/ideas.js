@@ -71,6 +71,14 @@ async function isManagement(userId, userRole) {
   return r.rows.length > 0;
 }
 
+// PM Nápadníku — vidí Report / Dashboard / Export, edituje metadata,
+// posouvá garant-akce (Analýza hotová, Vytvořit projekt, Dokončit).
+// NEschvaluje / nezamítá (to Management).
+async function isIdeaPM(userId) {
+  const r = await query(`SELECT 1 FROM idea_pms WHERE user_id = $1`, [userId]);
+  return r.rows.length > 0;
+}
+
 // Workflow graf — z jakého stavu jsou povolené jaké přechody + kdo je smí provést.
 // role: 'management' (jen Management), 'garant' (jen přiřazený garant),
 //       'garant_or_management' (obojí).
@@ -216,8 +224,11 @@ router.get('/', requireAuth, async (req, res) => {
 // POZOR: statické cesty (`_report`, `_stats`) musí být PŘED dynamic `/:id`,
 // jinak je Express zpracuje jako id="_report" a spadne to na Number(NaN).
 router.get('/_report', requireAuth, async (req, res) => {
-  const mgr = await isManagement(req.user.id, req.user.role);
-  if (!mgr) return res.status(403).json({ error: 'forbidden' });
+  const [mgr, pm] = await Promise.all([
+    isManagement(req.user.id, req.user.role),
+    isIdeaPM(req.user.id),
+  ]);
+  if (!mgr && !pm) return res.status(403).json({ error: 'forbidden' });
 
   const [byState, awaiting, waitAnalysis, active, savings] = await Promise.all([
     query(`SELECT state, COUNT(*)::int AS n FROM ideas GROUP BY state`),
@@ -278,8 +289,11 @@ router.get('/_stats', requireAuth, async (req, res) => {
 // GET /ideas/_export.csv — CSV export všech nápadů. Management-only
 // (obsahuje interní PM poznámky, garanty, analytická pole).
 router.get('/_export.csv', requireAuth, async (req, res) => {
-  const mgr = await isManagement(req.user.id, req.user.role);
-  if (!mgr) return res.status(403).json({ error: 'forbidden' });
+  const [mgr, pm] = await Promise.all([
+    isManagement(req.user.id, req.user.role),
+    isIdeaPM(req.user.id),
+  ]);
+  if (!mgr && !pm) return res.status(403).json({ error: 'forbidden' });
 
   const r = await query(`
     SELECT i.*,
@@ -326,6 +340,53 @@ router.get('/_export.csv', requireAuth, async (req, res) => {
 // Meta: pro klienta — Turnstile site key (pokud je nastaven).
 router.get('/_meta/turnstile', (req, res) => {
   res.json({ site_key: process.env.TURNSTILE_SITE_KEY || null });
+});
+
+// Meta: kdo jsem v Nápadníku (pro FE — tab visibility, tlačítka).
+router.get('/_meta/perms', requireAuth, async (req, res) => {
+  const [mgr, pm] = await Promise.all([
+    isManagement(req.user.id, req.user.role),
+    isIdeaPM(req.user.id),
+  ]);
+  res.json({ is_management: mgr, is_idea_pm: pm });
+});
+
+// Seznam PMek Nápadníku. Vidí Management + admin (kvůli přehledu).
+router.get('/_pms', requireAuth, async (req, res) => {
+  const mgr = await isManagement(req.user.id, req.user.role);
+  const pm  = await isIdeaPM(req.user.id);
+  if (!mgr && !pm) return res.status(403).json({ error: 'forbidden' });
+  const r = await query(`
+    SELECT ip.user_id, ip.assigned_at, u.name, u.email,
+           ab.name AS assigned_by_name
+    FROM idea_pms ip
+    JOIN users u ON u.id = ip.user_id
+    LEFT JOIN users ab ON ab.id = ip.assigned_by
+    ORDER BY u.name ASC
+  `);
+  res.json({ pms: r.rows });
+});
+
+// Přidat PM. Jen admin.
+router.post('/_pms', requireAuth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
+  const userId = Number(req.body?.user_id);
+  if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'invalid_user_id' });
+  const u = await query(`SELECT id FROM users WHERE id = $1 AND active = TRUE`, [userId]);
+  if (u.rows.length === 0) return res.status(404).json({ error: 'user_not_found' });
+  await query(`
+    INSERT INTO idea_pms (user_id, assigned_by) VALUES ($1, $2)
+    ON CONFLICT (user_id) DO NOTHING
+  `, [userId, req.user.id]);
+  res.status(201).json({ ok: true });
+});
+
+// Odebrat PM. Jen admin.
+router.delete('/_pms/:userId', requireAuth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
+  const userId = Number(req.params.userId);
+  await query(`DELETE FROM idea_pms WHERE user_id = $1`, [userId]);
+  res.json({ ok: true });
 });
 
 // Auth endpoint: detail 1 nápadu.
@@ -410,21 +471,27 @@ router.get('/:id/transitions', requireAuth, async (req, res) => {
   const r = await query(`SELECT id, state, garant_id FROM ideas WHERE id = $1`, [id]);
   if (r.rows.length === 0) return res.status(404).json({ error: 'not_found' });
   const idea = r.rows[0];
-  const mgr = await isManagement(req.user.id, req.user.role);
+  const [mgr, pm] = await Promise.all([
+    isManagement(req.user.id, req.user.role),
+    isIdeaPM(req.user.id),
+  ]);
   const isGarant = idea.garant_id && idea.garant_id === req.user.id;
+  // PM Nápadníku má garant-role practical rights (posouvá analýzu, dokončí),
+  // ale NEschvaluje / nezamítá — role 'management' zůstává striktní.
+  const canGarant = isGarant || pm;
   const available = (TRANSITIONS[idea.state] || []).map(t => {
     let allowed = false;
     if (t.role === 'management') allowed = mgr;
-    else if (t.role === 'garant') allowed = isGarant;
-    else if (t.role === 'garant_or_management') allowed = mgr || isGarant;
+    else if (t.role === 'garant') allowed = canGarant;
+    else if (t.role === 'garant_or_management') allowed = mgr || canGarant;
     if (t.requireGarant && !idea.garant_id) allowed = false;
     return { to: t.to, action: t.action, requireComment: !!t.requireComment, allowed };
   });
-  // Speciální akce: Vytvořit projekt (jen ve stavu schvalena_analyza, jen garant)
-  if (idea.state === 'schvalena_analyza' && isGarant) {
+  // Speciální akce: Vytvořit projekt (schvalena_analyza) — garant nebo PM Nápadníku.
+  if (idea.state === 'schvalena_analyza' && canGarant) {
     available.push({ to: 'rozpracovano', action: 'Vytvořit projekt', requireComment: false, allowed: true, special: 'create_project' });
   }
-  res.json({ state: idea.state, transitions: available, isManagement: mgr, isGarant });
+  res.json({ state: idea.state, transitions: available, isManagement: mgr, isGarant, isIdeaPM: pm });
 });
 
 // Provede state transition. Body: { to_state, comment }
@@ -441,13 +508,18 @@ router.post('/:id/state', requireAuth, async (req, res) => {
   const allowed = (TRANSITIONS[idea.state] || []).find(t => t.to === toState);
   if (!allowed) return res.status(400).json({ error: 'invalid_transition', from: idea.state, to: toState });
 
-  // Autorizace
-  const mgr = await isManagement(req.user.id, req.user.role);
+  // Autorizace. PM Nápadníku má garant-role rights (posun analýzy, dokončení),
+  // ale NE schvalování / zamítání.
+  const [mgr, pm] = await Promise.all([
+    isManagement(req.user.id, req.user.role),
+    isIdeaPM(req.user.id),
+  ]);
   const isGarant = idea.garant_id && idea.garant_id === req.user.id;
+  const canGarant = isGarant || pm;
   const canDo =
     (allowed.role === 'management' && mgr) ||
-    (allowed.role === 'garant' && isGarant) ||
-    (allowed.role === 'garant_or_management' && (mgr || isGarant));
+    (allowed.role === 'garant' && canGarant) ||
+    (allowed.role === 'garant_or_management' && (mgr || canGarant));
   if (!canDo) return res.status(403).json({ error: 'forbidden', message: 'Tuhle akci nemáš oprávnění provést.' });
 
   // Vyžadovaný komentář (Management akce)
@@ -503,7 +575,7 @@ router.post('/:id/state', requireAuth, async (req, res) => {
 // Speciální akce: Vytvořit reálný projekt z nápadu.
 // Přechází state schvalena_analyza → rozpracovano + vytvoří projekt
 // v cílovém týmu + linked_project_id na nápadu.
-// Jen garant nápadu.
+// Garant nápadu nebo PM Nápadníku.
 router.post('/:id/create-project', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const b = req.body || {};
@@ -516,8 +588,9 @@ router.post('/:id/create-project', requireAuth, async (req, res) => {
   if (r.rows.length === 0) return res.status(404).json({ error: 'not_found' });
   const idea = r.rows[0];
   if (idea.state !== 'schvalena_analyza') return res.status(400).json({ error: 'invalid_state', message: 'Projekt lze vytvořit jen po schválení analýzy.' });
-  const isGarant = idea.garant_id && idea.garant_id === req.user.id;
-  if (!isGarant) return res.status(403).json({ error: 'forbidden', message: 'Projekt může založit jen garant nápadu.' });
+  const pm = await isIdeaPM(req.user.id);
+  const canDoProject = (idea.garant_id && idea.garant_id === req.user.id) || pm;
+  if (!canDoProject) return res.status(403).json({ error: 'forbidden', message: 'Projekt může založit jen garant nápadu nebo PM Nápadníku.' });
 
   // Ověř členství v cílovém týmu (nepovolíme založit projekt v týmu, kde nejsme)
   const memb = await query(`SELECT 1 FROM team_members WHERE user_id = $1 AND team_id = $2 LIMIT 1`, [req.user.id, teamId]);

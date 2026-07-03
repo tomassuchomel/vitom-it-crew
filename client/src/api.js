@@ -177,6 +177,10 @@ export const ideas = {
   report:       () => api.get('/ideas/_report').then(r => r.data),
   stats:        () => api.get('/ideas/_stats').then(r => r.data),
   turnstileMeta:() => api.get('/ideas/_meta/turnstile').then(r => r.data),
+  perms:        () => api.get('/ideas/_meta/perms').then(r => r.data),
+  pmsList:      () => api.get('/ideas/_pms').then(r => r.data),
+  pmAdd:        (user_id) => api.post('/ideas/_pms', { user_id }).then(r => r.data),
+  pmRemove:     (user_id) => api.delete(`/ideas/_pms/${user_id}`).then(r => r.data),
   exportCsvUrl: () => `${api.defaults.baseURL}/ideas/_export.csv`,
   submitPublic: (payload) => api.post('/ideas/public', payload).then(r => r.data),
 };

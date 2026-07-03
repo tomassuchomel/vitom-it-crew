@@ -50,7 +50,16 @@ export default function Napadnik() {
   const [tab, setTab] = useState('wishlist');
   const { user } = useAuth();
   const { teams } = useTeams();
-  const isMgmt = user?.role === 'admin' || (teams || []).some(t => t.slug === 'management');
+  // perms z BE — pravdivý zdroj (Management OR PM Nápadníku).
+  // Před načtením padáme na klientský team check, aby menu neproblíklo.
+  const [perms, setPerms] = useState(null);
+  useEffect(() => { ideasApi.perms().then(setPerms).catch(() => setPerms({ is_management: false, is_idea_pm: false })); }, []);
+  const clientMgmtFallback = user?.role === 'admin' || (teams || []).some(t => t.slug === 'management');
+  const isMgmt = perms?.is_management ?? clientMgmtFallback;
+  const isIdeaPM = !!perms?.is_idea_pm;
+  // Report tab + Export CSV vidí Management i PM Nápadníku.
+  const canManageIdea = isMgmt || isIdeaPM;
+  const isAdmin = user?.role === 'admin';
 
   // silent=true refresh: neschovává tabulku (aby rozbalený detail
   // nezmizel a nezpůsobil re-mount, který resetuje jeho interní state).
@@ -99,7 +108,7 @@ export default function Napadnik() {
           : `${filtered.length} z ${ideas.length} nápadů — sběr, schvalování a řízení`}
         actions={
           <div className="flex flex-wrap gap-2 print:hidden">
-            {isMgmt && (
+            {canManageIdea && (
               <a href={ideasApi.exportCsvUrl()} download
                 className="px-3 py-1.5 text-sm bg-white border border-ink-300 text-ink-700 rounded-lg hover:bg-cream-50">
                 ⬇ Export CSV
@@ -125,7 +134,7 @@ export default function Napadnik() {
           className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
             tab === 'dashboard' ? 'border-brand-500 text-brand-600' : 'border-transparent text-ink-500 hover:text-ink-700'
           }`}>📈 Dashboard</button>
-        {isMgmt && (
+        {canManageIdea && (
           <button onClick={() => setTab('report')}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
               tab === 'report' ? 'border-brand-500 text-brand-600' : 'border-transparent text-ink-500 hover:text-ink-700'
@@ -133,7 +142,7 @@ export default function Napadnik() {
         )}
       </div>
       {tab === 'report' ? (
-        <ReportPanel />
+        <ReportPanel isAdmin={isAdmin} />
       ) : tab === 'dashboard' ? (
         <DashboardPanel />
       ) : (
@@ -670,7 +679,7 @@ function TextArea({ label, val, onChange, disabled }) {
 }
 
 // Management report — přehled + akční fronty.
-function ReportPanel() {
+function ReportPanel({ isAdmin }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   useEffect(() => {
@@ -684,6 +693,7 @@ function ReportPanel() {
 
   return (
     <div className="p-6 space-y-6">
+      <PmPanel isAdmin={isAdmin} />
       {/* KPI karty */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Kpi label="Ke schválení" value={(s.ke_schvaleni || 0) + (s.ke_schvaleni_analyzy || 0)} color="text-blue-600" />
@@ -875,6 +885,98 @@ function ReportList({ title, items, empty, showProject }) {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+// Panel „PM Nápadníku" v Report tabu. Zobrazuje seznam PMek; admin může
+// přidat/odebrat. Ostatní vidí jen seznam (kontext, kdo za Nápadník odpovídá).
+function PmPanel({ isAdmin }) {
+  const [pms, setPms] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [selected, setSelected] = useState('');
+
+  const load = () => ideasApi.pmsList().then(d => setPms(d.pms || [])).catch(() => {});
+  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!isAdmin || !showAdd) return;
+    usersApi.listAcrossMyTeams()
+      .then(d => setUsers(d.users || []))
+      .catch(() => usersApi.list().then(d => setUsers(d.users || [])).catch(() => {}));
+  }, [isAdmin, showAdd]);
+
+  const add = async () => {
+    if (!selected) return;
+    setBusy(true); setErr(null);
+    try { await ideasApi.pmAdd(Number(selected)); setSelected(''); setShowAdd(false); await load(); }
+    catch (e) { setErr(e.response?.data?.error || e.message); }
+    finally { setBusy(false); }
+  };
+  const remove = async (userId, name) => {
+    if (!window.confirm(`Odebrat ${name} jako PM Nápadníku?`)) return;
+    setBusy(true); setErr(null);
+    try { await ideasApi.pmRemove(userId); await load(); }
+    catch (e) { setErr(e.response?.data?.error || e.message); }
+    finally { setBusy(false); }
+  };
+
+  // Kandidáti pro přidání = users, kteří ještě nejsou PM.
+  const pmIds = new Set(pms.map(p => p.user_id));
+  const candidates = users.filter(u => !pmIds.has(u.id));
+
+  return (
+    <div className="bg-white border border-cream-200 rounded-lg p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide">
+          🎯 PM Nápadníku ({pms.length})
+        </div>
+        {isAdmin && !showAdd && (
+          <button type="button" onClick={() => setShowAdd(true)}
+            className="text-xs px-2 py-1 border border-ink-300 rounded hover:bg-cream-50">
+            + Přidat
+          </button>
+        )}
+      </div>
+      {pms.length === 0 ? (
+        <div className="text-ink-400 text-xs italic">Zatím nikdo. {isAdmin && 'Přidej PM Nápadníku, který bude Nápadník sledovat, vyhodnocovat a reportovat.'}</div>
+      ) : (
+        <ul className="divide-y divide-cream-100 text-sm">
+          {pms.map(p => (
+            <li key={p.user_id} className="py-1.5 flex items-center gap-3">
+              <span className="flex-1 truncate">{p.name}</span>
+              <span className="text-xs text-ink-500 truncate max-w-[200px]">{p.email}</span>
+              {isAdmin && (
+                <button type="button" disabled={busy} onClick={() => remove(p.user_id, p.name)}
+                  className="text-xs text-red-600 hover:underline">Odebrat</button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {showAdd && (
+        <div className="mt-3 pt-3 border-t border-cream-100 flex items-center gap-2 flex-wrap">
+          <select value={selected} onChange={e => setSelected(e.target.value)}
+            className="border border-ink-300 rounded px-2 py-1 text-sm flex-1 min-w-[180px]">
+            <option value="">— vyber uživatele —</option>
+            {candidates.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+          <button type="button" onClick={add} disabled={busy || !selected}
+            className="px-3 py-1 bg-brand-500 text-white rounded text-xs hover:bg-brand-600 disabled:opacity-50">
+            Přidat
+          </button>
+          <button type="button" onClick={() => { setShowAdd(false); setSelected(''); }}
+            className="px-3 py-1 text-xs text-ink-500 hover:text-ink-700">Zrušit</button>
+        </div>
+      )}
+      {err && <div className="mt-2 text-xs text-red-600">{err}</div>}
+      <div className="mt-2 text-[11px] text-ink-400">
+        PM Nápadníku sleduje, vyhodnocuje a reportuje. Vidí Report/Dashboard, exportuje CSV,
+        edituje garanty a doporučení, může posunout analýzu a vytvořit projekt.
+        Neschvaluje a nezamítá — to zůstává Managementu.
+      </div>
     </div>
   );
 }
