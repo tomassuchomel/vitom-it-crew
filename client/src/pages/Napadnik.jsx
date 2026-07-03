@@ -104,20 +104,26 @@ export default function Napadnik() {
           </a>
         }
       />
-      {isMgmt && (
-        <div className="px-6 pt-4 flex gap-2 border-b border-cream-200">
-          <button onClick={() => setTab('wishlist')}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
-              tab === 'wishlist' ? 'border-brand-500 text-brand-600' : 'border-transparent text-ink-500 hover:text-ink-700'
-            }`}>💡 Wishlist</button>
+      <div className="px-6 pt-4 flex gap-2 border-b border-cream-200 overflow-x-auto">
+        <button onClick={() => setTab('wishlist')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
+            tab === 'wishlist' ? 'border-brand-500 text-brand-600' : 'border-transparent text-ink-500 hover:text-ink-700'
+          }`}>💡 Wishlist</button>
+        <button onClick={() => setTab('dashboard')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
+            tab === 'dashboard' ? 'border-brand-500 text-brand-600' : 'border-transparent text-ink-500 hover:text-ink-700'
+          }`}>📈 Dashboard</button>
+        {isMgmt && (
           <button onClick={() => setTab('report')}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
               tab === 'report' ? 'border-brand-500 text-brand-600' : 'border-transparent text-ink-500 hover:text-ink-700'
             }`}>📊 Report</button>
-        </div>
-      )}
+        )}
+      </div>
       {tab === 'report' ? (
         <ReportPanel />
+      ) : tab === 'dashboard' ? (
+        <DashboardPanel />
       ) : (
       <div className="p-6 space-y-4">
         {/* Filtry */}
@@ -712,6 +718,126 @@ function Kpi({ label, value, color }) {
       <div className="text-xs text-ink-500">{label}</div>
     </div>
   );
+}
+
+// Dashboard grafy — SVG bez závislostí. Vidí každý (jsou to public agregace).
+function DashboardPanel() {
+  const [stats, setStats] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    ideasApi.stats().then(setStats).catch(e => setErr(e.response?.data?.error || e.message));
+  }, []);
+  if (err) return <div className="p-6 text-red-600 text-sm">{err}</div>;
+  if (!stats) return <div className="p-6 text-ink-500 text-sm">Načítám statistiky…</div>;
+
+  const stateEntries = Object.entries(stats.by_state || {})
+    .map(([k, v]) => ({ label: STATE_META[k]?.label || k, n: v, color: stateColor(k) }))
+    .sort((a, b) => b.n - a.n);
+  const total = stateEntries.reduce((s, x) => s + x.n, 0);
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="text-xs text-ink-500">Celkem nápadů: <strong className="text-ink-800">{total}</strong></div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <ChartCard title="Podle stavu">
+          <BarChart data={stateEntries} />
+        </ChartCard>
+
+        <ChartCard title="Přírůstek — posledních 6 měsíců">
+          <MonthlyBars data={stats.monthly_intake || []} />
+        </ChartCard>
+
+        <ChartCard title="Podle oddělení">
+          <BarChart data={(stats.by_department || []).map(r => ({ label: r.department, n: r.n, color: '#0c363e' }))} />
+        </ChartCard>
+
+        <ChartCard title="Podle kategorie">
+          <BarChart data={(stats.by_category || []).map(r => ({ label: r.category, n: r.n, color: '#e72b78' }))} />
+        </ChartCard>
+
+        <ChartCard title="Doporučení PM">
+          <BarChart data={(stats.by_pm_recommendation || []).map(r => ({
+            label: r.rec === '?' ? 'bez doporučení' : `${r.rec} – ${PM_REC_META[r.rec]?.label.split('–')[1]?.trim() || ''}`,
+            n: r.n,
+            color: r.rec === 'A' ? '#dc2626' : r.rec === 'B' ? '#059669' : r.rec === 'C' ? '#94a3b8' : r.rec === 'D' ? '#ea580c' : '#cbd5e1',
+          }))} />
+        </ChartCard>
+
+        <ChartCard title="Nejaktivnější navrhovatelé">
+          <BarChart data={(stats.top_proposers || []).map(r => ({ label: r.proposer_name, n: r.n, color: '#f59e0b' }))} />
+        </ChartCard>
+      </div>
+    </div>
+  );
+}
+
+function ChartCard({ title, children }) {
+  return (
+    <div className="bg-white border border-cream-200 rounded-lg p-4">
+      <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-3">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+// Vodorovný bar chart. Škáluje podle maxima.
+function BarChart({ data }) {
+  if (!data || data.length === 0) return <div className="text-ink-400 text-xs italic">Žádná data.</div>;
+  const max = Math.max(...data.map(d => d.n)) || 1;
+  return (
+    <div className="space-y-1.5">
+      {data.map((d, i) => (
+        <div key={i} className="flex items-center gap-2 text-xs">
+          <div className="w-32 truncate text-ink-600 shrink-0" title={d.label}>{d.label}</div>
+          <div className="flex-1 bg-cream-100 rounded h-4 relative overflow-hidden">
+            <div
+              className="h-full rounded transition-all"
+              style={{ width: `${(d.n / max) * 100}%`, background: d.color || '#0c363e' }}
+            />
+          </div>
+          <div className="w-8 text-right text-ink-700 tabular-nums shrink-0">{d.n}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Sloupcový graf pro měsíční přírůstek. SVG, jednoduchý.
+function MonthlyBars({ data }) {
+  if (!data || data.length === 0) return <div className="text-ink-400 text-xs italic">Zatím žádná data.</div>;
+  const max = Math.max(...data.map(d => d.n)) || 1;
+  const w = 300, h = 100, gap = 4;
+  const barW = (w - gap * (data.length - 1)) / data.length;
+  return (
+    <svg viewBox={`0 0 ${w} ${h + 22}`} className="w-full h-32">
+      {data.map((d, i) => {
+        const bh = (d.n / max) * h;
+        const x = i * (barW + gap);
+        return (
+          <g key={d.ym}>
+            <rect x={x} y={h - bh} width={barW} height={bh} fill="#0c363e" rx="2" />
+            <text x={x + barW / 2} y={h + 12} textAnchor="middle" className="fill-ink-500" style={{ fontSize: 10 }}>{d.ym.slice(5)}</text>
+            <text x={x + barW / 2} y={h - bh - 3} textAnchor="middle" className="fill-ink-700" style={{ fontSize: 10 }}>{d.n}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function stateColor(state) {
+  return ({
+    zadano:                    '#94a3b8',
+    ke_schvaleni:              '#3b82f6',
+    schvaleno_ceka_na_analyzu: '#6366f1',
+    ke_schvaleni_analyzy:      '#f97316',
+    schvalena_analyza:         '#10b981',
+    rozpracovano:              '#a855f7',
+    hotovo:                    '#059669',
+    zamitnuto:                 '#dc2626',
+    odlozeno:                  '#f59e0b',
+  })[state] || '#94a3b8';
 }
 
 function ReportList({ title, items, empty, showProject }) {

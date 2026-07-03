@@ -175,6 +175,7 @@ export const ideas = {
   createProject:(id, team_id, name) => api.post(`/ideas/${id}/create-project`, { team_id, name }).then(r => r.data),
   saveAnalysis: (id, data) => api.put(`/ideas/${id}/analysis`, data).then(r => r.data),
   report:       () => api.get('/ideas/_report').then(r => r.data),
+  stats:        () => api.get('/ideas/_stats').then(r => r.data),
   submitPublic: (payload) => api.post('/ideas/public', payload).then(r => r.data),
 };
 

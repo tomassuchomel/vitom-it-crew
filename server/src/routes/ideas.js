@@ -4,8 +4,39 @@
 import express from 'express';
 import { requireAuth } from '../auth.js';
 import { query } from '../db.js';
+import { sendMail, getNotificationPrefs, buildIdeaEmailHtml } from '../mailer.js';
 
 const router = express.Router();
+
+// Vrátí seznam Management uživatelů (admin + členové týmu se slug='management').
+// Fire-and-forget: chyba je warn, nevyhazuje.
+async function getManagementUsers() {
+  const r = await query(`
+    SELECT DISTINCT u.id, u.email, u.name
+    FROM users u
+    WHERE u.active = TRUE AND (
+      u.role = 'admin'
+      OR EXISTS (
+        SELECT 1 FROM team_members tm
+        JOIN teams t ON t.id = tm.team_id
+        WHERE tm.user_id = u.id AND t.slug = 'management'
+      )
+    )
+  `);
+  return r.rows;
+}
+
+// Odešle idea email s respektem k user prefs. Log chyba, nevyhazuje.
+async function sendIdeaMail(userId, email, prefKey, subject, title, body) {
+  try {
+    const prefs = await getNotificationPrefs(userId);
+    if (!prefs[prefKey]) return;
+    const html = buildIdeaEmailHtml({ title, body });
+    await sendMail({ to: email, subject, html });
+  } catch (err) {
+    console.warn('[mail/idea]', prefKey, err.message);
+  }
+}
 
 // Management role = admin globálně NEBO člen týmu se slug='management'.
 async function isManagement(userId, userRole) {
@@ -112,7 +143,26 @@ router.post('/public', async (req, res) => {
     VALUES ($1, 'created', 'zadano', $2)
   `, [r.rows[0].id, `Podal ${trim(b.proposer_name)} přes veřejný formulář.`]);
   res.status(201).json({ ok: true, id: r.rows[0].id });
+
+  // Notify Management (fire-and-forget)
+  const ideaId = r.rows[0].id;
+  const title = trim(b.title);
+  const dept = trim(b.department);
+  getManagementUsers().then(mgmt => {
+    mgmt.forEach(u => sendIdeaMail(
+      u.id, u.email, 'email_idea_new',
+      `VITOM Nápadník: nový nápad — ${title}`,
+      `💡 Nový nápad k posouzení`,
+      `<p><strong>${escapeMail(trim(b.proposer_name))}</strong> podal nápad:</p>
+       <p style="background:#f8f5f0;padding:10px;border-radius:6px;"><strong>${escapeMail(title)}</strong><br><span style="color:#5b7177;font-size:12px;">${escapeMail(dept)}</span></p>
+       <p style="color:#5b7177;font-size:13px;">Otevři Nápadník pro schválení nebo přiřazení garanta.</p>`
+    ));
+  }).catch(err => console.warn('[mail/idea] mgmt lookup', err.message));
 });
+
+function escapeMail(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 // SELECT s garantem + linked project — společný pro list i detail.
 const SELECT_FULL = `
@@ -160,6 +210,11 @@ router.get('/:id', requireAuth, async (req, res) => {
 router.patch('/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const b = req.body || {};
+  // Zjisti current stav (kvůli garant-change notifikaci)
+  const prevR = await query(`SELECT garant_id, title FROM ideas WHERE id = $1`, [id]);
+  const prev = prevR.rows[0];
+  if (!prev) return res.status(404).json({ error: 'not_found' });
+
   const sets = [];
   const params = [];
   const push = (col, val) => { params.push(val); sets.push(`${col} = $${params.length}`); };
@@ -182,6 +237,24 @@ router.patch('/:id', requireAuth, async (req, res) => {
 
   const r = await query(`${SELECT_FULL} WHERE i.id = $1`, [id]);
   res.json({ idea: r.rows[0] });
+
+  // Notify newly assigned garant (jen když se opravdu změnil a není to self-assign)
+  const newGarantId = 'garant_id' in b ? (b.garant_id ? Number(b.garant_id) : null) : prev.garant_id;
+  if (newGarantId && newGarantId !== prev.garant_id && newGarantId !== req.user.id) {
+    query(`SELECT id, email, name FROM users WHERE id = $1 AND active = TRUE`, [newGarantId])
+      .then(u => {
+        const g = u.rows[0];
+        if (!g) return;
+        sendIdeaMail(
+          g.id, g.email, 'email_idea_assigned_garant',
+          `VITOM Nápadník: přidělen ti nápad — ${prev.title}`,
+          `👤 Byl(a) jsi přiřazen(a) jako garant`,
+          `<p>Nápad: <strong>${escapeMail(prev.title)}</strong></p>
+           <p style="color:#5b7177;font-size:13px;">Otevři si nápad a pusť ho ke schválení nebo naplánuj analýzu.</p>`
+        );
+      })
+      .catch(err => console.warn('[mail/idea] garant lookup', err.message));
+  }
 });
 
 // Vrátí povolené přechody pro nápad + kdo je smí provést (per current user).
@@ -255,6 +328,30 @@ router.post('/:id/state', requireAuth, async (req, res) => {
 
   const out = await query(`${SELECT_FULL} WHERE i.id = $1`, [id]);
   res.json({ idea: out.rows[0] });
+
+  // Notify proposera když je nápad definitivně rozhodnut (schválen / zamítnut / odložen).
+  // Interní přechody (poslat ke schválení, čeká na analýzu) neposílají.
+  const notifyStates = ['schvalena_analyza', 'zamitnuto', 'odlozeno'];
+  if (notifyStates.includes(toState) && idea.proposer_email) {
+    const label = toState === 'schvalena_analyza' ? 'schválen a jde do realizace 🎉'
+                : toState === 'zamitnuto'         ? 'zamítnut'
+                : 'odložen';
+    const proposerName = idea.proposer_name || '';
+    // Proposer je externí — nemá user_id → prefs nejde kontrolovat.
+    // Pošleme přímo (public forma), text lidský.
+    const html = buildIdeaEmailHtml({
+      title: `Tvůj nápad byl ${label}`,
+      body:  `<p>Ahoj ${escapeMail(proposerName)},</p>
+              <p>tvůj nápad <strong>${escapeMail(idea.title)}</strong> byl <strong>${label}</strong>.</p>
+              ${comment ? `<p style="background:#f8f5f0;padding:10px;border-radius:6px;font-size:13px;"><strong>Komentář:</strong><br>${escapeMail(comment)}</p>` : ''}
+              <p style="color:#5b7177;font-size:12px;">Díky za podnět!</p>`,
+    });
+    sendMail({
+      to: idea.proposer_email,
+      subject: `VITOM Nápadník: tvůj nápad byl ${label} — ${idea.title}`,
+      html,
+    }).catch(err => console.warn('[mail/idea] proposer', err.message));
+  }
 });
 
 // Speciální akce: Vytvořit reálný projekt z nápadu.
@@ -391,6 +488,39 @@ router.get('/_report', requireAuth, async (req, res) => {
     waiting_analysis: waitAnalysis.rows,
     active: active.rows,
     savings: savings.rows[0],
+  });
+});
+
+// GET /ideas/_stats — data pro Dashboard grafy. Public pro každého (jsou to
+// agregace bez PII).
+router.get('/_stats', requireAuth, async (req, res) => {
+  const [byState, byDept, byCat, monthly, topProposers, byRec] = await Promise.all([
+    query(`SELECT state, COUNT(*)::int AS n FROM ideas GROUP BY state`),
+    query(`SELECT department, COUNT(*)::int AS n FROM ideas GROUP BY department ORDER BY n DESC`),
+    query(`SELECT category, COUNT(*)::int AS n FROM ideas GROUP BY category ORDER BY n DESC`),
+    query(`
+      SELECT TO_CHAR(date_trunc('month', created_at), 'YYYY-MM') AS ym,
+             COUNT(*)::int AS n
+      FROM ideas
+      WHERE created_at >= NOW() - INTERVAL '6 months'
+      GROUP BY ym ORDER BY ym ASC
+    `),
+    query(`
+      SELECT proposer_name, COUNT(*)::int AS n
+      FROM ideas
+      GROUP BY proposer_name
+      ORDER BY n DESC, proposer_name ASC
+      LIMIT 5
+    `),
+    query(`SELECT COALESCE(pm_recommendation, '?') AS rec, COUNT(*)::int AS n FROM ideas GROUP BY rec ORDER BY rec`),
+  ]);
+  res.json({
+    by_state:      Object.fromEntries(byState.rows.map(r => [r.state, r.n])),
+    by_department: byDept.rows,
+    by_category:   byCat.rows,
+    monthly_intake: monthly.rows,
+    top_proposers: topProposers.rows,
+    by_pm_recommendation: byRec.rows,
   });
 });
 

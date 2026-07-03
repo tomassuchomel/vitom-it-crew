@@ -11,6 +11,9 @@ const EVENTS = [
   { key: 'email_task_returned', label: 'Úkol vrácen k opravě', emoji: '🔄', hint: 'Manažer mi vrátí úkol k přepracování.' },
   { key: 'email_task_approved', label: 'Úkol schválen',        emoji: '🎉', hint: 'Manažer schválí úkol, který jsem dokončil.' },
   { key: 'email_new_question',  label: 'Nový dotaz',           emoji: '💬', hint: 'Někdo se mě zeptá v dotazech.' },
+  { key: 'email_idea_new',              label: 'Nápadník: nový nápad',       emoji: '💡', hint: 'Někdo podal nový nápad (jen pro Management).' },
+  { key: 'email_idea_assigned_garant',  label: 'Nápadník: jsem garant',      emoji: '👤', hint: 'Byl(a) jsem přiřazen(a) jako garant nápadu.' },
+  { key: 'email_idea_approved',         label: 'Nápadník: rozhodnutí',       emoji: '📣', hint: 'Nápad byl schválen/zamítnut (týká se Management).' },
 ];
 
 // 0 = neděle ... 6 = sobota (JS Date.getDay convention).

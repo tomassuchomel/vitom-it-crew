@@ -129,48 +129,53 @@ export async function sendMail({ to, subject, html, text }) {
 }
 
 // Načti preference uživatele. Pokud řádek neexistuje, vrátíme všechny TRUE.
-// Defenzivně: 42703 (sloupec email_daily_summary chybí) → fallback bez něj.
+// Defenzivně: kdyby některé sloupce ještě neexistovaly (migrace neběžela),
+// vracíme jen defaults — nesnažíme se skládat parciální řádek.
+const DEFAULT_PREFS = {
+  email_task_assigned:         true,
+  email_task_returned:         true,
+  email_task_approved:         true,
+  email_new_question:          true,
+  email_daily_summary:         true,
+  daily_summary_days:          [1,2,3,4,5],
+  daily_summary_time:          '08:05',
+  email_idea_new:              true,
+  email_idea_approved:         true,
+  email_idea_assigned_garant:  true,
+};
+
 export async function getNotificationPrefs(userId) {
-  // Defenzivně: schedule sloupce mohly být přidané pozdější migrací.
   try {
     const r = await query(
       `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question,
-              email_daily_summary, daily_summary_days, daily_summary_time
+              email_daily_summary, daily_summary_days, daily_summary_time,
+              email_idea_new, email_idea_approved, email_idea_assigned_garant
        FROM user_notification_prefs WHERE user_id = $1`,
       [userId]
     );
-    if (r.rows[0]) return r.rows[0];
+    if (r.rows[0]) return { ...DEFAULT_PREFS, ...r.rows[0] };
   } catch (err) {
-    if (err.code === '42703') {
-      try {
-        const r = await query(
-          `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question,
-                  email_daily_summary
-           FROM user_notification_prefs WHERE user_id = $1`,
-          [userId]
-        );
-        if (r.rows[0]) return { ...r.rows[0], daily_summary_days: [1,2,3,4,5], daily_summary_time: '08:05' };
-      } catch (err2) {
-        if (err2.code === '42703') {
-          const r = await query(
-            `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question
-             FROM user_notification_prefs WHERE user_id = $1`,
-            [userId]
-          );
-          if (r.rows[0]) return { ...r.rows[0], email_daily_summary: true, daily_summary_days: [1,2,3,4,5], daily_summary_time: '08:05' };
-        } else { throw err2; }
-      }
-    } else { throw err; }
+    if (err.code !== '42703') throw err;
+    // Migrace nedoběhla — zkus starší tvar (bez idea polí).
+    try {
+      const r = await query(
+        `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question,
+                email_daily_summary, daily_summary_days, daily_summary_time
+         FROM user_notification_prefs WHERE user_id = $1`,
+        [userId]
+      );
+      if (r.rows[0]) return { ...DEFAULT_PREFS, ...r.rows[0] };
+    } catch (err2) {
+      if (err2.code !== '42703') throw err2;
+      const r = await query(
+        `SELECT email_task_assigned, email_task_returned, email_task_approved, email_new_question
+         FROM user_notification_prefs WHERE user_id = $1`,
+        [userId]
+      );
+      if (r.rows[0]) return { ...DEFAULT_PREFS, ...r.rows[0] };
+    }
   }
-  return {
-    email_task_assigned: true,
-    email_task_returned: true,
-    email_task_approved: true,
-    email_new_question:  true,
-    email_daily_summary: true,
-    daily_summary_days:  [1,2,3,4,5],
-    daily_summary_time:  '08:05',
-  };
+  return DEFAULT_PREFS;
 }
 
 // HTML šablona pro jednorázové task-related emaily. Link otevře appku
@@ -195,4 +200,24 @@ export function buildTaskEmailHtml({ title, body, taskId, ctaLabel = 'Otevřít 
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// HTML šablona pro emaily z Nápadníku. Odkaz jde do interní stránky /napadnik
+// (proposer je externí, ale link mu dá kontext — pokud není přihlášen, vidí login).
+export function buildIdeaEmailHtml({ title, body, ctaLabel = 'Otevřít Nápadník' }) {
+  const { base } = cfg();
+  const url = `${base}/napadnik`;
+  return `<!DOCTYPE html>
+<html><body style="font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; background: #eee9e4; padding: 24px; color: #1f3a40;">
+  <div style="max-width: 560px; margin: 0 auto; background: white; border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+    <div style="font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #e72b78; font-weight: bold;">VITOM Nápadník</div>
+    <h2 style="margin: 12px 0 8px; color: #0c363e; font-size: 20px;">${escapeHtml(title)}</h2>
+    <div style="font-size: 14px; line-height: 1.5; color: #1f3a40; margin-bottom: 20px;">${body}</div>
+    <a href="${url}" style="display: inline-block; background: #0c363e; color: white; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px;">${escapeHtml(ctaLabel)} →</a>
+    <div style="margin-top: 24px; padding-top: 12px; border-top: 1px solid #e2dcd3; font-size: 11px; color: #8a9b9f;">
+      Odkaz: <a href="${url}" style="color: #0c363e;">${url}</a><br />
+      Tyto notifikace si můžeš vypnout v profilu → Notifikace e‑mailem.
+    </div>
+  </div>
+</body></html>`;
 }

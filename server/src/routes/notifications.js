@@ -19,6 +19,7 @@ router.put('/me', requireAuth, async (req, res) => {
   const {
     email_task_assigned, email_task_returned, email_task_approved, email_new_question,
     email_daily_summary, daily_summary_days, daily_summary_time,
+    email_idea_new, email_idea_approved, email_idea_assigned_garant,
   } = req.body || {};
 
   // Validace času (HH:MM, 0-23:0-59). Fallback na 08:05.
@@ -30,7 +31,29 @@ router.put('/me', requireAuth, async (req, res) => {
     ? [...new Set(daily_summary_days.map(n => Number(n)).filter(n => Number.isInteger(n) && n >= 0 && n <= 6))].sort()
     : [1,2,3,4,5];
 
-  // Try with all fields; fallback per sloupec, který v DB ještě není.
+  // Try s idea sloupci; fallback bez nich (migrace F4 nedoběhla); pak bez schedule.
+  const upsertWithIdeas = () => query(`
+    INSERT INTO user_notification_prefs
+      (user_id, email_task_assigned, email_task_returned, email_task_approved, email_new_question,
+       email_daily_summary, daily_summary_days, daily_summary_time,
+       email_idea_new, email_idea_approved, email_idea_assigned_garant, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, NOW())
+    ON CONFLICT (user_id) DO UPDATE
+      SET email_task_assigned = EXCLUDED.email_task_assigned,
+          email_task_returned = EXCLUDED.email_task_returned,
+          email_task_approved = EXCLUDED.email_task_approved,
+          email_new_question  = EXCLUDED.email_new_question,
+          email_daily_summary = EXCLUDED.email_daily_summary,
+          daily_summary_days  = EXCLUDED.daily_summary_days,
+          daily_summary_time  = EXCLUDED.daily_summary_time,
+          email_idea_new              = EXCLUDED.email_idea_new,
+          email_idea_approved         = EXCLUDED.email_idea_approved,
+          email_idea_assigned_garant  = EXCLUDED.email_idea_assigned_garant,
+          updated_at = NOW()
+  `, [req.user.id, !!email_task_assigned, !!email_task_returned, !!email_task_approved, !!email_new_question,
+      !!email_daily_summary, JSON.stringify(daysArr), timeStr,
+      email_idea_new !== false, email_idea_approved !== false, email_idea_assigned_garant !== false]);
+
   const upsertFull = () => query(`
     INSERT INTO user_notification_prefs
       (user_id, email_task_assigned, email_task_returned, email_task_approved, email_new_question,
@@ -61,12 +84,17 @@ router.put('/me', requireAuth, async (req, res) => {
   `, [req.user.id, !!email_task_assigned, !!email_task_returned, !!email_task_approved, !!email_new_question]);
 
   try {
-    await upsertFull();
+    await upsertWithIdeas();
   } catch (err) {
-    if (err.code === '42703') {
+    if (err.code !== '42703') throw err;
+    console.warn('[notifications] idea columns missing, trying without');
+    try {
+      await upsertFull();
+    } catch (err2) {
+      if (err2.code !== '42703') throw err2;
       console.warn('[notifications] schedule columns missing, saving basic prefs only');
       await upsertBasic();
-    } else { throw err; }
+    }
   }
 
   const prefs = await getNotificationPrefs(req.user.id);
