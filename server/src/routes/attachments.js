@@ -31,16 +31,21 @@ const __dirname = path.dirname(__filename);
 const uploadsDir = path.join(__dirname, '..', '..', 'data', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-const ALLOWED = /^(image|video)\//;
+// Povolené přípony/mime: obrázky, videa + text (.md, .txt). Kontrolujeme
+// mime i extension — .md prohlížeč často posílá jako application/octet-stream
+// nebo text/plain, extension je spolehlivější signál.
+const ALLOWED_MIME = /^(image|video)\/|^text\/(plain|markdown|x-markdown)$|^application\/octet-stream$/;
+const ALLOWED_EXT  = new Set(['.md', '.txt', '.markdown']);
 const MAX_SIZE = 25 * 1024 * 1024; // 25 MB
 
-// Memory storage – multer drží soubor v RAM jako Buffer, my ho rovnou
-// vložíme do DB. Při 25 MB max per file a malém týmu je RAM použití OK.
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_SIZE },
   fileFilter: (req, file, cb) => {
-    if (!ALLOWED.test(file.mimetype)) return cb(new Error('only_images_videos'));
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const mimeOk = ALLOWED_MIME.test(file.mimetype);
+    const extOk  = /^(image|video)\//.test(file.mimetype) || ALLOWED_EXT.has(ext);
+    if (!(mimeOk && extOk)) return cb(new Error('unsupported_type'));
     cb(null, true);
   },
 });
@@ -71,11 +76,13 @@ router.post('/by-task/:taskId', requireAuth, upload.array('files', 10), async (r
 
   const created = [];
   for (const f of req.files) {
+    const ext = path.extname(f.originalname || '').toLowerCase();
     const kind = f.mimetype.startsWith('image/') ? 'image'
-               : f.mimetype.startsWith('video/') ? 'video' : 'other';
+               : f.mimetype.startsWith('video/') ? 'video'
+               : (ext === '.md' || ext === '.markdown' || ext === '.txt') ? 'text'
+               : 'other';
     // Pseudo-filename pro DB (kompatibilita s legacy schématem)
-    const ext = path.extname(f.originalname).slice(0, 10);
-    const synthFilename = `${crypto.randomBytes(12).toString('hex')}${ext}`;
+    const synthFilename = `${crypto.randomBytes(12).toString('hex')}${ext.slice(0, 10)}`;
     const r = await query(`
       INSERT INTO attachments (task_id, uploader_id, filename, original_name, mime_type, size, kind, data)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

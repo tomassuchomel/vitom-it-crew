@@ -8,7 +8,7 @@ import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import TaskCompletionDialog from '../components/TaskCompletionDialog.jsx';
 import TimeTriad from '../components/TimeTriad.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge, STATUS_META } from '../components/TaskStatus.jsx';
-import { tasks as tasksApi, projects as projectsApi, users as usersApi } from '../api.js';
+import { tasks as tasksApi, projects as projectsApi, users as usersApi, attachments as attachmentsApi } from '../api.js';
 import { useAuth, can } from '../auth.jsx';
 import { useTeams } from '../teams.jsx';
 import Modal from '../components/Modal.jsx';
@@ -223,6 +223,8 @@ function NewTaskModal({ currentUser, onClose, onCreated }) {
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  // Přílohy k novému úkolu — nahrají se hned po create.
+  const [files, setFiles] = useState([]);
 
   // Načti projekty — cross-team pro manažery+, current team pro ostatní.
   useEffect(() => {
@@ -267,7 +269,7 @@ function NewTaskModal({ currentUser, onClose, onCreated }) {
     if (!form.assignee_id) { setErr('Vyber, komu úkol patří.'); return; }
     setBusy(true);
     try {
-      await tasksApi.create({
+      const created = await tasksApi.create({
         project_id: Number(form.project_id),
         title: form.title.trim(),
         assignee_id: Number(form.assignee_id),
@@ -275,6 +277,18 @@ function NewTaskModal({ currentUser, onClose, onCreated }) {
         due_date: form.due_date || null,
         estimated_h: form.estimated_h ? Number(form.estimated_h) : null,
       });
+      // Přílohy: uploadneme až po vytvoření (potřebujeme task.id).
+      // Chyba uploadu neblokuje úspěch úkolu — jen upozorníme.
+      const taskId = created?.task?.id || created?.id;
+      if (files.length > 0 && taskId) {
+        try {
+          await attachmentsApi.upload(taskId, files);
+        } catch (upErr) {
+          setErr(`Úkol vytvořen, ale přílohy se nenahrály: ${upErr.response?.data?.error || upErr.message}`);
+          setBusy(false);
+          return; // nechme modal otevřený, ať to user vidí
+        }
+      }
       onCreated();
     } catch (e2) {
       setErr(e2.response?.data?.message || e2.response?.data?.error || 'Vytvoření selhalo.');
@@ -349,6 +363,22 @@ function NewTaskModal({ currentUser, onClose, onCreated }) {
               className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5" />
           </label>
         </div>
+        <label className="block">
+          <span className="text-xs font-medium text-ink-600">
+            Přílohy <span className="text-ink-400">(obrázky, videa, .md, .txt — max 10, à 25 MB)</span>
+          </span>
+          <input type="file" multiple
+            accept="image/*,video/*,.md,.markdown,.txt,text/plain,text/markdown"
+            onChange={e => setFiles(Array.from(e.target.files || []))}
+            className="mt-1 block w-full text-xs file:mr-2 file:px-2 file:py-1 file:border-0 file:rounded file:bg-cream-200 file:text-ink-700 file:cursor-pointer" />
+          {files.length > 0 && (
+            <ul className="mt-1 text-xs text-ink-500 space-y-0.5">
+              {files.map((f, i) => (
+                <li key={i}>• {f.name} <span className="text-ink-400">({Math.round(f.size / 1024)} kB)</span></li>
+              ))}
+            </ul>
+          )}
+        </label>
         {err && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{err}</div>}
       </form>
     </Modal>

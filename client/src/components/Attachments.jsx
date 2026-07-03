@@ -61,7 +61,7 @@ export default function Attachments({ taskId, canEdit = true, compact = false })
           <input
             ref={fileRef}
             type="file"
-            accept="image/*,video/*"
+            accept="image/*,video/*,.md,.markdown,.txt,text/plain,text/markdown"
             multiple
             className="hidden"
             onChange={onPick}
