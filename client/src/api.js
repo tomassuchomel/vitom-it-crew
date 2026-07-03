@@ -166,12 +166,13 @@ export const notifications = {
 // Nápadník — sběr, řízení a schvalování interních návrhů.
 // Public endpoint (bez auth) je pro veřejný formulář.
 export const ideas = {
-  list:      () => api.get('/ideas').then(r => r.data),
-  get:       (id) => api.get(`/ideas/${id}`).then(r => r.data),
-  patch:     (id, data) => api.patch(`/ideas/${id}`, data).then(r => r.data),
-  meta:      () => api.get('/ideas/_meta/enums').then(r => r.data),
-  // Public — vytvoří axios request bez authorization header (jen cookie), server
-  // sám nemá requireAuth. Používá standardní baseURL.
+  list:         () => api.get('/ideas').then(r => r.data),
+  get:          (id) => api.get(`/ideas/${id}`).then(r => r.data),
+  patch:        (id, data) => api.patch(`/ideas/${id}`, data).then(r => r.data),
+  meta:         () => api.get('/ideas/_meta/enums').then(r => r.data),
+  transitions:  (id) => api.get(`/ideas/${id}/transitions`).then(r => r.data),
+  transition:   (id, to_state, comment) => api.post(`/ideas/${id}/state`, { to_state, comment }).then(r => r.data),
+  createProject:(id, team_id, name) => api.post(`/ideas/${id}/create-project`, { team_id, name }).then(r => r.data),
   submitPublic: (payload) => api.post('/ideas/public', payload).then(r => r.data),
 };
 

@@ -3,7 +3,8 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
-import { ideas as ideasApi } from '../api.js';
+import { ideas as ideasApi, users as usersApi } from '../api.js';
+import { useTeams } from '../teams.jsx';
 
 const STATE_META = {
   zadano:                    { label: 'zadáno',                    cls: 'bg-slate-100 text-slate-700 border-slate-300' },
@@ -166,7 +167,7 @@ export default function Napadnik() {
                           {detailLoading ? (
                             <div className="text-ink-500 text-sm">Načítám detail…</div>
                           ) : detail ? (
-                            <IdeaDetail data={detail} onChanged={() => { load(); toggleExpand(i.id); }} />
+                            <IdeaDetail data={detail} onChanged={load} />
                           ) : (
                             <div className="text-ink-400 text-sm">Detail se nenačetl.</div>
                           )}
@@ -184,11 +185,54 @@ export default function Napadnik() {
   );
 }
 
-// Placeholder pro rozbalený detail — v F2 přidáme workflow tlačítka.
-function IdeaDetail({ data }) {
-  const { idea, events } = data;
+// Detail nápadu s workflow tlačítky, editací PM polí a historií.
+// Fáze 2: přechody stavu + komentáře + „Vytvořit projekt".
+function IdeaDetail({ data, onChanged }) {
+  const [state, setState] = useState(data);
+  const [transitions, setTransitions] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const { idea, events } = state;
+
+  // Načti transitions + users (cross-team pro garanta)
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      ideasApi.transitions(idea.id).catch(() => ({ transitions: [], isManagement: false, isGarant: false })),
+      usersApi.listAcrossMyTeams().catch(() => usersApi.list().catch(() => ({ users: [] }))),
+    ]).then(([tr, u]) => {
+      if (cancelled) return;
+      setTransitions(tr);
+      setUsers(u.users || u || []);
+    });
+    return () => { cancelled = true; };
+  }, [idea.id]);
+
+  // Reload detail po změně (state / edit / create-project)
+  const reload = async () => {
+    const d = await ideasApi.get(idea.id);
+    setState(d);
+    const tr = await ideasApi.transitions(idea.id).catch(() => ({ transitions: [] }));
+    setTransitions(tr);
+    onChanged?.(); // refresh seznamu (nezavírá rozbalený detail)
+  };
+
+  // Rychlá editace: garant / priorita / doporučení PM / poznámka PM
+  const patchField = async (field, value) => {
+    setSaving(true); setErr(null);
+    try {
+      await ideasApi.patch(idea.id, { [field]: value });
+      await reload();
+    } catch (e) {
+      setErr(e.response?.data?.message || e.message);
+    } finally { setSaving(false); }
+  };
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+      {/* Levý sloupec — kontakt + obsah */}
       <div className="bg-white border border-cream-200 rounded-lg p-3">
         <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">Kontakt & obsah</div>
         <div className="space-y-1 text-ink-700">
@@ -201,33 +245,242 @@ function IdeaDetail({ data }) {
           {idea.external_link && <div className="pt-2">
             <a href={idea.external_link} target="_blank" rel="noreferrer" className="text-brand-500 hover:underline">🔗 {idea.external_link}</a>
           </div>}
+          {idea.linked_project_id && <div className="pt-2 text-emerald-700">
+            🚀 <strong>Projekt:</strong> {idea.linked_project_name}
+            {idea.linked_project_team_name && <span className="text-ink-500"> ({idea.linked_project_team_name})</span>}
+          </div>}
         </div>
       </div>
 
-      <div className="bg-white border border-cream-200 rounded-lg p-3">
-        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">Workflow (Fáze 2)</div>
-        <div className="text-xs text-ink-500 italic">
-          Tlačítka pro posun stavu, editace garanta / doporučení PM
-          a komentáře přijdou ve Fázi 2.
+      {/* Střední sloupec — editace + workflow */}
+      <div className="bg-white border border-cream-200 rounded-lg p-3 space-y-3">
+        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide">Řízení nápadu</div>
+
+        {/* Editace: garant / priorita / doporučení PM */}
+        <div className="space-y-2">
+          <label className="block text-xs">
+            <span className="text-ink-500">Garant (PM)</span>
+            <select
+              value={idea.garant_id || ''}
+              onChange={e => patchField('garant_id', e.target.value ? Number(e.target.value) : null)}
+              disabled={saving}
+              className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-sm"
+            >
+              <option value="">— nepřiřazen —</option>
+              {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </label>
+          <label className="block text-xs">
+            <span className="text-ink-500">Priorita</span>
+            <select
+              value={idea.priority || 'normal'}
+              onChange={e => patchField('priority', e.target.value)}
+              disabled={saving}
+              className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-sm"
+            >
+              <option value="low">Nízká</option>
+              <option value="normal">Normální</option>
+              <option value="high">Vysoká</option>
+              <option value="urgent">Urgentní</option>
+            </select>
+          </label>
+          <label className="block text-xs">
+            <span className="text-ink-500">Doporučení PM</span>
+            <select
+              value={idea.pm_recommendation || ''}
+              onChange={e => patchField('pm_recommendation', e.target.value || null)}
+              disabled={saving}
+              className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-sm"
+            >
+              <option value="">— žádné —</option>
+              <option value="A">A – řešit ihned</option>
+              <option value="B">B – plánovat</option>
+              <option value="C">C – sledovat / odložit</option>
+              <option value="D">D – čeká na vstupy</option>
+            </select>
+          </label>
+          <PmNoteField initial={idea.pm_note || ''} onSave={v => patchField('pm_note', v)} disabled={saving} />
+        </div>
+
+        {/* Workflow — akční tlačítka */}
+        <div className="border-t border-cream-200 pt-3">
+          <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">Akce</div>
+          {!transitions ? (
+            <div className="text-ink-400 text-xs">Načítám akce…</div>
+          ) : transitions.transitions.length === 0 ? (
+            <div className="text-ink-400 text-xs italic">Žádné další akce (stav {idea.state}).</div>
+          ) : (
+            <div className="space-y-1.5">
+              {transitions.transitions.map(t => (
+                <TransitionButton
+                  key={t.to + t.action}
+                  transition={t}
+                  ideaId={idea.id}
+                  onDone={reload}
+                />
+              ))}
+            </div>
+          )}
+          {err && <div className="mt-2 text-xs text-red-600">{err}</div>}
         </div>
       </div>
 
+      {/* Pravý sloupec — historie */}
       <div className="bg-white border border-cream-200 rounded-lg p-3">
         <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">Historie ({events.length})</div>
         <ul className="space-y-1.5 text-xs">
-          {events.slice(0, 8).map(ev => (
+          {events.map(ev => (
             <li key={ev.id} className="border-l-2 border-cream-300 pl-2">
               <div className="text-ink-700">
-                {ev.action}{ev.to_state ? ` → ${ev.to_state}` : ''}
+                {ev.action === 'state_change'
+                  ? <>Přechod: <em>{ev.from_state}</em> → <strong>{ev.to_state}</strong></>
+                  : ev.action === 'create_project'
+                    ? <>🚀 Vytvořen projekt</>
+                    : ev.action === 'edit'
+                      ? <>Úprava polí</>
+                      : ev.action}
               </div>
               <div className="text-ink-400 text-[10px]">
                 {fmtDate(ev.created_at)}{ev.user_name ? ` · ${ev.user_name}` : ''}
               </div>
-              {ev.comment && <div className="text-ink-500 mt-0.5">{ev.comment.slice(0, 120)}</div>}
+              {ev.comment && ev.action !== 'edit' && (
+                <div className="text-ink-600 mt-0.5 whitespace-pre-wrap">{ev.comment}</div>
+              )}
             </li>
           ))}
         </ul>
       </div>
+    </div>
+  );
+}
+
+// Poznámka PM: textarea s Uložit tlačítkem (patch až po klik, ne po každém keystroke).
+function PmNoteField({ initial, onSave, disabled }) {
+  const [val, setVal] = useState(initial);
+  const dirty = val !== initial;
+  return (
+    <label className="block text-xs">
+      <span className="text-ink-500">Poznámka PM</span>
+      <textarea
+        value={val}
+        onChange={e => setVal(e.target.value)}
+        disabled={disabled}
+        rows={2}
+        className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-sm resize-y"
+      />
+      {dirty && (
+        <button
+          type="button"
+          onClick={() => onSave(val.trim() || null)}
+          disabled={disabled}
+          className="mt-1 px-2 py-0.5 bg-brand-500 text-white text-xs rounded hover:bg-brand-600 disabled:opacity-50"
+        >Uložit poznámku</button>
+      )}
+    </label>
+  );
+}
+
+// Jedno workflow tlačítko. Klik → inline panel:
+//   - „create_project": input pro název + team dropdown
+//   - requireComment: textarea (Management akce)
+//   - jinak přímo Potvrdit
+function TransitionButton({ transition, ideaId, onDone }) {
+  const { teams } = useTeams();
+  const [open, setOpen] = useState(false);
+  const [comment, setComment] = useState('');
+  const [projName, setProjName] = useState('');
+  const [projTeamId, setProjTeamId] = useState(teams?.[0]?.id || '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const canClick = transition.allowed;
+  const isCreateProject = transition.special === 'create_project';
+  const needsInput = transition.requireComment || isCreateProject;
+
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try {
+      if (isCreateProject) {
+        if (!projName.trim()) { setErr('Zadej název projektu.'); return; }
+        if (!projTeamId) { setErr('Vyber tým.'); return; }
+        await ideasApi.createProject(ideaId, Number(projTeamId), projName.trim());
+      } else {
+        await ideasApi.transition(ideaId, transition.to, comment.trim() || null);
+      }
+      setOpen(false); setComment(''); setProjName('');
+      await onDone();
+    } catch (e) {
+      setErr(e.response?.data?.message || e.response?.data?.error || e.message);
+    } finally { setBusy(false); }
+  };
+
+  const btnColor = transition.to === 'zamitnuto'
+    ? 'bg-red-500 hover:bg-red-600 text-white'
+    : transition.to === 'schvalena_analyza' || transition.to === 'schvaleno_ceka_na_analyzu' || isCreateProject
+      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+      : 'bg-brand-500 hover:bg-brand-600 text-white';
+
+  if (!canClick) return null;
+
+  return (
+    <div>
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => needsInput ? setOpen(true) : submit()}
+          disabled={busy}
+          className={`w-full text-left px-3 py-1.5 rounded text-xs ${btnColor} disabled:opacity-50`}
+        >
+          {busy ? 'Provádím…' : `→ ${transition.action}`}
+        </button>
+      ) : (
+        <div className="border border-cream-300 rounded p-2 bg-cream-50 space-y-2">
+          <div className="text-xs font-semibold text-ink-700">{transition.action}</div>
+          {isCreateProject ? (
+            <>
+              <input
+                value={projName}
+                onChange={e => setProjName(e.target.value)}
+                placeholder="Název projektu"
+                className="w-full border border-ink-300 rounded px-2 py-1 text-xs"
+                autoFocus
+              />
+              <select
+                value={projTeamId}
+                onChange={e => setProjTeamId(e.target.value)}
+                className="w-full border border-ink-300 rounded px-2 py-1 text-xs"
+              >
+                <option value="">— vyber tým —</option>
+                {teams?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </>
+          ) : (
+            <textarea
+              value={comment}
+              onChange={e => setComment(e.target.value)}
+              rows={2}
+              placeholder={transition.requireComment ? 'Komentář (povinný)' : 'Komentář (volitelný)'}
+              className="w-full border border-ink-300 rounded px-2 py-1 text-xs resize-y"
+              autoFocus
+            />
+          )}
+          {err && <div className="text-xs text-red-600">{err}</div>}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={submit}
+              disabled={busy}
+              className={`flex-1 px-3 py-1.5 rounded text-xs ${btnColor} disabled:opacity-50`}
+            >{busy ? 'Provádím…' : 'Potvrdit'}</button>
+            <button
+              type="button"
+              onClick={() => { setOpen(false); setErr(null); }}
+              disabled={busy}
+              className="px-3 py-1.5 rounded text-xs bg-white border border-ink-300 text-ink-600 hover:bg-cream-100"
+            >Zrušit</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
