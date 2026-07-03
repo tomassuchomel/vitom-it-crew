@@ -57,9 +57,10 @@ export default function Napadnik() {
   const clientMgmtFallback = user?.role === 'admin' || (teams || []).some(t => t.slug === 'management');
   const isMgmt = perms?.is_management ?? clientMgmtFallback;
   const isIdeaPM = !!perms?.is_idea_pm;
-  // Report tab + Export CSV vidí Management i PM Nápadníku.
   const canManageIdea = isMgmt || isIdeaPM;
   const isAdmin = user?.role === 'admin';
+  // Přístup do Nápadníku vůbec — vidí ho jen Management + PM Nápadníku.
+  const hasAccess = canManageIdea;
 
   // silent=true refresh: neschovává tabulku (aby rozbalený detail
   // nezmizel a nezpůsobil re-mount, který resetuje jeho interní state).
@@ -98,6 +99,23 @@ export default function Napadnik() {
     }
     return out;
   }, [ideas, filter, search]);
+
+  // Před načtením perms nic neblikni; kdyby BE 403 → hasAccess=false.
+  if (perms === null) return <div className="p-8 text-ink-500">Načítám…</div>;
+  if (!hasAccess) {
+    return (
+      <div className="p-8">
+        <div className="max-w-lg bg-white border border-cream-200 rounded-xl p-6 text-center">
+          <div className="text-4xl mb-2">🔒</div>
+          <div className="text-lg font-semibold text-ink-800 mb-1">Nápadník je vyhrazený</div>
+          <div className="text-sm text-ink-500">
+            Přístup mají členové Managementu a PM Nápadníku. Pokud potřebuješ přístup,
+            řekni administrátorovi.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>

@@ -79,6 +79,17 @@ async function isIdeaPM(userId) {
   return r.rows.length > 0;
 }
 
+// Middleware: Nápadník smí vidět jen Management nebo PM Nápadníku. Ostatní
+// (např. běžný člen IT týmu) dostanou 403 — vč. přístupu k listu nápadů.
+async function requireIdeaAccess(req, res, next) {
+  const [mgr, pm] = await Promise.all([
+    isManagement(req.user.id, req.user.role),
+    isIdeaPM(req.user.id),
+  ]);
+  if (!mgr && !pm) return res.status(403).json({ error: 'forbidden', message: 'Nápadník je vyhrazený pro Management a PM Nápadníku.' });
+  next();
+}
+
 // Workflow graf — z jakého stavu jsou povolené jaké přechody + kdo je smí provést.
 // role: 'management' (jen Management), 'garant' (jen přiřazený garant),
 //       'garant_or_management' (obojí).
@@ -214,7 +225,7 @@ const SELECT_FULL = `
 `;
 
 // Auth endpoint: seznam všech nápadů (interní wishlist).
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', requireAuth, requireIdeaAccess, async (req, res) => {
   const r = await query(`${SELECT_FULL} ORDER BY i.created_at DESC`);
   res.json({ ideas: r.rows });
 });
@@ -223,12 +234,7 @@ router.get('/', requireAuth, async (req, res) => {
 // Vidí jen Management (admin nebo tým 'management').
 // POZOR: statické cesty (`_report`, `_stats`) musí být PŘED dynamic `/:id`,
 // jinak je Express zpracuje jako id="_report" a spadne to na Number(NaN).
-router.get('/_report', requireAuth, async (req, res) => {
-  const [mgr, pm] = await Promise.all([
-    isManagement(req.user.id, req.user.role),
-    isIdeaPM(req.user.id),
-  ]);
-  if (!mgr && !pm) return res.status(403).json({ error: 'forbidden' });
+router.get('/_report', requireAuth, requireIdeaAccess, async (req, res) => {
 
   const [byState, awaiting, waitAnalysis, active, savings] = await Promise.all([
     query(`SELECT state, COUNT(*)::int AS n FROM ideas GROUP BY state`),
@@ -255,7 +261,7 @@ router.get('/_report', requireAuth, async (req, res) => {
 });
 
 // GET /ideas/_stats — data pro Dashboard grafy.
-router.get('/_stats', requireAuth, async (req, res) => {
+router.get('/_stats', requireAuth, requireIdeaAccess, async (req, res) => {
   const [byState, byDept, byCat, monthly, topProposers, byRec] = await Promise.all([
     query(`SELECT state, COUNT(*)::int AS n FROM ideas GROUP BY state`),
     query(`SELECT department, COUNT(*)::int AS n FROM ideas GROUP BY department ORDER BY n DESC`),
@@ -288,12 +294,7 @@ router.get('/_stats', requireAuth, async (req, res) => {
 
 // GET /ideas/_export.csv — CSV export všech nápadů. Management-only
 // (obsahuje interní PM poznámky, garanty, analytická pole).
-router.get('/_export.csv', requireAuth, async (req, res) => {
-  const [mgr, pm] = await Promise.all([
-    isManagement(req.user.id, req.user.role),
-    isIdeaPM(req.user.id),
-  ]);
-  if (!mgr && !pm) return res.status(403).json({ error: 'forbidden' });
+router.get('/_export.csv', requireAuth, requireIdeaAccess, async (req, res) => {
 
   const r = await query(`
     SELECT i.*,
@@ -351,11 +352,8 @@ router.get('/_meta/perms', requireAuth, async (req, res) => {
   res.json({ is_management: mgr, is_idea_pm: pm });
 });
 
-// Seznam PMek Nápadníku. Vidí Management + admin (kvůli přehledu).
-router.get('/_pms', requireAuth, async (req, res) => {
-  const mgr = await isManagement(req.user.id, req.user.role);
-  const pm  = await isIdeaPM(req.user.id);
-  if (!mgr && !pm) return res.status(403).json({ error: 'forbidden' });
+// Seznam PMek Nápadníku. Vidí Management + PM (kvůli přehledu).
+router.get('/_pms', requireAuth, requireIdeaAccess, async (req, res) => {
   const r = await query(`
     SELECT ip.user_id, ip.assigned_at, u.name, u.email,
            ab.name AS assigned_by_name
@@ -390,7 +388,7 @@ router.delete('/_pms/:userId', requireAuth, async (req, res) => {
 });
 
 // Auth endpoint: detail 1 nápadu.
-router.get('/:id', requireAuth, async (req, res) => {
+router.get('/:id', requireAuth, requireIdeaAccess, async (req, res) => {
   const id = Number(req.params.id);
   const r = await query(`${SELECT_FULL} WHERE i.id = $1`, [id]);
   if (r.rows.length === 0) return res.status(404).json({ error: 'not_found' });
@@ -414,7 +412,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 
 // PATCH: edituje běžná manažerská pole (garant, priorita, doporučení PM,
 // poznámka PM). Fáze 2 přidá state change.
-router.patch('/:id', requireAuth, async (req, res) => {
+router.patch('/:id', requireAuth, requireIdeaAccess, async (req, res) => {
   const id = Number(req.params.id);
   const b = req.body || {};
   // Zjisti current stav (kvůli garant-change notifikaci)
@@ -466,7 +464,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
 
 // Vrátí povolené přechody pro nápad + kdo je smí provést (per current user).
 // FE volá pro render workflow tlačítek.
-router.get('/:id/transitions', requireAuth, async (req, res) => {
+router.get('/:id/transitions', requireAuth, requireIdeaAccess, async (req, res) => {
   const id = Number(req.params.id);
   const r = await query(`SELECT id, state, garant_id FROM ideas WHERE id = $1`, [id]);
   if (r.rows.length === 0) return res.status(404).json({ error: 'not_found' });
@@ -495,7 +493,7 @@ router.get('/:id/transitions', requireAuth, async (req, res) => {
 });
 
 // Provede state transition. Body: { to_state, comment }
-router.post('/:id/state', requireAuth, async (req, res) => {
+router.post('/:id/state', requireAuth, requireIdeaAccess, async (req, res) => {
   const id = Number(req.params.id);
   const b = req.body || {};
   const toState = String(b.to_state || '').trim();
@@ -576,7 +574,7 @@ router.post('/:id/state', requireAuth, async (req, res) => {
 // Přechází state schvalena_analyza → rozpracovano + vytvoří projekt
 // v cílovém týmu + linked_project_id na nápadu.
 // Garant nápadu nebo PM Nápadníku.
-router.post('/:id/create-project', requireAuth, async (req, res) => {
+router.post('/:id/create-project', requireAuth, requireIdeaAccess, async (req, res) => {
   const id = Number(req.params.id);
   const b = req.body || {};
   const teamId = Number(b.team_id);
@@ -626,7 +624,7 @@ router.post('/:id/create-project', requireAuth, async (req, res) => {
 // PUT /ideas/:id/analysis — upsert do idea_analysis.
 // Jen garant nebo Management. Povoleno ve stavech schvaleno_ceka_na_analyzu
 // (kdy garant vyplňuje) a ke_schvaleni_analyzy (kdy Management upravuje před schválením).
-router.put('/:id/analysis', requireAuth, async (req, res) => {
+router.put('/:id/analysis', requireAuth, requireIdeaAccess, async (req, res) => {
   const id = Number(req.params.id);
   const r = await query(`SELECT id, state, garant_id FROM ideas WHERE id = $1`, [id]);
   if (r.rows.length === 0) return res.status(404).json({ error: 'not_found' });

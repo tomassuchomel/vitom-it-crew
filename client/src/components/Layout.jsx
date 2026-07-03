@@ -6,7 +6,7 @@ import { useTeams } from '../teams.jsx';
 // zapnut. Funkce useFeature() z teams.jsx by potřebovala flag jako argument; tady to
 // uděláme inline přes currentTeam.features.
 const teamHasFeature = (team, key) => !!team?.features?.[key];
-import { questions as questionsApi, reviews as reviewsApi } from '../api.js';
+import { questions as questionsApi, reviews as reviewsApi, ideas as ideasApi } from '../api.js';
 import VitomLogo from './VitomLogo.jsx';
 import Avatar from './Avatar.jsx';
 import AIAdvisor from './AIAdvisor.jsx';
@@ -21,7 +21,7 @@ const NAV = [
   { to: '/questions', label: 'Dotazy k vyřešení',  icon: '💬', badge: 'inboxPending', hasTeamSubmenu: true },
   { to: '/answers',   label: 'Odpovědi na dotazy', icon: '📩', badge: 'answersUnread' },
   { to: '/notes',     label: 'Poznámky',           icon: '📝' },
-  { to: '/napadnik',  label: 'Nápadník',           icon: '💡' },
+  { to: '/napadnik',  label: 'Nápadník',           icon: '💡', requireIdeaAccess: true },
   { to: '/email',     label: 'Email',              icon: '📧' },
   { to: '/time',      label: 'Hodiny',             icon: '⏱️' },
   { to: '/reports',   label: 'Reporty',            icon: '📊', requireSeeAll: true },
@@ -37,6 +37,13 @@ export default function Layout({ children }) {
   const location = useLocation();
   const { currentTeam, teams } = useTeams();
   const [counts, setCounts] = useState({ inboxPending: 0, sentPending: 0, reviewQueue: 0, needsFix: 0, answersUnread: 0 });
+  // Nápadník je vyhrazený Managementu a PM Nápadníku. Menu se skryje pro ostatní.
+  const [ideaAccess, setIdeaAccess] = useState(false);
+  useEffect(() => {
+    ideasApi.perms()
+      .then(p => setIdeaAccess(!!p.is_management || !!p.is_idea_pm))
+      .catch(() => setIdeaAccess(false));
+  }, [user?.id]);
   // Mobile drawer: na malých obrazovkách je sidebar schovaný; hamburger ho otevře.
   // lg+ má sidebar pořád viditelný (původní desktop UX).
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -127,7 +134,8 @@ export default function Layout({ children }) {
             (!n.requireSeeAll || can.seeAllHours(user)) &&
             (!n.requireManager || can.manageProjects(user)) &&
             (!n.requireAdmin || user?.role === 'admin') &&
-            (!n.requireFeature || teamHasFeature(currentTeam, n.requireFeature))
+            (!n.requireFeature || teamHasFeature(currentTeam, n.requireFeature)) &&
+            (!n.requireIdeaAccess || ideaAccess)
           ).map(item => {
             const badgeNum = item.badge ? counts[item.badge] : 0;
             // Submenu jen dává smysl, když je user aspoň ve 2 týmech (přepínání)
