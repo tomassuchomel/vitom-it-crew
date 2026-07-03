@@ -56,10 +56,14 @@ export default function Questions() {
     setSearchParams(next, { replace: true });
   }, [box, status]);
 
+  // ?team=N v URL → filter na konkrétní tým (submenu v Layoutu).
+  const teamId = searchParams.get('team') ? Number(searchParams.get('team')) : null;
+
   const load = () => {
     setLoading(true);
     const params = { box };
     if (status) params.status = status;
+    if (teamId) params.team_id = teamId;
     Promise.all([
       questionsApi.list(params),
       questionsApi.counts(),
@@ -68,7 +72,7 @@ export default function Questions() {
       setCounts(c);
     }).finally(() => setLoading(false));
   };
-  useEffect(load, [box, status]);
+  useEffect(load, [box, status, teamId]);
 
   const submitAnswer = async (id) => {
     if (!answerText.trim()) return;

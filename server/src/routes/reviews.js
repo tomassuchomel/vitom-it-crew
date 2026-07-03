@@ -143,14 +143,15 @@ function escapeForBody(s) {
  * + počet příloh (často obsahují screenshot toho, co je špatně).
  */
 router.get('/tasks/needs-fix', requireAuth, async (req, res) => {
-  if (!req.team_id) return res.json({ tasks: [] });
-
+  // Cross-team default: user vidí vrácené úkoly napříč všemi týmy,
+  // kde je členem (assignee_id = user je dostatečná autorizace).
   const r = await query(`
     SELECT t.*,
       p.name AS project_name,
       p.due_date AS project_due_date,
       p.manager_id AS project_manager_id,
       p.team_id AS project_team_id,
+      tm.name AS project_team_name,
       tr.comment AS latest_review_comment,
       tr.created_at AS latest_review_at,
       ru.name AS latest_reviewer_name,
@@ -158,6 +159,7 @@ router.get('/tasks/needs-fix', requireAuth, async (req, res) => {
       (SELECT COUNT(*) FROM task_reviews trr WHERE trr.task_id = t.id) AS total_reviews
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
+    LEFT JOIN teams tm ON tm.id = p.team_id
     LEFT JOIN LATERAL (
       SELECT tr.*
       FROM task_reviews tr
@@ -168,13 +170,12 @@ router.get('/tasks/needs-fix', requireAuth, async (req, res) => {
     LEFT JOIN users ru ON ru.id = tr.reviewer_id
     WHERE t.assignee_id = $1
       AND t.status = 'needs_fix'
-      AND p.team_id = $2
     ORDER BY
       CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 END,
       t.due_date NULLS LAST,
       tr.created_at DESC NULLS LAST,
       t.id
-  `, [req.user.id, req.team_id]);
+  `, [req.user.id]);
   res.json({ tasks: r.rows });
 });
 
@@ -204,6 +205,8 @@ router.get('/tasks/review-queue', requireAuth, async (req, res) => {
     SELECT t.*,
       p.name AS project_name,
       p.manager_id AS project_manager_id,
+      p.team_id AS project_team_id,
+      tm.name AS project_team_name,
       u.name AS assignee_name,
       (SELECT MAX(created_at) FROM task_reviews tr
         WHERE tr.task_id = t.id AND tr.verdict = 'rejected') AS last_rejected_at,
@@ -211,6 +214,7 @@ router.get('/tasks/review-queue', requireAuth, async (req, res) => {
       (SELECT COUNT(*) FROM attachments a WHERE a.task_id = t.id) AS attachment_count
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
+    LEFT JOIN teams tm ON tm.id = p.team_id
     LEFT JOIN users u ON u.id = t.assignee_id
     WHERE ${where}
     ORDER BY

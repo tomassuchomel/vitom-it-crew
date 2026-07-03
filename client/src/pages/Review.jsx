@@ -4,8 +4,8 @@
 //
 // Klik na úkol otevře TaskDetailModal s plnou kontext (popis, přílohy)
 // a tlačítky „Schválit & dokončit" / „Vrátit k opravě". To je hlavní akce.
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import ReviewTaskDialog from '../components/ReviewTaskDialog.jsx';
@@ -25,6 +25,14 @@ export default function Review() {
   const [detailTask, setDetailTask] = useState(null);
   // null | { task, verdict } – pro ReviewTaskDialog otevřený přímo z listu
   const [reviewing, setReviewing] = useState(null);
+  const [searchParams] = useSearchParams();
+  const teamIdFilter = Number(searchParams.get('team')) || null;
+
+  // Cross-team default (review-queue vrací všechny mé projekty). Filter na tým dle URL.
+  const filteredTasks = useMemo(
+    () => teamIdFilter ? tasks.filter(t => t.project_team_id === teamIdFilter) : tasks,
+    [tasks, teamIdFilter]
+  );
 
   const load = (silent = false) => {
     if (!silent) setLoading(true);
@@ -41,24 +49,26 @@ export default function Review() {
         title="Review k dokončení"
         subtitle={
           loading ? 'Načítám…'
-            : tasks.length === 0
+            : filteredTasks.length === 0
               ? 'Žádné úkoly nečekají na review.'
-              : `${tasks.length} úkol(ů) čeká na tvé schválení`
+              : `${filteredTasks.length} úkol(ů) čeká na tvé schválení${teamIdFilter ? ' (filtrováno)' : ''}`
         }
       />
 
       <div className="p-6">
         {loading ? (
           <div className="text-slate-500">Načítám…</div>
-        ) : tasks.length === 0 ? (
+        ) : filteredTasks.length === 0 ? (
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-8 text-center">
             <div className="text-4xl mb-2">🎉</div>
             <div className="text-emerald-700 font-medium">Vše schválené!</div>
-            <div className="text-sm text-emerald-600 mt-1">Programátoři ti nedali nic k review.</div>
+            <div className="text-sm text-emerald-600 mt-1">
+              {teamIdFilter ? 'V tomto týmu nic k review.' : 'Programátoři ti nedali nic k review.'}
+            </div>
           </div>
         ) : (
           <ul className="space-y-3">
-            {tasks.map(t => (
+            {filteredTasks.map(t => (
               <ReviewRow
                 key={t.id}
                 task={t}

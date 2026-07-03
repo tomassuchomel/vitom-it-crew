@@ -12,12 +12,18 @@ const SELECT_FULL = `
     fu.name AS from_user_name,
     tu.name AS to_user_name,
     p.name  AS project_name,
+    -- team_id/name z projektu dotazu nebo z projektu úkolu (fallback)
+    COALESCE(p.team_id, pt.team_id) AS scope_team_id,
+    COALESCE(pteam.name, ptteam.name) AS scope_team_name,
     t.title AS task_title
   FROM questions q
   JOIN users fu ON fu.id = q.from_user_id
   JOIN users tu ON tu.id = q.to_user_id
   LEFT JOIN projects p ON p.id = q.project_id
   LEFT JOIN tasks t ON t.id = q.task_id
+  LEFT JOIN projects pt ON pt.id = t.project_id
+  LEFT JOIN teams pteam ON pteam.id = p.team_id
+  LEFT JOIN teams ptteam ON ptteam.id = pt.team_id
 `;
 
 // Seznam dotazů
@@ -57,18 +63,47 @@ router.get('/', requireAuth, async (req, res) => {
     filters.push(`q.status = $${params.length}`);
   }
 
-  // Team scope – dotaz patří do current teamu, pokud je navázán na projekt/úkol
-  // toho teamu. Bez teamu (req.team_id chybí) vrátíme prázdno.
-  // taskId override (filtr na konkrétní úkol) tuto filtraci nemusí potřebovat
-  // protože GET /api/tasks/:id už ověřuje team membership.
+  // Team scope: default = napříč VŠEMI týmy, kde je user členem
+  // (cross-team). Volitelně `?team_id=N` filtruje na konkrétní tým.
+  // taskId override (filtr na konkrétní úkol) team scope nepotřebuje —
+  // GET /api/tasks/:id už ověří přístup.
   if (!taskId) {
-    if (!req.team_id) return res.json({ questions: [] });
-    params.push(req.team_id);
-    filters.push(`(
-      EXISTS (SELECT 1 FROM projects pp WHERE pp.id = q.project_id AND pp.team_id = $${params.length})
-      OR
-      EXISTS (SELECT 1 FROM tasks tt JOIN projects pp2 ON pp2.id = tt.project_id WHERE tt.id = q.task_id AND pp2.team_id = $${params.length})
-    )`);
+    const askedTeamId = Number(req.query.team_id);
+    if (Number.isInteger(askedTeamId) && askedTeamId > 0) {
+      // Kontrola členství (bezpečnost: user nemůže filtrovat na cizí tým)
+      if (req.user.role !== 'admin') {
+        const ok = await query(
+          `SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2 LIMIT 1`,
+          [askedTeamId, req.user.id]
+        );
+        if (ok.rows.length === 0) return res.status(403).json({ error: 'forbidden' });
+      }
+      params.push(askedTeamId);
+      filters.push(`(
+        EXISTS (SELECT 1 FROM projects pp WHERE pp.id = q.project_id AND pp.team_id = $${params.length})
+        OR
+        EXISTS (SELECT 1 FROM tasks tt JOIN projects pp2 ON pp2.id = tt.project_id WHERE tt.id = q.task_id AND pp2.team_id = $${params.length})
+      )`);
+    } else {
+      // Cross-team default: pouze dotazy z týmů, kde je user členem (admin vidí vše)
+      if (req.user.role !== 'admin') {
+        params.push(req.user.id);
+        filters.push(`(
+          EXISTS (
+            SELECT 1 FROM projects pp
+            JOIN team_members tmc ON tmc.team_id = pp.team_id
+            WHERE pp.id = q.project_id AND tmc.user_id = $${params.length}
+          )
+          OR EXISTS (
+            SELECT 1 FROM tasks tt
+            JOIN projects pp2 ON pp2.id = tt.project_id
+            JOIN team_members tmc2 ON tmc2.team_id = pp2.team_id
+            WHERE tt.id = q.task_id AND tmc2.user_id = $${params.length}
+          )
+        )`);
+      }
+      // Admin má stále všechny bez filteru — moje/inbox/sent už omezuje seznam.
+    }
   }
 
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';

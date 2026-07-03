@@ -15,10 +15,10 @@ import QuickCaptureFAB from './QuickCaptureFAB.jsx';
 const NAV = [
   { to: '/',          label: 'Timeline',           icon: '📅' },
   { to: '/projects',  label: 'Projekty',           icon: '📁' },
-  { to: '/my-tasks',  label: 'Moje úkoly',         icon: '✅' },
+  { to: '/my-tasks',  label: 'Moje úkoly',         icon: '✅', hasTeamSubmenu: true },
   { to: '/needs-fix', label: 'Vrácené k opravě',   icon: '🔄', badge: 'needsFix' },
-  { to: '/review',    label: 'Review k dokončení', icon: '👀', badge: 'reviewQueue', requireManager: true },
-  { to: '/questions', label: 'Dotazy k vyřešení',  icon: '💬', badge: 'inboxPending' },
+  { to: '/review',    label: 'Review k dokončení', icon: '👀', badge: 'reviewQueue', requireManager: true, hasTeamSubmenu: true },
+  { to: '/questions', label: 'Dotazy k vyřešení',  icon: '💬', badge: 'inboxPending', hasTeamSubmenu: true },
   { to: '/answers',   label: 'Odpovědi na dotazy', icon: '📩', badge: 'answersUnread' },
   { to: '/notes',     label: 'Poznámky',           icon: '📝' },
   { to: '/napadnik',  label: 'Nápadník',           icon: '💡' },
@@ -35,12 +35,19 @@ export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
-  const { currentTeam } = useTeams();
+  const { currentTeam, teams } = useTeams();
   const [counts, setCounts] = useState({ inboxPending: 0, sentPending: 0, reviewQueue: 0, needsFix: 0, answersUnread: 0 });
   // Mobile drawer: na malých obrazovkách je sidebar schovaný; hamburger ho otevře.
   // lg+ má sidebar pořád viditelný (původní desktop UX).
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   useEffect(() => { setMobileMenuOpen(false); }, [location.pathname]);
+  // Rozbalené submenu (per-item path). Ukládá stav napříč renderama.
+  const [expandedSubmenu, setExpandedSubmenu] = useState(() => new Set());
+  const toggleSubmenu = (path) => setExpandedSubmenu(prev => {
+    const next = new Set(prev);
+    if (next.has(path)) next.delete(path); else next.add(path);
+    return next;
+  });
 
   // Načítáme počet nevyřízených dotazů + review fronty + vrácených úkolů.
   // Periodicky (30s) a při změně stránky, ať badge svítí aktuální číslo.
@@ -123,25 +130,62 @@ export default function Layout({ children }) {
             (!n.requireFeature || teamHasFeature(currentTeam, n.requireFeature))
           ).map(item => {
             const badgeNum = item.badge ? counts[item.badge] : 0;
+            // Submenu jen dává smysl, když je user aspoň ve 2 týmech (přepínání)
+            const showSubmenu = item.hasTeamSubmenu && teams?.length >= 2;
+            const isExpanded = expandedSubmenu.has(item.to);
             return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.to === '/'}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 px-6 py-2.5 text-sm hover:bg-brand-600 transition ${
-                    isActive ? 'bg-brand-600 text-white border-l-4 border-accent-500 pl-5' : 'text-cream-100/85'
-                  }`
-                }
-              >
-                <span className="text-base">{item.icon}</span>
-                <span className="flex-1">{item.label}</span>
-                {badgeNum > 0 && (
-                  <span className="bg-accent-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
-                    {badgeNum}
-                  </span>
+              <div key={item.to}>
+                <div className="flex items-stretch">
+                  <NavLink
+                    to={item.to}
+                    end={item.to === '/'}
+                    className={({ isActive }) =>
+                      `flex-1 flex items-center gap-3 px-6 py-2.5 text-sm hover:bg-brand-600 transition ${
+                        isActive ? 'bg-brand-600 text-white border-l-4 border-accent-500 pl-5' : 'text-cream-100/85'
+                      }`
+                    }
+                  >
+                    <span className="text-base">{item.icon}</span>
+                    <span className="flex-1">{item.label}</span>
+                    {badgeNum > 0 && (
+                      <span className="bg-accent-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+                        {badgeNum}
+                      </span>
+                    )}
+                  </NavLink>
+                  {showSubmenu && (
+                    <button
+                      onClick={() => toggleSubmenu(item.to)}
+                      className="px-3 text-cream-100/60 hover:text-cream-50 hover:bg-brand-600 transition"
+                      title={isExpanded ? 'Sbalit podmenu' : 'Rozbalit podle týmů'}
+                    >{isExpanded ? '▾' : '▸'}</button>
+                  )}
+                </div>
+                {showSubmenu && isExpanded && (
+                  <div className="bg-brand-700/40">
+                    <NavLink
+                      to={item.to}
+                      end
+                      className={({ isActive }) => `block pl-14 pr-6 py-1.5 text-[13px] transition ${
+                        isActive && !new URLSearchParams(location.search).get('team')
+                          ? 'text-white font-medium' : 'text-cream-100/70 hover:text-cream-50'
+                      }`}
+                    >Vše (napříč týmy)</NavLink>
+                    {teams.map(t => (
+                      <NavLink
+                        key={t.id}
+                        to={`${item.to}?team=${t.id}`}
+                        className={({ isActive }) => {
+                          const activeThis = isActive && Number(new URLSearchParams(location.search).get('team')) === t.id;
+                          return `block pl-14 pr-6 py-1.5 text-[13px] transition ${
+                            activeThis ? 'text-white font-medium' : 'text-cream-100/70 hover:text-cream-50'
+                          }`;
+                        }}
+                      >· {t.name}</NavLink>
+                    ))}
+                  </div>
                 )}
-              </NavLink>
+              </div>
             );
           })}
         </nav>

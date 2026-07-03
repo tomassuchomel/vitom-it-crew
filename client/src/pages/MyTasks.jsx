@@ -73,10 +73,16 @@ export default function MyTasks() {
   };
   useEffect(load, []);
 
+  // ?team=N v URL → filter na konkrétní tým (submenu v Layoutu).
+  // Cross-team úkoly (Patricia scénář) mají skryté project_team_id na null.
+  const teamIdFilter = Number(searchParams.get('team')) || null;
+
   const filteredTasks = useMemo(() => {
-    if (view === 'pipeline' || filter === 'all') return tasks;
-    return tasks.filter(t => t.status === filter);
-  }, [tasks, filter, view]);
+    let out = tasks;
+    if (teamIdFilter) out = out.filter(t => t.project_team_id === teamIdFilter);
+    if (view === 'pipeline' || filter === 'all') return out;
+    return out.filter(t => t.status === filter);
+  }, [tasks, filter, view, teamIdFilter]);
 
   const counts = useMemo(() => {
     const c = { all: tasks.length, todo: 0, in_progress: 0, review: 0, needs_fix: 0, done: 0 };
