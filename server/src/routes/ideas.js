@@ -240,19 +240,13 @@ router.post('/:id/state', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'garant_required', message: 'Nejdřív přiřaď garanta.' });
   }
 
-  // Update state + related timestamps
-  const updates = [`state = $1`, `updated_at = NOW()`];
-  const params = [toState];
-  if (toState === 'schvalena_analyza' || toState === 'schvaleno_ceka_na_analyzu') {
-    updates.push(`approved_at = NOW()`);
-    params.push(req.user.id); updates.push(`approved_by = $${params.length}`);
-  }
-  if (toState === 'zamitnuto') {
-    updates.push(`rejected_at = NOW()`);
-    params.push(req.user.id); updates.push(`rejected_by = $${params.length}`);
-  }
-  params.push(id);
-  await query(`UPDATE ideas SET ${updates.join(', ')} WHERE id = $${params.length}`, params);
+  // Update state. Kdo a kdy akci provedl je v idea_events — duplikovat
+  // do ideas nemá smysl pro F2. Až F4 dashboard bude chtít rychlý sort
+  // podle "kdy schváleno", přidám sloupce migrací.
+  await query(
+    `UPDATE ideas SET state = $1, updated_at = NOW() WHERE id = $2`,
+    [toState, id]
+  );
 
   await query(`
     INSERT INTO idea_events (idea_id, action, from_state, to_state, user_id, comment)
