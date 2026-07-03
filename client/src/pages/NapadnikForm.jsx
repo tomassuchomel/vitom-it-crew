@@ -5,6 +5,24 @@ import { useEffect, useState } from 'react';
 import { ideas as ideasApi } from '../api.js';
 import VitomLogo from '../components/VitomLogo.jsx';
 
+// Field wrapper VNĚ komponenty — kdyby byl uvnitř NapadnikForm, každý
+// re-render (typing) by vytvořil nový komponent typ → React unmountuje
+// vnitřní <input> → ztráta focusu po 1 znaku (klasický bug).
+function Field({ label, name, required, error, children }) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-ink-600">
+        {label} {required && <span className="text-accent-500">*</span>}
+      </span>
+      {children}
+      {error && <span className="text-xs text-red-600 mt-1 block">{error}</span>}
+    </label>
+  );
+}
+const inputCls = (name, errors) => `mt-1 w-full border rounded px-2 py-1.5 text-sm ${
+  errors[name] ? 'border-red-400 bg-red-50' : 'border-ink-300'
+}`;
+
 export default function NapadnikForm() {
   const [meta, setMeta] = useState({ departments: [], categories: [] });
   const [form, setForm] = useState({
@@ -69,20 +87,6 @@ export default function NapadnikForm() {
     );
   }
 
-  const F = ({ label, name, required, children }) => (
-    <label className="block">
-      <span className="text-xs font-medium text-ink-600">
-        {label} {required && <span className="text-accent-500">*</span>}
-      </span>
-      {children}
-      {errors[name] && <span className="text-xs text-red-600 mt-1 block">{errors[name]}</span>}
-    </label>
-  );
-
-  const inputCls = (name) => `mt-1 w-full border rounded px-2 py-1.5 text-sm ${
-    errors[name] ? 'border-red-400 bg-red-50' : 'border-ink-300'
-  }`;
-
   return (
     <div className="min-h-full bg-cream-100 py-8 px-4">
       <div className="max-w-2xl mx-auto">
@@ -102,77 +106,77 @@ export default function NapadnikForm() {
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <F label="Jméno" name="proposer_name" required>
+            <Field label="Jméno" name="proposer_name" required error={errors.proposer_name}>
               <input type="text" value={form.proposer_name}
                 onChange={e => set('proposer_name', e.target.value)}
-                className={inputCls('proposer_name')} />
-            </F>
-            <F label="E‑mail" name="proposer_email" required>
+                className={inputCls('proposer_name', errors)} />
+            </Field>
+            <Field label="E‑mail" name="proposer_email" required error={errors.proposer_email}>
               <input type="email" value={form.proposer_email}
                 onChange={e => set('proposer_email', e.target.value)}
-                className={inputCls('proposer_email')} />
-            </F>
+                className={inputCls('proposer_email', errors)} />
+            </Field>
           </div>
 
-          <F label="Název nápadu" name="title" required>
+          <Field label="Název nápadu" name="title" required error={errors.title}>
             <input type="text" value={form.title}
               onChange={e => set('title', e.target.value)}
-              className={inputCls('title')} />
-          </F>
+              className={inputCls('title', errors)} />
+          </Field>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <F label="Oddělení" name="department" required>
+            <Field label="Oddělení" name="department" required error={errors.department}>
               <select value={form.department}
                 onChange={e => set('department', e.target.value)}
-                className={inputCls('department')}>
+                className={inputCls('department', errors)}>
                 <option value="">— vyber —</option>
                 {meta.departments.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
-            </F>
-            <F label="Kategorie zlepšení" name="category" required>
+            </Field>
+            <Field label="Kategorie zlepšení" name="category" required error={errors.category}>
               <select value={form.category}
                 onChange={e => set('category', e.target.value)}
-                className={inputCls('category')}>
+                className={inputCls('category', errors)}>
                 <option value="">— vyber —</option>
                 {meta.categories.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
-            </F>
+            </Field>
           </div>
 
-          <F label="Popis problému" name="problem_description" required>
+          <Field label="Popis problému" name="problem_description" required error={errors.problem_description}>
             <textarea rows={3} value={form.problem_description}
               onChange={e => set('problem_description', e.target.value)}
               placeholder="Co dnes nefunguje / komplikuje práci?"
-              className={inputCls('problem_description')} />
-          </F>
+              className={inputCls('problem_description', errors)} />
+          </Field>
 
-          <F label="Návrh řešení" name="solution_proposal" required>
+          <Field label="Návrh řešení" name="solution_proposal" required error={errors.solution_proposal}>
             <textarea rows={3} value={form.solution_proposal}
               onChange={e => set('solution_proposal', e.target.value)}
               placeholder="Jak by se to dalo řešit?"
-              className={inputCls('solution_proposal')} />
-          </F>
+              className={inputCls('solution_proposal', errors)} />
+          </Field>
 
-          <F label="Dopad (počet lidí, frekvence)" name="impact_scope">
+          <Field label="Dopad (počet lidí, frekvence)" name="impact_scope" error={errors.impact_scope}>
             <input type="text" value={form.impact_scope}
               onChange={e => set('impact_scope', e.target.value)}
               placeholder="např. 5 lidí, denně"
-              className={inputCls('impact_scope')} />
-          </F>
+              className={inputCls('impact_scope', errors)} />
+          </Field>
 
-          <F label="Odhad úspory času" name="estimated_time_savings">
+          <Field label="Odhad úspory času" name="estimated_time_savings" error={errors.estimated_time_savings}>
             <input type="text" value={form.estimated_time_savings}
               onChange={e => set('estimated_time_savings', e.target.value)}
               placeholder="např. 2 h týdně / osobu"
-              className={inputCls('estimated_time_savings')} />
-          </F>
+              className={inputCls('estimated_time_savings', errors)} />
+          </Field>
 
-          <F label="Odkaz na materiál (volitelně)" name="external_link">
+          <Field label="Odkaz na materiál (volitelně)" name="external_link" error={errors.external_link}>
             <input type="url" value={form.external_link}
               onChange={e => set('external_link', e.target.value)}
               placeholder="https://…"
-              className={inputCls('external_link')} />
-          </F>
+              className={inputCls('external_link', errors)} />
+          </Field>
 
           <div className="pt-2 flex items-center justify-end gap-3">
             <button type="submit" disabled={busy}
