@@ -46,6 +46,8 @@ export default function Scoreboard() {
   const [history, setHistory] = useState({ series: [], months_axis: [] });
   const [teamsOverview, setTeamsOverview] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Tab: 'tasks' | 'attendance'
+  const [tab, setTab] = useState('tasks');
   // null = celý tým (agregát), jinak trend jednoho uživatele.
   const [selectedUserId, setSelectedUserId] = useState(null);
   const trendRef = useRef(null);
@@ -155,6 +157,18 @@ export default function Scoreboard() {
         subtitle={`Úspěšnost dokončování úkolů v termínu — ${scopeLabel}`}
       />
 
+      {/* Tab lišta */}
+      <div className="px-4 sm:px-6 pt-3 flex gap-2 border-b border-cream-200">
+        <button onClick={() => setTab('tasks')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
+            tab === 'tasks' ? 'border-brand-500 text-brand-600' : 'border-transparent text-ink-500 hover:text-ink-700'
+          }`}>✅ Úkoly</button>
+        <button onClick={() => setTab('attendance')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
+            tab === 'attendance' ? 'border-brand-500 text-brand-600' : 'border-transparent text-ink-500 hover:text-ink-700'
+          }`}>👥 Docházka</button>
+      </div>
+
       <div className="p-4 sm:p-6 space-y-6">
         {/* Filter */}
         <div className="flex flex-wrap items-center gap-3">
@@ -187,7 +201,9 @@ export default function Scoreboard() {
           </div>
         </div>
 
-        {loading ? (
+        {tab === 'attendance' ? (
+          <AttendancePanel teamId={effectiveTeamId} months={months} />
+        ) : loading ? (
           <div className="text-ink-500">Načítám…</div>
         ) : users.length === 0 ? (
           <div className="text-ink-400 italic">
@@ -554,6 +570,99 @@ function TaskListModal({ user, category, teamId, months, onClose, onOpenTask }) 
         </div>
       )}
     </Modal>
+  );
+}
+
+// ==================== Docházka ====================
+//
+// Aggreguje meetings.attendees per user: byl / pozdě / nepřišel.
+// Rate = (byl + 0.5 × pozdě) / celkem × 100. Použije stejné months + team filter.
+function AttendancePanel({ teamId, months }) {
+  const [data, setData] = useState({ users: [] });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    scoreboardApi.attendance(teamId, months)
+      .then(d => setData(d))
+      .catch(() => setData({ users: [] }))
+      .finally(() => setLoading(false));
+  }, [teamId, months]);
+
+  if (loading) return <div className="text-ink-500">Načítám…</div>;
+  if (data.users.length === 0) {
+    return (
+      <div className="text-ink-400 italic">
+        Zatím žádná data o docházce. Zaznamenej prezenci u porad — tady se pak zobrazí skóre.
+      </div>
+    );
+  }
+
+  const totals = data.users.reduce((acc, u) => {
+    acc.present += u.present || 0;
+    acc.late    += u.late || 0;
+    acc.missed  += u.missed || 0;
+    return acc;
+  }, { present: 0, late: 0, missed: 0 });
+  const denom = totals.present + totals.late + totals.missed;
+  const totalRate = denom > 0 ? Math.round(100 * (totals.present + 0.5 * totals.late) / denom) : null;
+
+  return (
+    <div className="space-y-6">
+      {/* KPI */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Kpi label="Přítomni (včas)" value={totals.present} color="text-emerald-700" />
+        <Kpi label="Pozdě" value={totals.late} color="text-amber-700" />
+        <Kpi label="Nepřišli" value={totals.missed} color="text-red-600" />
+        <Kpi label="Průměrná docházka" value={totalRate == null ? '—' : `${totalRate}%`} color="text-brand-600" />
+      </div>
+
+      {/* Žebříček */}
+      <div className="bg-white border border-cream-200 rounded-xl overflow-x-auto">
+        <table className="w-full min-w-[600px]">
+          <thead className="bg-cream-100 text-xs uppercase tracking-wide text-ink-600">
+            <tr>
+              <th className="px-3 py-2 text-left">Uživatel</th>
+              <th className="px-3 py-2 text-center">Docházka</th>
+              <th className="px-3 py-2 text-center">✅ Byl</th>
+              <th className="px-3 py-2 text-center">⏰ Pozdě</th>
+              <th className="px-3 py-2 text-center">❌ Nepřišel</th>
+              <th className="px-3 py-2 text-center">Porady</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-cream-100">
+            {data.users.map((u, i) => (
+              <tr key={u.user_id} className="hover:bg-cream-50">
+                <td className="px-3 py-3">
+                  <div className="flex items-center gap-2">
+                    <Avatar user={{ id: u.user_id, name: u.name, avatar_updated_at: u.avatar_updated_at }} size={28} />
+                    <div className="font-medium text-ink-800">{u.name}</div>
+                  </div>
+                </td>
+                <td className="px-3 py-3 text-center">
+                  <span className={`inline-block px-3 py-1 rounded-full font-bold text-sm ${
+                    u.rate == null ? 'bg-slate-100 text-slate-500'
+                      : u.rate >= 90 ? 'bg-emerald-100 text-emerald-800'
+                      : u.rate >= 70 ? 'bg-brand-100 text-brand-700'
+                      : u.rate >= 50 ? 'bg-amber-100 text-amber-800'
+                      : 'bg-red-100 text-red-700'
+                  }`}>{u.rate == null ? '—' : `${u.rate}%`}</span>
+                </td>
+                <td className="px-3 py-3 text-center font-semibold text-emerald-700">{u.present}</td>
+                <td className="px-3 py-3 text-center font-semibold text-amber-700">{u.late}</td>
+                <td className="px-3 py-3 text-center font-semibold text-red-600">{u.missed}</td>
+                <td className="px-3 py-3 text-center text-ink-500">{u.meetings_count}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="text-xs text-ink-500 bg-cream-50 border border-cream-200 rounded p-3">
+        <strong>Jak se počítá docházka?</strong> (byl + 0,5 × pozdě) / (byl + pozdě + nepřišel).
+        Pozdní příchod je 50 % bodu. Do statistiky se počítají jen porady, kde tě někdo označil (Byl / Pozdě / Nepřišel).
+      </div>
+    </div>
   );
 }
 

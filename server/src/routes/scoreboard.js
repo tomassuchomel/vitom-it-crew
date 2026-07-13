@@ -278,6 +278,79 @@ router.get('/tasks', requireAuth, async (req, res) => {
   res.json({ tasks: r.rows });
 });
 
+// Score docházky — aggreguje meetings.attendees per user (byl / pozdě / nepřišel).
+// Rate = (present + 0.5 × late) / (present + late + missed) × 100.
+// Zpětná kompatibilita: staré záznamy s present: true → 'present', false → 'missed'.
+router.get('/attendance', requireAuth, async (req, res) => {
+  const scope = await resolveTeamScope(req);
+  if (scope.mode === 'forbidden') return res.status(403).json({ error: 'forbidden' });
+  if (scope.mode === 'none') return res.json({ users: [] });
+
+  const months = req.query.months ? Number(req.query.months) : null;
+  const startDate = resolveStartDate(months);
+
+  const params = [];
+  let teamFilter = '';
+  if (scope.mode === 'team') {
+    params.push(scope.teamId);
+    teamFilter = `AND t.team_id = $${params.length}`;
+  }
+  let dateFilter = '';
+  if (startDate) {
+    params.push(startDate);
+    dateFilter = `AND m.meeting_date >= $${params.length}::date`;
+  }
+
+  // Defenzivně: pokud tabulka meetings neexistuje, vrátíme prázdno.
+  try {
+    // Rozvineme attendees JSONB pole a group by user_id.
+    // Backward-compat: status IS NULL a present::boolean = TRUE → 'present';
+    // status IS NULL a present::boolean = FALSE → 'missed'.
+    const r = await query(`
+      WITH att AS (
+        SELECT
+          (a->>'user_id')::int AS user_id,
+          COALESCE(
+            a->>'status',
+            CASE WHEN (a->>'present')::boolean = TRUE THEN 'present'
+                 WHEN (a->>'present')::boolean = FALSE THEN 'missed'
+                 ELSE NULL END
+          ) AS status,
+          m.id AS meeting_id
+        FROM meetings m
+        JOIN meeting_types t ON t.id = m.type_id
+        CROSS JOIN LATERAL jsonb_array_elements(m.attendees) a
+        WHERE (a->>'user_id') IS NOT NULL
+          ${teamFilter} ${dateFilter}
+      ),
+      stats AS (
+        SELECT user_id,
+          COUNT(*) FILTER (WHERE status = 'present')::int AS present,
+          COUNT(*) FILTER (WHERE status = 'late')::int    AS late,
+          COUNT(*) FILTER (WHERE status = 'missed')::int  AS missed,
+          COUNT(DISTINCT meeting_id)::int                 AS meetings_count
+        FROM att
+        WHERE status IS NOT NULL
+        GROUP BY user_id
+      )
+      SELECT s.user_id, u.name, u.avatar_updated_at,
+        s.present, s.late, s.missed, s.meetings_count,
+        (s.present + s.late + s.missed) AS total,
+        CASE
+          WHEN (s.present + s.late + s.missed) = 0 THEN NULL
+          ELSE ROUND(100.0 * (s.present + 0.5 * s.late) / (s.present + s.late + s.missed))::int
+        END AS rate
+      FROM stats s
+      JOIN users u ON u.id = s.user_id
+      ORDER BY rate DESC NULLS LAST, s.present DESC, u.name ASC
+    `, params);
+    res.json({ users: r.rows });
+  } catch (err) {
+    if (err.code === '42P01') return res.json({ users: [] });
+    throw err;
+  }
+});
+
 // Přehled per tým — jen admin.
 router.get('/teams-overview', requireAuth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
