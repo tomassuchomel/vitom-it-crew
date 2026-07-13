@@ -16,6 +16,7 @@ const NAV = [
   { to: '/',          label: 'Timeline',           icon: '📅' },
   { to: '/projects',  label: 'Projekty',           icon: '📁' },
   { to: '/my-tasks',  label: 'Moje úkoly',         icon: '✅', badge: 'myTasks', hasTeamSubmenu: true },
+  { to: '/find-tasks', label: 'Hledat úkoly',      icon: '🔍' },
   { to: '/needs-fix', label: 'Vrácené k opravě',   icon: '🔄', badge: 'needsFix', hasTeamSubmenu: true },
   { to: '/review',    label: 'Review k dokončení', icon: '👀', badge: 'reviewQueue', requireManager: true, hasTeamSubmenu: true },
   { to: '/questions', label: 'Dotazy k vyřešení',  icon: '💬', badge: 'inboxPending', hasTeamSubmenu: true },

@@ -206,6 +206,59 @@ router.get('/mine', requireAuth, async (req, res) => {
   res.json({ tasks });
 });
 
+// GET /api/tasks/search – hledání úkolů podle uživatele / týmu / projektu / stavu.
+// Autorizace:
+//   - Admin: kdokoli, jakýkoli tým (bez omezení)
+//   - Ostatní: jen týmy, kterých jsou členem (implicitně)
+// Bez ?team_id: non-admin vidí napříč všemi svými týmy; admin cross-team.
+// STATICKÁ CESTA — musí být PŘED /:id.
+router.get('/search', requireAuth, async (req, res) => {
+  const assigneeId = Number(req.query.assignee_id) || null;
+  const teamId     = Number(req.query.team_id) || null;
+  const projectId  = Number(req.query.project_id) || null;
+  const status     = req.query.status || null;
+  const isAdmin    = req.user.role === 'admin';
+
+  // Autorizační kontrola cílového týmu (non-admin)
+  if (!isAdmin && teamId) {
+    const check = await query(`SELECT 1 FROM team_members WHERE user_id = $1 AND team_id = $2`, [req.user.id, teamId]);
+    if (check.rows.length === 0) return res.status(403).json({ error: 'forbidden_team' });
+  }
+
+  const params = [];
+  const where = [`t.assignee_id IS NOT NULL`];
+
+  if (assigneeId) { params.push(assigneeId); where.push(`t.assignee_id = $${params.length}`); }
+  if (teamId)     { params.push(teamId);     where.push(`p.team_id     = $${params.length}`); }
+  else if (!isAdmin) {
+    // Non-admin bez team filtru → jen mé týmy (implicit multi-team izolace).
+    params.push(req.user.id);
+    where.push(`p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $${params.length})`);
+  }
+  if (projectId) { params.push(projectId); where.push(`t.project_id = $${params.length}`); }
+  if (status)    { params.push(status);    where.push(`t.status     = $${params.length}`); }
+
+  const r = await query(`
+    SELECT t.*,
+      p.name AS project_name,
+      p.team_id,
+      tm.name AS team_name,
+      u.name AS assignee_name,
+      u.avatar_updated_at AS assignee_avatar_updated_at
+    FROM tasks t
+    JOIN projects p ON p.id = t.project_id
+    LEFT JOIN teams tm ON tm.id = p.team_id
+    LEFT JOIN users u ON u.id = t.assignee_id
+    WHERE ${where.join(' AND ')}
+    ORDER BY
+      CASE WHEN t.status = 'done' THEN 1 ELSE 0 END,
+      t.due_date NULLS LAST,
+      t.id
+    LIMIT 500
+  `, params);
+  res.json({ tasks: r.rows });
+});
+
 // GET /api/tasks/:id – detail jednoho úkolu s computed fields jako u /mine.
 // Používá Questions (klik na zdrojový úkol otevře TaskDetailModal inline).
 // Cross-team check: admin vidí všechno; člen teamu projektu vidí; ASSIGNEE

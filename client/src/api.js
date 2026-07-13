@@ -55,6 +55,8 @@ export const tasks = {
   update:  (id, data) => api.put(`/tasks/${id}`, data).then(r => r.data),
   remove:  (id) => api.delete(`/tasks/${id}`).then(r => r.data),
   estimate:(id) => api.post(`/tasks/${id}/estimate`).then(r => r.data),
+  // Hledání úkolů podle uživatele/týmu/projektu/statusu.
+  search:  (params) => api.get('/tasks/search', { params }).then(r => r.data),
 };
 
 // Review workflow – schvalování a vrácení úkolů. Endpointy obsluhuje
