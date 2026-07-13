@@ -219,11 +219,14 @@ export const push = {
 // Server filtruje by req.team_id, takže klient nemusí nic specifikovat.
 export const scoreboard = {
   // team_id=null → server použije current team; team_id=0 → admin cross-team.
-  list:          (team_id) => api.get('/scoreboard', { params: team_id != null ? { team_id } : {} }).then(r => r.data),
+  // months=null → all-time snapshot; months=1..24 → time-filtered.
+  list:          (team_id, months) => api.get('/scoreboard', {
+    params: { ...(team_id != null ? { team_id } : {}), ...(months ? { months } : {}) },
+  }).then(r => r.data),
   history:       (team_id, months = 6) => api.get('/scoreboard/history', { params: { months, ...(team_id != null ? { team_id } : {}) } }).then(r => r.data),
   teamsOverview: () => api.get('/scoreboard/teams-overview').then(r => r.data),
-  tasks:         (user_id, category, team_id) => api.get('/scoreboard/tasks', {
-    params: { user_id, category, ...(team_id != null ? { team_id } : {}) },
+  tasks:         (user_id, category, team_id, months) => api.get('/scoreboard/tasks', {
+    params: { user_id, category, ...(team_id != null ? { team_id } : {}), ...(months ? { months } : {}) },
   }).then(r => r.data),
 };
 

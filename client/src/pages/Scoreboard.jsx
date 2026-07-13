@@ -69,7 +69,8 @@ export default function Scoreboard() {
     setLoading(true);
     const load = async () => {
       const [snap, hist] = await Promise.all([
-        scoreboardApi.list(effectiveTeamId).catch(() => ({ users: [] })),
+        // Snapshot je time-filtered stejným months jako trend → karty se přepočítají.
+        scoreboardApi.list(effectiveTeamId, months).catch(() => ({ users: [] })),
         scoreboardApi.history(effectiveTeamId, months).catch(() => ({ series: [], months_axis: [] })),
       ]);
       setUsers(snap.users || []);
@@ -174,8 +175,10 @@ export default function Scoreboard() {
             </label>
           )}
           <div className="flex gap-1">
-            {[3, 6, 12, 24].map(m => (
+            {/* 1 měs = aktuální kalendářní měsíc (od 1. dne); ostatní = posledních N */}
+            {[1, 3, 6, 12, 24].map(m => (
               <button key={m} onClick={() => setMonths(m)}
+                title={m === 1 ? 'Aktuální kalendářní měsíc' : `Posledních ${m} kalendářních měsíců`}
                 className={`px-2 py-1 text-xs rounded border transition ${
                   months === m ? 'bg-brand-500 text-white border-brand-500'
                                : 'bg-white text-ink-600 border-cream-300 hover:bg-cream-50'
@@ -354,6 +357,7 @@ export default function Scoreboard() {
           user={drilldown.user}
           category={drilldown.category}
           teamId={effectiveTeamId}
+          months={months}
           onClose={() => setDrilldown(null)}
           onOpenTask={async (taskId) => {
             try {
@@ -488,17 +492,17 @@ const CATEGORY_LABEL = {
   po_terminu: 'Nedokončené po termínu',
 };
 
-function TaskListModal({ user, category, teamId, onClose, onOpenTask }) {
+function TaskListModal({ user, category, teamId, months, onClose, onOpenTask }) {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    scoreboardApi.tasks(user.user_id, category, teamId)
+    scoreboardApi.tasks(user.user_id, category, teamId, months)
       .then(d => setTasks(d.tasks || []))
       .catch(() => setTasks([]))
       .finally(() => setLoading(false));
-  }, [user.user_id, category, teamId]);
+  }, [user.user_id, category, teamId, months]);
 
   const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: '2-digit' }) : '—';
   const title = `${CATEGORY_LABEL[category]} — ${user.name}`;

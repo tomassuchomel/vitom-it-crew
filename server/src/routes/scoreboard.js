@@ -31,6 +31,17 @@ import { requireAuth } from '../auth.js';
 
 const router = Router();
 
+// Vypočítá start date pro time filter. months=1 = aktuální kalendářní měsíc
+// (od 1. dne měsíce). months=N>1 = 1. den měsíce před (N-1) měsíci. null = bez filtru.
+function resolveStartDate(months) {
+  if (!months) return null;
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(1);
+  if (months > 1) d.setMonth(d.getMonth() - (months - 1));
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
 // Vyhodnoť team scope pro request. Admin může poslat team_id=0 (=všechny týmy).
 // Non-admin je omezen na svůj req.team_id — pokud pošle jiný, 403.
 async function resolveTeamScope(req) {
@@ -83,13 +94,28 @@ router.get('/', requireAuth, async (req, res) => {
     `;
   }
 
+  // Time filter (volitelný): úkoly relevantní pro dané období = dokončené v období
+  // NEBO měly deadline v období NEBO jsou aktuálně otevřené (relevant kontext).
+  const months = req.query.months ? Number(req.query.months) : null;
+  const startDate = resolveStartDate(months);
+  let timeFilter = '';
+  if (startDate) {
+    params.push(startDate);
+    const p = `$${params.length}::date`;
+    timeFilter = `AND (
+      (t.completed_at IS NOT NULL AND t.completed_at >= ${p})
+      OR (t.due_date IS NOT NULL AND t.due_date >= ${p})
+      OR (t.status != 'done')
+    )`;
+  }
+
   const sql = `
     WITH ${teamUsersCTE},
     user_tasks AS (
       SELECT t.id, t.assignee_id, t.status, t.due_date, t.completed_at
       FROM tasks t
       JOIN projects p ON p.id = t.project_id
-      WHERE t.assignee_id IS NOT NULL ${teamFilter}
+      WHERE t.assignee_id IS NOT NULL ${teamFilter} ${timeFilter}
     ),
     stats AS (
       SELECT
@@ -137,7 +163,8 @@ router.get('/history', requireAuth, async (req, res) => {
   if (scope.mode === 'forbidden') return res.status(403).json({ error: 'forbidden' });
   if (scope.mode === 'none') return res.json({ series: [], months_axis: [] });
 
-  const months = Math.max(3, Math.min(24, Number(req.query.months) || 6));
+  // Rozšíření: months=1 = aktuální kalendářní měsíc. Ostatní = posledních N.
+  const months = Math.max(1, Math.min(24, Number(req.query.months) || 6));
 
   const params = [months];
   let teamFilter = '';
@@ -222,13 +249,27 @@ router.get('/tasks', requireAuth, async (req, res) => {
     statusFilter = `AND t.status != 'done' AND t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE`;
   }
 
+  // Time filter dle months — konzistentní s hlavním /scoreboard.
+  const months = req.query.months ? Number(req.query.months) : null;
+  const startDate = resolveStartDate(months);
+  let timeFilter = '';
+  if (startDate) {
+    params.push(startDate);
+    const p = `$${params.length}::date`;
+    timeFilter = `AND (
+      (t.completed_at IS NOT NULL AND t.completed_at >= ${p})
+      OR (t.due_date IS NOT NULL AND t.due_date >= ${p})
+      OR (t.status != 'done')
+    )`;
+  }
+
   const r = await query(`
     SELECT t.id, t.title, t.status, t.priority, t.due_date, t.completed_at,
            p.id AS project_id, p.name AS project_name, p.team_id, tm.name AS team_name
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
     LEFT JOIN teams tm ON tm.id = p.team_id
-    WHERE t.assignee_id = $1 ${teamFilter} ${statusFilter}
+    WHERE t.assignee_id = $1 ${teamFilter} ${statusFilter} ${timeFilter}
     ORDER BY
       CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END,
       t.due_date ASC NULLS LAST,
