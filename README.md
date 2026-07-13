@@ -128,3 +128,70 @@ npm run build          # produkční build frontendu
 cd server && npm test  # backend testy (node:test)
 cd server && npm run ai-worker   # AI agent worker (samostatný proces)
 ```
+
+## MCP server — Ticket manager pro externí Claude
+
+Aplikace vystavuje **MCP server** (Model Context Protocol) na cestě `/mcp`, aby se na
+něj mohl bezpečně připojit externí Claude klient (Cowork, Claude Desktop, Claude Code)
+a brát/řídit tickety. Ticket = řádek v tabulce `tasks`; „pro Clauda" = úkol s
+`ai_assignee = TRUE`.
+
+### Spuštění
+
+MCP server startuje automaticky s hlavním Express serverem — nemá samostatný proces.
+Stačí nastavit env var **`MCP_AUTH_TOKEN`** (Bearer token, kterým se klient autentizuje):
+
+```bash
+export MCP_AUTH_TOKEN="tvůj-dlouhý-náhodný-string"
+npm run dev
+# → MCP endpoint dostupný na http://localhost:4000/mcp
+```
+
+Na Renderu přidej `MCP_AUTH_TOKEN` v **Environment** sekci → automatický restart.
+**Nikdy** token nedávej do gitu. Bez tohoto env var vrací `/mcp` `503 mcp_not_configured`.
+
+### URL a autentizace
+
+- Produkce: `https://it.realitniekosystem.cz/mcp`
+- Lokálně: `http://localhost:4000/mcp`
+- Header: `Authorization: Bearer <MCP_AUTH_TOKEN>`
+- Bez tokenu / špatný token → `401 unauthorized`.
+
+### Připojení v Coworku
+
+1. V Coworku otevři nastavení konektorů → **Add MCP server**
+2. **URL:** `https://it.realitniekosystem.cz/mcp`
+3. **Transport:** Streamable HTTP
+4. **Header:** `Authorization: Bearer <MCP_AUTH_TOKEN>`
+5. Ověř spojení voláním `list_tickets` (default: status=todo, assignee=claude).
+
+### Dostupné tools
+
+| Tool | Popis |
+|---|---|
+| `list_tickets(status?, assignee?, limit?)` | Seznam ticketů. Default: `status='todo'` a `assignee='claude'`. Řazeno podle priority. |
+| `get_ticket(id)` | Plný detail: title, description, `acceptanceCriteria`, `rules`, status, priority, labels, comments. |
+| `claim_ticket(id)` | **Atomicky a idempotentně** převezme ticket pro Clauda a přepne na `in_progress`. Když už není `todo` nebo je claimed jiným agentem → error s aktuálním stavem (žádné tiché přepsání). Zabraňuje race dvou agentů. |
+| `update_ticket_status(id, status, note?)` | Přechod `in_progress`/`in_review`/`done`/`blocked` s validací povolených přechodů. |
+| `add_comment(id, body)` | Komentář (postup, nález, dotaz). |
+| `get_rules()` | Globální pravidla pro práci s tickety. |
+
+### Workflow / povolené přechody
+
+```
+backlog → todo, blocked
+todo    → in_progress, blocked
+in_progress → in_review, blocked, done
+in_review   → done, in_progress, blocked
+blocked → todo, in_progress
+done    → (nic; final stav)
+```
+
+### Testy
+
+```bash
+cd server && npm test           # 132+ testů (11 pokrývá MCP: auth, mapy, přechody)
+```
+
+Konkrétně jsou pokryté: auth (401 bez tokenu, 401 s špatným, next() se správným, 503
+bez env var), round-trip status map, validace přechodů, transition rules.
