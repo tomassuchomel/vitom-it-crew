@@ -12,7 +12,7 @@
 // Feature flag success_metrics gate-uje stránku pro current team; admin cross-team
 // vidí bez ohledu na flag.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
@@ -44,6 +44,16 @@ export default function Scoreboard() {
   const [history, setHistory] = useState({ series: [], months_axis: [] });
   const [teamsOverview, setTeamsOverview] = useState(null);
   const [loading, setLoading] = useState(true);
+  // null = celý tým (agregát), jinak trend jednoho uživatele.
+  const [selectedUserId, setSelectedUserId] = useState(null);
+  const trendRef = useRef(null);
+
+  // Klik na kartu → přepne trend na daného usera a odscrolluje na graf.
+  const selectUser = (uid) => {
+    setSelectedUserId(uid);
+    // Malinké prodlení, aby chart re-renderl, než začneme scrollovat.
+    setTimeout(() => trendRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+  };
 
   const effectiveTeamId = teamId; // null / 0 / concrete
   const isAllTeams = teamId === 0;
@@ -103,12 +113,16 @@ export default function Scoreboard() {
     return t;
   }, [users]);
 
-  // Trend chart data (celý tým) — pro každý ym sečteme on_time / late přes všechny users.
+  // Trend chart data. Když selectedUserId != null, agregujeme jen jeho měsíce.
+  // Jinak sečteme přes všechny users.
   const trendData = useMemo(() => {
     const axis = history.months_axis || [];
+    const source = selectedUserId
+      ? (history.series || []).filter(s => s.user_id === selectedUserId)
+      : (history.series || []);
     return axis.map(ym => {
       let on = 0, late = 0;
-      for (const s of history.series || []) {
+      for (const s of source) {
         const m = s.months.find(x => x.ym === ym);
         if (m) { on += m.on_time; late += m.late; }
       }
@@ -120,7 +134,11 @@ export default function Scoreboard() {
         success_rate: total > 0 ? Math.round((on / total) * 100) : null,
       };
     });
-  }, [history]);
+  }, [history, selectedUserId]);
+
+  const selectedUserName = selectedUserId
+    ? (users.find(u => u.user_id === selectedUserId)?.name || 'Uživatel')
+    : 'Celý tým';
 
   const scopeLabel = isAllTeams ? 'Všechny týmy' : (users[0]?.team_name || currentTeam?.name || '');
 
@@ -178,9 +196,26 @@ export default function Scoreboard() {
             </div>
 
             {/* Měsíční trend */}
-            <div className="bg-white border border-cream-200 rounded-xl p-4">
-              <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
-                📈 Měsíční trend — úspěšnost {scopeLabel}
+            <div ref={trendRef} className="bg-white border border-cream-200 rounded-xl p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide">
+                  📈 Měsíční trend — úspěšnost {selectedUserName}
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-ink-500">Uživatel:</label>
+                  <select
+                    value={selectedUserId ?? ''}
+                    onChange={e => setSelectedUserId(e.target.value ? Number(e.target.value) : null)}
+                    className="text-xs border border-ink-300 rounded px-2 py-1"
+                  >
+                    <option value="">Celý tým</option>
+                    {users.map(u => <option key={u.user_id} value={u.user_id}>{u.name}</option>)}
+                  </select>
+                  {selectedUserId != null && (
+                    <button type="button" onClick={() => setSelectedUserId(null)}
+                      className="text-xs text-ink-500 hover:text-ink-700 underline">reset</button>
+                  )}
+                </div>
               </div>
               {trendData.length === 0 ? (
                 <div className="text-ink-400 text-sm italic">Žádná data.</div>
@@ -208,13 +243,15 @@ export default function Scoreboard() {
               </div>
             </div>
 
-            {/* Per user karty s vlastním sparklinem */}
+            {/* Per user karty s vlastním sparklinem. Klik → trend přepne na tohoto usera. */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {users.map(u => (
                 <UserCard
                   key={u.user_id}
                   u={u}
                   isMe={u.user_id === user?.id}
+                  isSelected={selectedUserId === u.user_id}
+                  onSelect={() => selectUser(u.user_id)}
                   seriesMonths={history.series?.find(s => s.user_id === u.user_id)?.months || []}
                   axis={history.months_axis || []}
                 />
@@ -319,31 +356,39 @@ function Kpi({ label, value, color }) {
 }
 
 // Karta per uživatel — bar (objem + úspěšnost) + sparkline trend úspěšnosti.
-function UserCard({ u, isMe, seriesMonths, axis }) {
-  const done = (u.done_on_time || 0) + (u.done_late || 0);
-  const onPct   = done > 0 ? (u.done_on_time / done) * 100 : 0;
-  const latePct = done > 0 ? (u.done_late    / done) * 100 : 0;
+// Klik → nadřazený scoreboard přepne velký trend graf na tohoto usera.
+function UserCard({ u, isMe, isSelected, onSelect, seriesMonths, axis }) {
+  const doneAll  = (u.done_on_time || 0) + (u.done_late || 0) + (u.done_no_deadline || 0);
+  const withDeadline = (u.done_on_time || 0) + (u.done_late || 0);
+  const onPct   = withDeadline > 0 ? (u.done_on_time / withDeadline) * 100 : 0;
+  const latePct = withDeadline > 0 ? (u.done_late    / withDeadline) * 100 : 0;
 
-  // Sparkline data: pro každý měsíc v axis vypočti procenta úspěšnosti (0-100),
-  // pokud user v ten měsíc nic nedokončil, nechme null (Recharts to přeskočí).
   const spark = axis.map(ym => {
     const m = seriesMonths.find(x => x.ym === ym);
     if (!m || (m.on_time + m.late) === 0) return { ym, rate: null };
     return { ym, rate: Math.round((m.on_time / (m.on_time + m.late)) * 100) };
   });
 
+  const cardCls = isSelected
+    ? 'bg-brand-50 border-brand-400 ring-2 ring-brand-300'
+    : isMe
+      ? 'bg-accent-50 border-accent-200 hover:border-accent-300'
+      : 'bg-white border-cream-200 hover:border-cream-300';
+
   return (
-    <div className={`rounded-xl border p-3 ${
-      isMe ? 'bg-accent-50 border-accent-200' : 'bg-white border-cream-200'
-    }`}>
+    <div
+      onClick={onSelect}
+      className={`rounded-xl border p-3 cursor-pointer transition ${cardCls}`}
+      title="Klik zobrazí měsíční trend tohoto uživatele nahoře"
+    >
       <div className="flex items-center gap-3 mb-2">
         <Avatar user={{ id: u.user_id, name: u.name, avatar_updated_at: u.avatar_updated_at }} size={36} />
         <div className="flex-1 min-w-0">
           <div className={`font-medium truncate ${isMe ? 'text-accent-700' : 'text-ink-800'}`}>
             {u.name}{isMe && <span className="ml-1 text-[10px] text-accent-500">(já)</span>}
           </div>
-          <div className="text-[11px] text-ink-500">
-            {done} dokončeno · 🔓 {(u.in_progress || 0) + (u.overdue || 0)} otevřených
+          <div className="text-[11px] text-ink-500 truncate">
+            Klikni pro trend →
           </div>
         </div>
         <div className={`text-lg font-bold ${
@@ -357,13 +402,35 @@ function UserCard({ u, isMe, seriesMonths, axis }) {
         </div>
       </div>
 
-      {/* Bar objem + úspěšnost */}
-      <div className="h-3 bg-cream-100 rounded overflow-hidden flex mb-2">
-        {onPct   > 0 && <div className="h-full bg-emerald-500" style={{ width: `${onPct}%`   }} />}
-        {latePct > 0 && <div className="h-full bg-amber-500"   style={{ width: `${latePct}%` }} />}
+      {/* 4 čísla: celkem / hotové / hotové po termínu (pozdě) / nehotové po termínu */}
+      <div className="grid grid-cols-4 gap-1 text-[11px] mb-2">
+        <div className="bg-cream-50 rounded px-1.5 py-1 text-center">
+          <div className="font-bold text-ink-700 tabular-nums">{u.total || 0}</div>
+          <div className="text-ink-500 text-[10px]">celkem</div>
+        </div>
+        <div className="bg-emerald-50 rounded px-1.5 py-1 text-center">
+          <div className="font-bold text-emerald-700 tabular-nums">{doneAll}</div>
+          <div className="text-emerald-600/70 text-[10px]">hotové</div>
+        </div>
+        <div className="bg-amber-50 rounded px-1.5 py-1 text-center">
+          <div className="font-bold text-amber-700 tabular-nums">{u.done_late || 0}</div>
+          <div className="text-amber-600/70 text-[10px]">pozdě</div>
+        </div>
+        <div className="bg-red-50 rounded px-1.5 py-1 text-center">
+          <div className="font-bold text-red-600 tabular-nums">{u.overdue || 0}</div>
+          <div className="text-red-500/70 text-[10px]">po term.</div>
+        </div>
       </div>
 
-      {/* Sparkline trend úspěšnosti */}
+      {/* Bar úspěšnosti (jen dokončené úkoly s termínem — vizualizuje poměr včas/pozdě) */}
+      {withDeadline > 0 && (
+        <div className="h-2 bg-cream-100 rounded overflow-hidden flex mb-2">
+          {onPct   > 0 && <div className="h-full bg-emerald-500" style={{ width: `${onPct}%`   }} />}
+          {latePct > 0 && <div className="h-full bg-amber-500"   style={{ width: `${latePct}%` }} />}
+        </div>
+      )}
+
+      {/* Sparkline trend úspěšnosti — jen když je co ukázat */}
       {spark.some(s => s.rate != null) && (
         <ResponsiveContainer width="100%" height={40}>
           <LineChart data={spark} margin={{ top: 2, right: 4, left: 0, bottom: 2 }}>
