@@ -341,6 +341,15 @@ router.post('/', requireAuth, async (req, res) => {
     } else { throw err; }
   }
   const task = r.rows[0];
+  // Ulož zadavatele úkolu (pro workflow "žádost o změnu termínu").
+  // Defenzivně — kdyby migrace 2026-07-07 ještě nedoběhla, sloupec neexistuje.
+  try {
+    await query(`UPDATE tasks SET created_by = $1 WHERE id = $2`, [req.user.id, task.id]);
+    task.created_by = req.user.id;
+  } catch (err) {
+    if (err.code !== '42703') throw err;
+    console.warn('[tasks] created_by column not present; skipping');
+  }
   // AI odhad na pozadí (neblokuje response)
   kickoffAIEstimate(task);
 
@@ -426,10 +435,35 @@ router.put('/:id', requireAuth, async (req, res) => {
   const cur = curR.rows[0];
   if (!cur) return res.status(404).json({ error: 'not_found' });
 
+  // Gate na změnu termínu: přímo mohou creator, admin nebo (fallback pro
+  // legacy tasky bez created_by) manager projektu. Ostatní musí přes
+  // žádost o změnu termínu → FE zachytí 'requires_due_change_request'
+  // a otevře modal.
+  if ('due_date' in req.body) {
+    const iso = (d) => d ? String(d).slice(0, 10) : null;
+    if (iso(req.body.due_date) !== iso(cur.due_date)) {
+      const isCreator = cur.created_by && cur.created_by === req.user.id;
+      const isAdmin = req.user.role === 'admin';
+      let hasDirect = isCreator || isAdmin;
+      if (!hasDirect && !cur.created_by) {
+        const p = await query('SELECT manager_id FROM projects WHERE id = $1', [cur.project_id]);
+        if (p.rows[0]?.manager_id === req.user.id) hasDirect = true;
+      }
+      if (!hasDirect) {
+        return res.status(400).json({
+          error: 'requires_due_change_request',
+          message: 'Termín tohoto úkolu můžeš posunout jen přes žádost o změnu termínu.',
+        });
+      }
+    }
+  }
+
   if (!can.createTasks(req.user)) {
     // Externí dev / běžný assignee může u VLASTNÍHO úkolu měnit jen status, popis (poznámku) nebo actual_h.
     if (cur.assignee_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
-    const allowed = ['status', 'description', 'actual_h'];
+    // due_date je zde povolený, protože gate check výše už rozhodl, zda smí projít
+    // (creator/admin/manager projektu) nebo musí přes žádost.
+    const allowed = ['status', 'description', 'actual_h', 'due_date'];
     const keys = Object.keys(req.body || {}).filter(k => allowed.includes(k));
     if (keys.length === 0) return res.status(400).json({ error: 'no_allowed_fields' });
 
@@ -449,6 +483,7 @@ router.put('/:id', requireAuth, async (req, res) => {
     const params = [];
     if ('status' in req.body) { params.push(req.body.status); sets.push(`status = $${params.length}`); }
     if ('description' in req.body) { params.push(req.body.description ?? null); sets.push(`description = $${params.length}`); }
+    if ('due_date' in req.body) { params.push(req.body.due_date || null); sets.push(`due_date = $${params.length}`); }
     if ('actual_h' in comp)     { params.push(comp.actual_h);     sets.push(`actual_h = $${params.length}`); }
     if ('completed_at' in comp) { params.push(comp.completed_at); sets.push(`completed_at = $${params.length}`); }
     if ('completed_by' in comp) { params.push(comp.completed_by); sets.push(`completed_by = $${params.length}`); }

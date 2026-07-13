@@ -102,8 +102,26 @@ router.get('/', requireAuth, async (req, res) => {
     GROUP BY p.team_id
   `, [uid]);
 
-  const [rq, nf, inbox, answ, mine] = await Promise.all([
-    reviewQ, needsFixQ, inboxQ, answersQ, myTasksQ,
+  // dueRequests: pending žádosti čekající na mě (jako reviewer) + moje
+  // vyřešené nepřečtené (souhrnný badge). Defenzivně: tabulka mohla ještě
+  // nevzniknout, pokud migrace 2026-07-07 nedoběhla.
+  const dueRequestsQ = query(`
+    SELECT p.team_id, COUNT(*)::int AS n
+    FROM task_due_change_requests r
+    JOIN tasks t ON t.id = r.task_id
+    JOIN projects p ON p.id = t.project_id
+    WHERE (
+      (r.reviewer_id = $1 AND r.status = 'pending')
+      OR (r.requester_id = $1 AND r.status != 'pending' AND r.seen_by_requester = FALSE)
+    )
+    GROUP BY p.team_id
+  `, [uid]).catch(err => {
+    if (err.code === '42P01') return { rows: [] }; // tabulka neexistuje
+    throw err;
+  });
+
+  const [rq, nf, inbox, answ, mine, dueReq] = await Promise.all([
+    reviewQ, needsFixQ, inboxQ, answersQ, myTasksQ, dueRequestsQ,
   ]);
 
   res.json({
@@ -112,6 +130,7 @@ router.get('/', requireAuth, async (req, res) => {
     inboxPending:  bucket(inbox.rows),
     answersUnread: bucket(answ.rows),
     myTasks:       bucket(mine.rows),
+    dueRequests:   bucket(dueReq.rows),
   });
 });
 

@@ -31,6 +31,7 @@ import emailRoutes from './routes/email.js';
 import notificationsRoutes from './routes/notifications.js';
 import ideasRoutes from './routes/ideas.js';
 import navCountsRoutes from './routes/nav-counts.js';
+import dueChangeRequestsRoutes from './routes/due-change-requests.js';
 import { startPushCron } from './pushCron.js';
 import { agentConfig, describeAgentConfig, validateAgentConfig } from './aiAgent/config.js';
 
@@ -74,6 +75,7 @@ app.use('/api/email', emailRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/ideas', ideasRoutes);
 app.use('/api/nav-counts', navCountsRoutes);
+app.use('/api/due-change-requests', dueChangeRequestsRoutes);
 
 // Statické přílohy
 app.use('/uploads', express.static(uploadsDir, {

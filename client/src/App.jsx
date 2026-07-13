@@ -20,6 +20,7 @@ import Scoreboard from './pages/Scoreboard.jsx';
 import Notes from './pages/Notes.jsx';
 import EmailPage from './pages/Email.jsx';
 import AnsweredQuestions from './pages/AnsweredQuestions.jsx';
+import DueChangeRequests from './pages/DueChangeRequests.jsx';
 import Napadnik from './pages/Napadnik.jsx';
 import NapadnikForm from './pages/NapadnikForm.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
@@ -55,6 +56,7 @@ function ProtectedRoutes() {
         <Route path="/email" element={<EmailPage />} />
         <Route path="/questions" element={<Questions />} />
         <Route path="/answers" element={<AnsweredQuestions />} />
+        <Route path="/due-requests" element={<DueChangeRequests />} />
         <Route path="/time" element={<TimeTracking />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/ai" element={<AIPage />} />

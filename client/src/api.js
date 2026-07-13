@@ -89,6 +89,19 @@ export const navCounts = {
   get: () => api.get('/nav-counts').then(r => r.data),
 };
 
+// Žádosti o změnu termínu úkolu.
+export const dueChangeRequests = {
+  list:      (box) => api.get('/due-change-requests', { params: { box } }).then(r => r.data),
+  counts:    () => api.get('/due-change-requests/counts').then(r => r.data),
+  create:    (task_id, requested_due, requester_note) =>
+             api.post('/due-change-requests', { task_id, requested_due, requester_note }).then(r => r.data),
+  approve:   (id, counter_due, reviewer_note) =>
+             api.post(`/due-change-requests/${id}/approve`, { counter_due, reviewer_note }).then(r => r.data),
+  reject:    (id, reviewer_note) =>
+             api.post(`/due-change-requests/${id}/reject`, { reviewer_note }).then(r => r.data),
+  markSeen:  () => api.post('/due-change-requests/mark-seen').then(r => r.data),
+};
+
 export const ai = {
   status:   () => api.get('/ai/status').then(r => r.data),
   // scope: 'team' (default) | 'all' (executive view, jen pro privilegované uživatele)

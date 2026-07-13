@@ -20,6 +20,7 @@ const NAV = [
   { to: '/review',    label: 'Review k dokončení', icon: '👀', badge: 'reviewQueue', requireManager: true, hasTeamSubmenu: true },
   { to: '/questions', label: 'Dotazy k vyřešení',  icon: '💬', badge: 'inboxPending', hasTeamSubmenu: true },
   { to: '/answers',   label: 'Odpovědi na dotazy', icon: '📩', badge: 'answersUnread', hasTeamSubmenu: true },
+  { to: '/due-requests', label: 'Žádosti o zm. termínu', icon: '📅', badge: 'dueRequests' },
   { to: '/notes',     label: 'Poznámky',           icon: '📝' },
   { to: '/napadnik',  label: 'Nápadník',           icon: '💡', requireIdeaAccess: true },
   { to: '/email',     label: 'Email',              icon: '📧' },

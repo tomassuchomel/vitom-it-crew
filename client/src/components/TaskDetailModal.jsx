@@ -2,7 +2,7 @@
 // Sloučí: editaci úkolu, akce stavu, poznámku (popis), přílohy a vlákno dotazů.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { tasks as tasksApi, questions as questionsApi, users as usersApi } from '../api.js';
+import { tasks as tasksApi, questions as questionsApi, users as usersApi, dueChangeRequests as dueApi } from '../api.js';
 import { useAuth, can, ROLE_LABELS } from '../auth.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge, STATUS_META } from './TaskStatus.jsx';
 import Avatar from './Avatar.jsx';
@@ -319,6 +319,11 @@ function FullEditSection({ task, onSave }) {
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  // Inline panel na vytvoření žádosti o změnu termínu, kdyby BE odmítl
+  // přímou změnu due_date (uživatel není creator/admin/manager).
+  const [dueReqOpen, setDueReqOpen] = useState(false);
+  const [dueReqNote, setDueReqNote] = useState('');
+  const [dueReqDone, setDueReqDone] = useState(false);
 
   useEffect(() => {
     setForm({
@@ -330,7 +335,7 @@ function FullEditSection({ task, onSave }) {
   }, [task.id]);
 
   const save = async () => {
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setDueReqOpen(false);
     try {
       await onSave({
         title: form.title.trim(),
@@ -340,10 +345,26 @@ function FullEditSection({ task, onSave }) {
       });
       setOpen(false);
     } catch (e) {
-      setErr(e.response?.data?.error || 'Uložení selhalo');
+      if (e.response?.data?.error === 'requires_due_change_request') {
+        // Nemůžu měnit termín přímo. Nabídnu vytvoření žádosti.
+        setDueReqOpen(true);
+      } else {
+        setErr(e.response?.data?.error || 'Uložení selhalo');
+      }
     } finally {
       setBusy(false);
     }
+  };
+
+  const submitDueRequest = async () => {
+    setBusy(true); setErr(null);
+    try {
+      await dueApi.create(task.id, form.due_date, dueReqNote.trim() || null);
+      setDueReqDone(true);
+      setDueReqOpen(false);
+    } catch (e) {
+      setErr(e.response?.data?.message || 'Odeslání žádosti selhalo.');
+    } finally { setBusy(false); }
   };
 
   if (!open) {
@@ -410,6 +431,33 @@ function FullEditSection({ task, onSave }) {
           >Zrušit</button>
           {err && <span className="text-xs text-red-600">{err}</span>}
         </div>
+
+        {/* Panel na vytvoření žádosti o změnu termínu — otevře se, když BE
+            odmítne přímou změnu due_date (user není creator/admin/manager). */}
+        {dueReqOpen && (
+          <div className="mt-3 bg-amber-50 border border-amber-300 rounded-lg p-3 space-y-2">
+            <div className="text-xs text-amber-800">
+              📅 Termín tohoto úkolu ti nemůže posunout přímo — musíš požádat zadavatele.
+              Nový navrhovaný termín: <strong>{form.due_date || '(prázdné)'}</strong>
+            </div>
+            <textarea rows={2} value={dueReqNote} onChange={e => setDueReqNote(e.target.value)}
+              placeholder="Krátce vysvětli, proč potřebuješ jiný termín (volitelné)"
+              className="w-full text-xs border border-amber-300 rounded px-2 py-1.5" />
+            <div className="flex items-center gap-2">
+              <button onClick={submitDueRequest} disabled={busy}
+                className="px-3 py-1 text-xs bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50">
+                {busy ? 'Odesílám…' : 'Poslat žádost'}
+              </button>
+              <button onClick={() => setDueReqOpen(false)}
+                className="px-3 py-1 text-xs text-ink-500 hover:text-ink-700">Zrušit</button>
+            </div>
+          </div>
+        )}
+        {dueReqDone && (
+          <div className="mt-3 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2">
+            ✅ Žádost odeslána zadavateli. Uvidíš ji ve „Žádosti o zm. termínu".
+          </div>
+        )}
       </div>
     </Section>
   );
