@@ -3,7 +3,8 @@
 // Neread odpovědi mají answer_read=false (badge v menu).
 // Po otevření stránky voláme mark-answers-read → badge zmizí.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import { questions as questionsApi, tasks as tasksApi } from '../api.js';
@@ -18,6 +19,14 @@ export default function AnsweredQuestions() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [detailTask, setDetailTask] = useState(null);
+  const [searchParams] = useSearchParams();
+  const teamIdFilter = Number(searchParams.get('team')) || null;
+
+  // Client-side filter dle URL ?team=N (BE questions vrací scope_team_id).
+  const filteredItems = useMemo(
+    () => teamIdFilter ? items.filter(q => q.scope_team_id === teamIdFilter) : items,
+    [items, teamIdFilter]
+  );
 
   const load = () => {
     setLoading(true);
@@ -46,7 +55,7 @@ export default function AnsweredQuestions() {
     <div>
       <PageHeader
         title="Odpovědi na dotazy"
-        subtitle={`${items.length} odpověď/i na tvoje položené dotazy`}
+        subtitle={`${filteredItems.length} odpověď/i na tvoje položené dotazy${teamIdFilter ? ' (filtrováno)' : ''}`}
         actions={
           <button onClick={load} disabled={loading}
             className="px-3 py-1.5 text-sm rounded border border-cream-300 hover:bg-cream-50 disabled:opacity-50">
@@ -58,13 +67,13 @@ export default function AnsweredQuestions() {
       <div className="p-6 max-w-4xl">
         {loading ? (
           <div className="text-ink-400 text-sm">Načítám…</div>
-        ) : items.length === 0 ? (
+        ) : filteredItems.length === 0 ? (
           <div className="bg-white border border-cream-200 rounded-xl p-8 text-center text-ink-400 text-sm">
             Zatím žádné odpovědi. Když někdo odpoví na tvůj dotaz, objeví se tady.
           </div>
         ) : (
           <ul className="space-y-2">
-            {items.map(q => (
+            {filteredItems.map(q => (
               <li key={q.id}
                 className={`bg-white border rounded-lg p-4 ${
                   q.answer_read === false ? 'border-accent-300 bg-accent-50/30' : 'border-cream-200'

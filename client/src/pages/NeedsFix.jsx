@@ -9,8 +9,8 @@
 // Klik na kartu otevře TaskDetailModal s plnou aktivitou (review history,
 // přílohy, popis). Tlačítko "Začít opravu" rovnou přepne status na in_progress.
 
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import Avatar from '../components/Avatar.jsx';
@@ -33,6 +33,14 @@ export default function NeedsFix() {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [detailTask, setDetailTask] = useState(null);
+  const [searchParams] = useSearchParams();
+  const teamIdFilter = Number(searchParams.get('team')) || null;
+
+  // Cross-team default (BE vrací napříč všemi mými týmy). Filter dle URL ?team=N.
+  const filteredTasks = useMemo(
+    () => teamIdFilter ? tasks.filter(t => t.project_team_id === teamIdFilter) : tasks,
+    [tasks, teamIdFilter]
+  );
 
   const load = (silent = false) => {
     if (!silent) setLoading(true);
@@ -61,16 +69,16 @@ export default function NeedsFix() {
         title="🔄 Vrácené k opravě"
         subtitle={
           loading ? 'Načítám…'
-            : tasks.length === 0
+            : filteredTasks.length === 0
               ? 'Žádné úkoly vrácené k úpravě 🎉'
-              : `${tasks.length} úkol(ů) ti manager vrátil k opravě`
+              : `${filteredTasks.length} úkol(ů) ti manager vrátil k opravě${teamIdFilter ? ' (filtrováno)' : ''}`
         }
       />
 
       <div className="p-6">
         {loading ? (
           <div className="text-slate-500">Načítám…</div>
-        ) : tasks.length === 0 ? (
+        ) : filteredTasks.length === 0 ? (
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-8 text-center">
             <div className="text-4xl mb-2">✨</div>
             <div className="text-emerald-700 font-medium">Žádné vrácené úkoly</div>
@@ -80,7 +88,7 @@ export default function NeedsFix() {
           </div>
         ) : (
           <ul className="space-y-3">
-            {tasks.map(t => (
+            {filteredTasks.map(t => (
               <TaskCard
                 key={t.id}
                 task={t}

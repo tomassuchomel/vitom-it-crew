@@ -6,7 +6,7 @@ import { useTeams } from '../teams.jsx';
 // zapnut. Funkce useFeature() z teams.jsx by potřebovala flag jako argument; tady to
 // uděláme inline přes currentTeam.features.
 const teamHasFeature = (team, key) => !!team?.features?.[key];
-import { questions as questionsApi, reviews as reviewsApi, ideas as ideasApi } from '../api.js';
+import { ideas as ideasApi, navCounts as navCountsApi } from '../api.js';
 import VitomLogo from './VitomLogo.jsx';
 import Avatar from './Avatar.jsx';
 import AIAdvisor from './AIAdvisor.jsx';
@@ -15,11 +15,11 @@ import QuickCaptureFAB from './QuickCaptureFAB.jsx';
 const NAV = [
   { to: '/',          label: 'Timeline',           icon: '📅' },
   { to: '/projects',  label: 'Projekty',           icon: '📁' },
-  { to: '/my-tasks',  label: 'Moje úkoly',         icon: '✅', hasTeamSubmenu: true },
-  { to: '/needs-fix', label: 'Vrácené k opravě',   icon: '🔄', badge: 'needsFix' },
+  { to: '/my-tasks',  label: 'Moje úkoly',         icon: '✅', badge: 'myTasks', hasTeamSubmenu: true },
+  { to: '/needs-fix', label: 'Vrácené k opravě',   icon: '🔄', badge: 'needsFix', hasTeamSubmenu: true },
   { to: '/review',    label: 'Review k dokončení', icon: '👀', badge: 'reviewQueue', requireManager: true, hasTeamSubmenu: true },
   { to: '/questions', label: 'Dotazy k vyřešení',  icon: '💬', badge: 'inboxPending', hasTeamSubmenu: true },
-  { to: '/answers',   label: 'Odpovědi na dotazy', icon: '📩', badge: 'answersUnread' },
+  { to: '/answers',   label: 'Odpovědi na dotazy', icon: '📩', badge: 'answersUnread', hasTeamSubmenu: true },
   { to: '/notes',     label: 'Poznámky',           icon: '📝' },
   { to: '/napadnik',  label: 'Nápadník',           icon: '💡', requireIdeaAccess: true },
   { to: '/email',     label: 'Email',              icon: '📧' },
@@ -36,7 +36,14 @@ export default function Layout({ children }) {
   const nav = useNavigate();
   const location = useLocation();
   const { currentTeam, teams } = useTeams();
-  const [counts, setCounts] = useState({ inboxPending: 0, sentPending: 0, reviewQueue: 0, needsFix: 0, answersUnread: 0 });
+  // Sjednocené counts z /api/nav-counts. Každá kategorie:
+  //   { total, byTeam: { <team_id>: <count> } }
+  // Prázdný default aby přístupy .total/.byTeam v renderu nespadly.
+  const emptyCat = { total: 0, byTeam: {} };
+  const [counts, setCounts] = useState({
+    myTasks: emptyCat, needsFix: emptyCat, reviewQueue: emptyCat,
+    inboxPending: emptyCat, answersUnread: emptyCat,
+  });
   // Nápadník je vyhrazený Managementu a PM Nápadníku. Menu se skryje pro ostatní.
   const [ideaAccess, setIdeaAccess] = useState(false);
   useEffect(() => {
@@ -56,22 +63,14 @@ export default function Layout({ children }) {
     return next;
   });
 
-  // Načítáme počet nevyřízených dotazů + review fronty + vrácených úkolů.
-  // Periodicky (30s) a při změně stránky, ať badge svítí aktuální číslo.
+  // Sjednocený endpoint /api/nav-counts — jedno volání pro všechny badge.
+  // Periodicky 30s + při navigaci, ať čísla svítí aktuální.
   useEffect(() => {
     let mounted = true;
     const refresh = async () => {
       try {
-        const [q, r, nf] = await Promise.all([
-          questionsApi.counts(),
-          can.manageProjects(user) ? reviewsApi.queue().catch(() => ({ tasks: [] })) : Promise.resolve({ tasks: [] }),
-          reviewsApi.needsFix().catch(() => ({ tasks: [] })),
-        ]);
-        if (mounted) setCounts({
-          ...q,
-          reviewQueue: r.tasks?.length || 0,
-          needsFix: nf.tasks?.length || 0,
-        });
+        const d = await navCountsApi.get();
+        if (mounted) setCounts(d);
       } catch {/* ignore */}
     };
     refresh();
@@ -137,7 +136,10 @@ export default function Layout({ children }) {
             (!n.requireFeature || teamHasFeature(currentTeam, n.requireFeature)) &&
             (!n.requireIdeaAccess || ideaAccess)
           ).map(item => {
-            const badgeNum = item.badge ? counts[item.badge] : 0;
+            // counts[item.badge] je { total, byTeam } (nebo undefined u položek bez badge).
+            const cat = item.badge ? counts[item.badge] : null;
+            const badgeNum = cat?.total || 0;
+            const byTeam = cat?.byTeam || {};
             // Submenu jen dává smysl, když je user aspoň ve 2 týmech (přepínání)
             const showSubmenu = item.hasTeamSubmenu && teams?.length >= 2;
             const isExpanded = expandedSubmenu.has(item.to);
@@ -174,23 +176,32 @@ export default function Layout({ children }) {
                     <NavLink
                       to={item.to}
                       end
-                      className={({ isActive }) => `block pl-14 pr-6 py-1.5 text-[13px] transition ${
+                      className={({ isActive }) => `flex items-center pl-14 pr-6 py-1.5 text-[13px] transition ${
                         isActive && !new URLSearchParams(location.search).get('team')
                           ? 'text-white font-medium' : 'text-cream-100/70 hover:text-cream-50'
                       }`}
-                    >Vše (napříč týmy)</NavLink>
-                    {teams.map(t => (
-                      <NavLink
-                        key={t.id}
-                        to={`${item.to}?team=${t.id}`}
-                        className={({ isActive }) => {
-                          const activeThis = isActive && Number(new URLSearchParams(location.search).get('team')) === t.id;
-                          return `block pl-14 pr-6 py-1.5 text-[13px] transition ${
-                            activeThis ? 'text-white font-medium' : 'text-cream-100/70 hover:text-cream-50'
-                          }`;
-                        }}
-                      >· {t.name}</NavLink>
-                    ))}
+                    >
+                      <span className="flex-1">Vše (napříč týmy)</span>
+                      {badgeNum > 0 && <span className="text-[11px] text-cream-100/50 ml-2">{badgeNum}</span>}
+                    </NavLink>
+                    {teams.map(t => {
+                      const n = byTeam[t.id] || 0;
+                      return (
+                        <NavLink
+                          key={t.id}
+                          to={`${item.to}?team=${t.id}`}
+                          className={({ isActive }) => {
+                            const activeThis = isActive && Number(new URLSearchParams(location.search).get('team')) === t.id;
+                            return `flex items-center pl-14 pr-6 py-1.5 text-[13px] transition ${
+                              activeThis ? 'text-white font-medium' : 'text-cream-100/70 hover:text-cream-50'
+                            }`;
+                          }}
+                        >
+                          <span className="flex-1">· {t.name}</span>
+                          {n > 0 && <span className="text-[11px] text-cream-100/50 ml-2">{n}</span>}
+                        </NavLink>
+                      );
+                    })}
                   </div>
                 )}
               </div>

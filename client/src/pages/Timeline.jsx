@@ -5,8 +5,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import { projects as projectsApi, reports as reportsApi } from '../api.js';
-import { useFeature } from '../teams.jsx';
+import { useFeature, useTeams } from '../teams.jsx';
 import Avatar from '../components/Avatar.jsx';
+import ScoreStrip from '../components/ScoreStrip.jsx';
 
 const PROJECT_COLORS = ['#0c363e', '#e72b78', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4'];
 const HOURS_PER_DAY = 6; // pracovních hodin denně – konstanta podle zadání
@@ -59,6 +60,9 @@ export default function Timeline() {
   // Forecast linka „od dneška + zbývající odhad" – zapnutá jen pro teamy s feature flag
   // timeline_forecast (default: IT team). Ukazuje overcommit, když odhad přesahuje deadline.
   const forecastEnabled = useFeature('timeline_forecast');
+  // Score Strip nahoře — jen když má team feature flag success_metrics.
+  const scoreEnabled = useFeature('success_metrics');
+  const { currentTeam } = useTeams();
 
   useEffect(() => {
     Promise.all([projectsApi.list(), reportsApi.who(), reportsApi.done({ days: 14 })])
@@ -91,6 +95,20 @@ export default function Timeline() {
           )
         }
       />
+
+      {scoreEnabled && (
+        <div className="px-4 sm:px-8 pt-4 sm:pt-6">
+          <div className="bg-white border border-cream-200 rounded-xl p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide">
+                🏆 Skóre týmu {currentTeam?.name ? `— ${currentTeam.name}` : ''}
+              </div>
+              <Link to="/scoreboard" className="text-xs text-brand-600 hover:underline">Celý přehled →</Link>
+            </div>
+            <ScoreStrip teamName={currentTeam?.name} />
+          </div>
+        </div>
+      )}
 
       <div className="p-4 sm:p-8 space-y-6 sm:space-y-8">
         {projects.length === 0 ? (

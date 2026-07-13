@@ -1,21 +1,27 @@
-// Scoreboard – gamifikovaný přehled úspěšnosti uživatelů v dokončování úkolů.
-// Visible všem členům current teamu (transparentnost = gamifikace).
+// Scoreboard — přehled úspěšnosti dokončování úkolů v termínu.
 //
-// Tabulka má řazení podle success_rate. Top 3 mají barevné medaile.
-// User vidí pro každého: assigned/done_on_time/done_late/overdue/in_progress/success_rate.
+// Struktura:
+//   1) Filter panel: [Team dropdown | months=6/12/24 chip]
+//      Admin: k dropdown přidán "Všechny týmy (celkem)".
+//   2) KPI karty (celkem: on_time / late / overdue / success_rate).
+//   3) Měsíční trend — line chart úspěšnost týmu za posledních N měsíců (Recharts).
+//   4) Karty per user: mini bar (objem + úspěšnost) + sparkline za N měsíců.
+//   5) Detailní tabulka žebříčku (jako dřív, řazená dle success_rate).
+//   6) Admin only: přehled per tým (počty a úspěšnost).
 //
-// Aktivní jen pro teamy s feature flag success_metrics: true (zatím Management).
-// Když ho team nemá zapnutý, stránka ukáže info "feature nezapnut".
+// Feature flag success_metrics gate-uje stránku pro current team; admin cross-team
+// vidí bez ohledu na flag.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
+import { useAuth } from '../auth.jsx';
 import { useTeams, useFeature } from '../teams.jsx';
 import { scoreboard as scoreboardApi } from '../api.js';
 
 const MEDAL = ['🥇', '🥈', '🥉'];
 
-// Barva success rate badge dle hodnoty
 function rateClass(rate) {
   if (rate == null) return 'bg-slate-100 text-slate-500';
   if (rate >= 90)   return 'bg-emerald-100 text-emerald-800';
@@ -25,29 +31,55 @@ function rateClass(rate) {
 }
 
 export default function Scoreboard() {
-  const { currentTeam } = useTeams();
+  const { user } = useAuth();
+  const { currentTeam, teams } = useTeams();
   const featureOn = useFeature('success_metrics');
+  const isAdmin = user?.role === 'admin';
+
+  // Filter: default = current team; admin může přepnout na jiný tým nebo 0 (celkem).
+  const [teamId, setTeamId] = useState(null); // null = default (current team)
+  const [months, setMonths] = useState(6);
+
   const [users, setUsers] = useState([]);
+  const [history, setHistory] = useState({ series: [], months_axis: [] });
+  const [teamsOverview, setTeamsOverview] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (!featureOn) { setLoading(false); return; }
-    setLoading(true);
-    scoreboardApi.list()
-      .then(d => setUsers(d.users || []))
-      .finally(() => setLoading(false));
-  }, [featureOn, currentTeam?.id]);
+  const effectiveTeamId = teamId; // null / 0 / concrete
+  const isAllTeams = teamId === 0;
 
-  if (!featureOn) {
+  useEffect(() => {
+    // Non-admin bez success_metrics stránku ani neskládá.
+    if (!isAdmin && !featureOn) { setLoading(false); return; }
+    setLoading(true);
+    const load = async () => {
+      const [snap, hist] = await Promise.all([
+        scoreboardApi.list(effectiveTeamId).catch(() => ({ users: [] })),
+        scoreboardApi.history(effectiveTeamId, months).catch(() => ({ series: [], months_axis: [] })),
+      ]);
+      setUsers(snap.users || []);
+      setHistory(hist);
+    };
+    load().finally(() => setLoading(false));
+  }, [effectiveTeamId, months, featureOn, isAdmin, currentTeam?.id]);
+
+  // Admin: přehled per tým — jen když je zvolen "Všechny týmy".
+  useEffect(() => {
+    if (!isAdmin || !isAllTeams) { setTeamsOverview(null); return; }
+    scoreboardApi.teamsOverview().then(setTeamsOverview).catch(() => setTeamsOverview(null));
+  }, [isAdmin, isAllTeams]);
+
+  // Feature gate zprávy pro ne-admin bez flagu na current teamu.
+  if (!isAdmin && !featureOn) {
     return (
       <div>
         <PageHeader title="Skóre" subtitle="Úspěšnost dokončování úkolů v termínu" />
         <div className="p-6">
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 text-center">
             <div className="text-2xl mb-2">🔒</div>
-            <div className="text-amber-800 font-medium">Skóre není pro tento team zapnuto.</div>
+            <div className="text-amber-800 font-medium">Skóre není pro tento tým zapnuté.</div>
             <div className="text-sm text-amber-700 mt-1">
-              Admin může v <a href="/admin" className="underline">Admin → Teamy</a> zaškrtnout feature
+              Admin může v <a href="/admin" className="underline">Admin → Týmy</a> zaškrtnout feature
               flag <code>success_metrics</code>.
             </div>
           </div>
@@ -56,56 +88,165 @@ export default function Scoreboard() {
     );
   }
 
-  if (loading) return <div className="p-6 text-ink-500">Načítám…</div>;
+  // Souhrn (KPI) přes všechny users v snapshot
+  const totals = useMemo(() => {
+    const t = { on_time: 0, late: 0, overdue: 0, in_progress: 0, done_no_deadline: 0 };
+    for (const u of users) {
+      t.on_time += u.done_on_time || 0;
+      t.late    += u.done_late || 0;
+      t.overdue += u.overdue || 0;
+      t.in_progress += u.in_progress || 0;
+      t.done_no_deadline += u.done_no_deadline || 0;
+    }
+    const denom = t.on_time + t.late + t.overdue;
+    t.success_rate = denom > 0 ? Math.round((t.on_time / denom) * 100) : null;
+    return t;
+  }, [users]);
+
+  // Trend chart data (celý tým) — pro každý ym sečteme on_time / late přes všechny users.
+  const trendData = useMemo(() => {
+    const axis = history.months_axis || [];
+    return axis.map(ym => {
+      let on = 0, late = 0;
+      for (const s of history.series || []) {
+        const m = s.months.find(x => x.ym === ym);
+        if (m) { on += m.on_time; late += m.late; }
+      }
+      const total = on + late;
+      return {
+        ym,
+        on_time: on,
+        late,
+        success_rate: total > 0 ? Math.round((on / total) * 100) : null,
+      };
+    });
+  }, [history]);
+
+  const scopeLabel = isAllTeams ? 'Všechny týmy' : (users[0]?.team_name || currentTeam?.name || '');
 
   return (
     <div>
       <PageHeader
         title="🏆 Skóre"
-        subtitle={`Úspěšnost dokončování úkolů v termínu — ${currentTeam?.name}`}
+        subtitle={`Úspěšnost dokončování úkolů v termínu — ${scopeLabel}`}
       />
-      <div className="p-6 space-y-4">
-        {users.length === 0 ? (
-          <div className="text-ink-400 italic">V teamu zatím není dost dat. Zadejte úkoly s termíny a pak teprve uvidíte skóre.</div>
+
+      <div className="p-4 sm:p-6 space-y-6">
+        {/* Filter */}
+        <div className="flex flex-wrap items-center gap-3">
+          {isAdmin && (
+            <label className="text-sm text-ink-600 flex items-center gap-2">
+              Tým:
+              <select
+                value={teamId ?? currentTeam?.id ?? ''}
+                onChange={e => {
+                  const v = e.target.value;
+                  setTeamId(v === '0' ? 0 : (v === '' ? null : Number(v)));
+                }}
+                className="border border-ink-300 rounded px-2 py-1 text-sm"
+              >
+                {(teams || []).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                <option value="0">Všechny týmy (celkem)</option>
+              </select>
+            </label>
+          )}
+          <div className="flex gap-1">
+            {[3, 6, 12, 24].map(m => (
+              <button key={m} onClick={() => setMonths(m)}
+                className={`px-2 py-1 text-xs rounded border transition ${
+                  months === m ? 'bg-brand-500 text-white border-brand-500'
+                               : 'bg-white text-ink-600 border-cream-300 hover:bg-cream-50'
+                }`}>{m} měs</button>
+            ))}
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="text-ink-500">Načítám…</div>
+        ) : users.length === 0 ? (
+          <div className="text-ink-400 italic">
+            V tomto scope zatím není dost dat. Zadejte úkoly s termíny a skóre uvidíte.
+          </div>
         ) : (
           <>
-            {/* Legend */}
-            <div className="text-xs text-ink-500 flex flex-wrap gap-x-4 gap-y-1">
-              <span><span className="inline-block w-2 h-2 bg-emerald-500 rounded-full mr-1"></span>Včas (≤ termín)</span>
-              <span><span className="inline-block w-2 h-2 bg-red-500 rounded-full mr-1"></span>Pozdě (po termínu)</span>
-              <span><span className="inline-block w-2 h-2 bg-amber-500 rounded-full mr-1"></span>Po termínu, ještě nedokončené</span>
-              <span><span className="inline-block w-2 h-2 bg-blue-500 rounded-full mr-1"></span>Pracuje na</span>
+            {/* KPI karty */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Kpi label="Včas" value={totals.on_time} color="text-emerald-700" />
+              <Kpi label="Pozdě" value={totals.late} color="text-red-600" />
+              <Kpi label="Po termínu (nedokončené)" value={totals.overdue} color="text-amber-700" />
+              <Kpi label="Úspěšnost" value={totals.success_rate == null ? '—' : `${totals.success_rate}%`} color="text-brand-600" />
             </div>
 
-            {/* Žebříček */}
-            <div className="bg-white border border-cream-200 rounded-xl overflow-hidden">
-              <table className="w-full">
+            {/* Měsíční trend */}
+            <div className="bg-white border border-cream-200 rounded-xl p-4">
+              <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
+                📈 Měsíční trend — úspěšnost {scopeLabel}
+              </div>
+              {trendData.length === 0 ? (
+                <div className="text-ink-400 text-sm italic">Žádná data.</div>
+              ) : (
+                <ResponsiveContainer width="100%" height={220}>
+                  <LineChart data={trendData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+                    <CartesianGrid stroke="#eee9e4" strokeDasharray="3 3" />
+                    <XAxis dataKey="ym" tick={{ fill: '#5b7177', fontSize: 11 }} />
+                    <YAxis yAxisId="rate" domain={[0, 100]} tick={{ fill: '#5b7177', fontSize: 11 }} tickFormatter={v => `${v}%`} />
+                    <YAxis yAxisId="count" orientation="right" tick={{ fill: '#5b7177', fontSize: 11 }} />
+                    <Tooltip
+                      formatter={(v, k) => k === 'success_rate' ? `${v ?? '—'}%` : v}
+                      contentStyle={{ border: '1px solid #e2dcd3', borderRadius: 6, fontSize: 12 }}
+                    />
+                    <Line yAxisId="rate" type="monotone" dataKey="success_rate" stroke="#e72b78" strokeWidth={2} dot />
+                    <Line yAxisId="count" type="monotone" dataKey="on_time" stroke="#10b981" strokeWidth={1.5} dot={false} />
+                    <Line yAxisId="count" type="monotone" dataKey="late"    stroke="#f59e0b" strokeWidth={1.5} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+              <div className="text-[11px] text-ink-500 flex gap-3 mt-1">
+                <span><span className="inline-block w-3 h-1 bg-accent-500 align-middle mr-1"></span>Úspěšnost (%)</span>
+                <span><span className="inline-block w-3 h-1 bg-emerald-500 align-middle mr-1"></span>Včas (počet)</span>
+                <span><span className="inline-block w-3 h-1 bg-amber-500 align-middle mr-1"></span>Pozdě (počet)</span>
+              </div>
+            </div>
+
+            {/* Per user karty s vlastním sparklinem */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {users.map(u => (
+                <UserCard
+                  key={u.user_id}
+                  u={u}
+                  isMe={u.user_id === user?.id}
+                  seriesMonths={history.series?.find(s => s.user_id === u.user_id)?.months || []}
+                  axis={history.months_axis || []}
+                />
+              ))}
+            </div>
+
+            {/* Detailní žebříček */}
+            <div className="bg-white border border-cream-200 rounded-xl overflow-x-auto">
+              <table className="w-full min-w-[720px]">
                 <thead className="bg-cream-100 text-xs uppercase tracking-wide text-ink-600">
                   <tr>
                     <th className="px-3 py-2 text-left w-12">#</th>
                     <th className="px-3 py-2 text-left">Uživatel</th>
-                    <th className="px-3 py-2 text-center" title="Úspěšnost = včas / (včas + pozdě + po termínu)">Úspěšnost</th>
-                    <th className="px-3 py-2 text-center" title="Včas dokončeno">✅ Včas</th>
-                    <th className="px-3 py-2 text-center" title="Pozdě dokončeno">⏰ Pozdě</th>
-                    <th className="px-3 py-2 text-center" title="Po termínu, stále nedokončeno">🔥 Po termínu</th>
-                    <th className="px-3 py-2 text-center" title="Pracuje, ještě v termínu">🛠 Pracuje</th>
-                    <th className="px-3 py-2 text-center" title="Dokončeno bez termínu">📦 Bez termínu</th>
+                    <th className="px-3 py-2 text-center">Úspěšnost</th>
+                    <th className="px-3 py-2 text-center">✅ Včas</th>
+                    <th className="px-3 py-2 text-center">⏰ Pozdě</th>
+                    <th className="px-3 py-2 text-center">🔥 Po termínu</th>
+                    <th className="px-3 py-2 text-center">🛠 Pracuje</th>
+                    <th className="px-3 py-2 text-center">📦 Bez termínu</th>
                     <th className="px-3 py-2 text-center">Celkem</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-cream-100">
                   {users.map((u, i) => (
-                    <tr key={u.user_id} className={i < 3 ? 'bg-amber-50/30' : 'hover:bg-cream-50'}>
+                    <tr key={u.user_id} className={i < 3 ? 'bg-amber-50/30' : (u.user_id === user?.id ? 'bg-accent-50/40' : 'hover:bg-cream-50')}>
                       <td className="px-3 py-3 text-center">
                         {i < 3 ? <span className="text-xl">{MEDAL[i]}</span> : <span className="text-ink-400">{i + 1}.</span>}
                       </td>
                       <td className="px-3 py-3">
                         <div className="flex items-center gap-2">
                           <Avatar user={{ id: u.user_id, name: u.name, avatar_updated_at: u.avatar_updated_at }} size={32} />
-                          <div>
-                            <div className="font-medium text-ink-800">{u.name}</div>
-                            <div className="text-[10px] uppercase tracking-wide text-ink-500">{u.team_role}</div>
-                          </div>
+                          <div className="font-medium text-ink-800">{u.name}</div>
                         </div>
                       </td>
                       <td className="px-3 py-3 text-center">
@@ -125,15 +266,117 @@ export default function Scoreboard() {
               </table>
             </div>
 
-            {/* Vysvětlivka */}
-            <div className="text-xs text-ink-500 bg-cream-50 border border-cream-200 rounded p-3">
-              <strong>Jak se počítá úspěšnost?</strong> Včas / (Včas + Pozdě + Po termínu).
-              Úkoly bez termínu se do úspěšnosti nezapočítávají.
-              Stejné pravidlo platí pro všechny — žebříček vidí každý člen teamu.
-            </div>
+            {/* Admin: přehled per tým — jen když je zvolen "Všechny týmy" */}
+            {isAdmin && isAllTeams && teamsOverview && (
+              <div className="bg-white border border-cream-200 rounded-xl overflow-x-auto">
+                <div className="px-4 pt-3 text-xs font-semibold text-ink-500 uppercase tracking-wide">
+                  Přehled per tým
+                </div>
+                <table className="w-full min-w-[600px]">
+                  <thead className="bg-cream-100 text-xs uppercase tracking-wide text-ink-600">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Tým</th>
+                      <th className="px-3 py-2 text-center">Úspěšnost</th>
+                      <th className="px-3 py-2 text-center">✅ Včas</th>
+                      <th className="px-3 py-2 text-center">⏰ Pozdě</th>
+                      <th className="px-3 py-2 text-center">🔥 Po termínu</th>
+                      <th className="px-3 py-2 text-center">Aktivních lidí</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-cream-100">
+                    {(teamsOverview.teams || []).map(t => (
+                      <tr key={t.team_id}>
+                        <td className="px-3 py-2 font-medium text-ink-800">{t.team_name}</td>
+                        <td className="px-3 py-2 text-center">
+                          <span className={`inline-block px-2 py-0.5 rounded font-semibold text-xs ${rateClass(t.success_rate)}`}>
+                            {t.success_rate == null ? '—' : `${t.success_rate}%`}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-center text-emerald-700">{t.done_on_time}</td>
+                        <td className="px-3 py-2 text-center text-red-600">{t.done_late}</td>
+                        <td className="px-3 py-2 text-center text-amber-700">{t.overdue}</td>
+                        <td className="px-3 py-2 text-center text-ink-500">{t.users_active}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function Kpi({ label, value, color }) {
+  return (
+    <div className="bg-white border border-cream-200 rounded-lg p-3">
+      <div className={`text-2xl font-bold ${color}`}>{value}</div>
+      <div className="text-xs text-ink-500">{label}</div>
+    </div>
+  );
+}
+
+// Karta per uživatel — bar (objem + úspěšnost) + sparkline trend úspěšnosti.
+function UserCard({ u, isMe, seriesMonths, axis }) {
+  const done = (u.done_on_time || 0) + (u.done_late || 0);
+  const onPct   = done > 0 ? (u.done_on_time / done) * 100 : 0;
+  const latePct = done > 0 ? (u.done_late    / done) * 100 : 0;
+
+  // Sparkline data: pro každý měsíc v axis vypočti procenta úspěšnosti (0-100),
+  // pokud user v ten měsíc nic nedokončil, nechme null (Recharts to přeskočí).
+  const spark = axis.map(ym => {
+    const m = seriesMonths.find(x => x.ym === ym);
+    if (!m || (m.on_time + m.late) === 0) return { ym, rate: null };
+    return { ym, rate: Math.round((m.on_time / (m.on_time + m.late)) * 100) };
+  });
+
+  return (
+    <div className={`rounded-xl border p-3 ${
+      isMe ? 'bg-accent-50 border-accent-200' : 'bg-white border-cream-200'
+    }`}>
+      <div className="flex items-center gap-3 mb-2">
+        <Avatar user={{ id: u.user_id, name: u.name, avatar_updated_at: u.avatar_updated_at }} size={36} />
+        <div className="flex-1 min-w-0">
+          <div className={`font-medium truncate ${isMe ? 'text-accent-700' : 'text-ink-800'}`}>
+            {u.name}{isMe && <span className="ml-1 text-[10px] text-accent-500">(já)</span>}
+          </div>
+          <div className="text-[11px] text-ink-500">
+            {done} dokončeno · 🔓 {(u.in_progress || 0) + (u.overdue || 0)} otevřených
+          </div>
+        </div>
+        <div className={`text-lg font-bold ${
+          u.success_rate == null ? 'text-ink-400'
+            : u.success_rate >= 90 ? 'text-emerald-600'
+            : u.success_rate >= 70 ? 'text-brand-600'
+            : u.success_rate >= 50 ? 'text-amber-700'
+            : 'text-red-600'
+        }`}>
+          {u.success_rate == null ? '—' : `${u.success_rate}%`}
+        </div>
+      </div>
+
+      {/* Bar objem + úspěšnost */}
+      <div className="h-3 bg-cream-100 rounded overflow-hidden flex mb-2">
+        {onPct   > 0 && <div className="h-full bg-emerald-500" style={{ width: `${onPct}%`   }} />}
+        {latePct > 0 && <div className="h-full bg-amber-500"   style={{ width: `${latePct}%` }} />}
+      </div>
+
+      {/* Sparkline trend úspěšnosti */}
+      {spark.some(s => s.rate != null) && (
+        <ResponsiveContainer width="100%" height={40}>
+          <LineChart data={spark} margin={{ top: 2, right: 4, left: 0, bottom: 2 }}>
+            <YAxis domain={[0, 100]} hide />
+            <Line type="monotone" dataKey="rate" stroke="#e72b78" strokeWidth={1.5} dot={false} connectNulls />
+            <Tooltip
+              formatter={v => v == null ? '—' : `${v}%`}
+              labelFormatter={l => l}
+              contentStyle={{ border: '1px solid #e2dcd3', borderRadius: 6, fontSize: 11, padding: 4 }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      )}
     </div>
   );
 }

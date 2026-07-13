@@ -82,6 +82,13 @@ export const questions = {
   markAnswersRead: () => api.post('/questions/mark-answers-read').then(r => r.data),
 };
 
+// Sjednocené počty pro badge v levém menu. Nahrazuje 3 samostatná volání
+// (questions/counts, review-queue, needs-fix) — Layout je volá 1x/30s.
+// Každá kategorie vrací { total, byTeam: { <team_id>: <count> } }.
+export const navCounts = {
+  get: () => api.get('/nav-counts').then(r => r.data),
+};
+
 export const ai = {
   status:   () => api.get('/ai/status').then(r => r.data),
   // scope: 'team' (default) | 'all' (executive view, jen pro privilegované uživatele)
@@ -196,7 +203,10 @@ export const push = {
 // Scoreboard – per-user task completion stats v rámci current teamu.
 // Server filtruje by req.team_id, takže klient nemusí nic specifikovat.
 export const scoreboard = {
-  list: () => api.get('/scoreboard').then(r => r.data),
+  // team_id=null → server použije current team; team_id=0 → admin cross-team.
+  list:          (team_id) => api.get('/scoreboard', { params: team_id != null ? { team_id } : {} }).then(r => r.data),
+  history:       (team_id, months = 6) => api.get('/scoreboard/history', { params: { months, ...(team_id != null ? { team_id } : {}) } }).then(r => r.data),
+  teamsOverview: () => api.get('/scoreboard/teams-overview').then(r => r.data),
 };
 
 // AI agent (Claude vykonává úkoly autonomně)
