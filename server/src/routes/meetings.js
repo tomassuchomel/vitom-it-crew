@@ -243,6 +243,191 @@ function sanitizeAttendees(list) {
   });
 }
 
+// ===== AI helpers =====
+
+const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
+
+// Prostý stripper HTML — pro krmení AI (odstraní tagy, zachová text).
+function stripHtml(html) {
+  return String(html || '').replace(/<style[^>]*>.*?<\/style>/gi, '')
+    .replace(/<script[^>]*>.*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Volá Anthropic API. Vrátí { text } nebo { error }.
+async function callAI(systemPrompt, userMsg, maxTokens = 2000) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return { error: 'no_api_key', message: 'ANTHROPIC_API_KEY není nastaven.' };
+  try {
+    const res = await fetch(ANTHROPIC_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL, max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMsg }],
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      return { error: 'api_error', status: res.status, message: t.slice(0, 500) };
+    }
+    const data = await res.json();
+    const text = data?.content?.[0]?.text || '';
+    return { text };
+  } catch (err) {
+    return { error: 'fetch_failed', message: err.message };
+  }
+}
+
+// Sesbírá kontext z předchozích porad + úkolů pro AI.
+async function collectPrevContext(typeId, currentMeetingId, limit = 5) {
+  // Předchozí zápisy stejného typu (chronologicky sestupně, kromě aktuálního)
+  const prev = (await query(`
+    SELECT id, title, meeting_date, content_json, agenda
+    FROM meetings
+    WHERE type_id = $1 AND id != $2
+    ORDER BY meeting_date DESC NULLS LAST, created_at DESC
+    LIMIT $3
+  `, [typeId, currentMeetingId, limit])).rows;
+
+  // Úkoly propojené s těmito porady
+  const meetingIds = prev.map(m => m.id);
+  const tasks = meetingIds.length > 0 ? (await query(`
+    SELECT t.id, t.title, t.status, t.due_date, t.completed_at, t.meeting_id,
+           u.name AS assignee_name
+    FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
+    WHERE t.meeting_id = ANY($1::int[])
+  `, [meetingIds])).rows : [];
+
+  return { previousMeetings: prev, relatedTasks: tasks };
+}
+
+// AI: shrnutí předchozích porad + status úkolů + doporučení co řešit.
+router.post('/meetings/:id/summary', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`
+    SELECT m.*, t.name AS type_name, t.team_id, t.visibility, t.custom_users, t.organizer_id
+    FROM meetings m JOIN meeting_types t ON t.id = m.type_id
+    WHERE m.id = $1
+  `, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
+
+  const { previousMeetings, relatedTasks } = await collectPrevContext(cur.type_id, id);
+  if (previousMeetings.length === 0) {
+    return res.json({ text: '_Zatím nejsou žádné předchozí porady tohoto typu — první zápis._', empty: true });
+  }
+
+  const prevSummary = previousMeetings.map(m => ({
+    date: m.meeting_date,
+    title: m.title,
+    notes: stripHtml(typeof m.content_json === 'string' ? m.content_json : JSON.stringify(m.content_json)).slice(0, 1500),
+    agenda: Array.isArray(m.agenda) ? m.agenda.map(a => `${a.checked ? '✓' : '○'} ${a.text}`).join('; ') : '',
+  }));
+  const tasksSummary = relatedTasks.map(t => ({
+    title: t.title,
+    status: t.status,
+    assignee: t.assignee_name,
+    due: t.due_date,
+    completed: t.completed_at,
+    overdue: t.status !== 'done' && t.due_date && new Date(t.due_date) < new Date(),
+  }));
+
+  const system = `Jsi asistent pro pracovní porady. Shrneš předchozí porady a stav úkolů, které z nich vzešly. Píšeš česky, věcně, strukturovaně.`;
+  const userMsg = `Typ porady: "${cur.type_name}"
+Aktuální zápis (${cur.meeting_date}): "${cur.title}"
+
+PŘEDCHOZÍ ZÁPISY (od nejnovějšího):
+${JSON.stringify(prevSummary, null, 2)}
+
+ÚKOLY vzešlé z předchozích porad:
+${JSON.stringify(tasksSummary, null, 2)}
+
+VYTVOŘ SHRNUTÍ v tomto formátu (Markdown, česky):
+
+## Co se dělo v minulých poradách
+(2-4 věty přehledu, klíčové body / trendy)
+
+## Úkoly — status
+- ✅ **Splněné včas** (počet + krátký seznam)
+- ⏰ **Splněné pozdě** (počet + kdo)
+- 🔥 **Nesplněné po termínu** (počet + kdo + jaké úkoly)
+- ▶️ **Rozpracované** (počet)
+
+## 📌 Doporučení k řešení dnes
+(3-5 konkrétních bodů, na co se v této poradě zaměřit — návazně na výše. Konkrétní jména a úkoly.)`;
+
+  const out = await callAI(system, userMsg, 2500);
+  if (out.error) return res.status(500).json(out);
+  res.json({ text: out.text });
+});
+
+// AI: návrh bodů agendy pro tento zápis (dopředu, před poradou).
+router.post('/meetings/:id/agenda-suggest', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`
+    SELECT m.*, t.name AS type_name, t.agenda_template, t.team_id, t.visibility, t.custom_users, t.organizer_id
+    FROM meetings m JOIN meeting_types t ON t.id = m.type_id
+    WHERE m.id = $1
+  `, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
+
+  const { previousMeetings, relatedTasks } = await collectPrevContext(cur.type_id, id, 3);
+  const template = Array.isArray(cur.agenda_template) ? cur.agenda_template.map(a => a.text).filter(Boolean) : [];
+  const unfinishedTasks = relatedTasks.filter(t => t.status !== 'done').slice(0, 20);
+  const lastNotes = previousMeetings.slice(0, 2).map(m => ({
+    date: m.meeting_date,
+    notes: stripHtml(typeof m.content_json === 'string' ? m.content_json : JSON.stringify(m.content_json)).slice(0, 800),
+  }));
+
+  const system = `Jsi asistent, který navrhne agendu porady. Vrátíš POUZE validní JSON, bez markdown ozdob:
+{
+  "items": [
+    { "text": "krátký bod agendy (max 100 znaků)" },
+    ...
+  ]
+}
+Vrať 3-7 bodů. Píšeš česky, věcně.`;
+
+  const userMsg = `Typ porady: "${cur.type_name}"
+Datum aktuálního zápisu: ${cur.meeting_date || '(neuvedeno)'}
+
+KOSTRA (základní body — už jsou v agendě):
+${template.length > 0 ? template.join('\n') : '(žádná kostra)'}
+
+NEDOKONČENÉ ÚKOLY z posledních porad (probrat status):
+${JSON.stringify(unfinishedTasks.map(t => ({ title: t.title, assignee: t.assignee_name, due: t.due_date, status: t.status })), null, 2)}
+
+POSLEDNÍ 2 ZÁPISY (kontext, co se řešilo — nezopakovat, ale navázat):
+${JSON.stringify(lastNotes, null, 2)}
+
+Navrhni DALŠÍ body agendy, které NEJSOU v kostře. Konkrétní, akční. Zaměř se na:
+- follow-up na nedokončené úkoly (kdo/co)
+- otevřené otázky z minulých porad
+- nové věci, které z kontextu vyplynuly
+
+Vrať JSON.`;
+
+  const out = await callAI(system, userMsg, 1500);
+  if (out.error) return res.status(500).json(out);
+  // Parse JSON
+  try {
+    const parsed = JSON.parse(out.text.trim());
+    const items = Array.isArray(parsed.items)
+      ? parsed.items.filter(x => x && typeof x.text === 'string').map(x => ({ text: String(x.text).slice(0, 200) }))
+      : [];
+    res.json({ items });
+  } catch (err) {
+    res.status(500).json({ error: 'parse_failed', message: err.message, raw: out.text.slice(0, 500) });
+  }
+});
+
 // Smazat zápis.
 router.delete('/meetings/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);

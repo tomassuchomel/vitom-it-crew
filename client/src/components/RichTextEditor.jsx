@@ -53,6 +53,12 @@ export default function RichTextEditor({ value, onChange }) {
     html += '</tbody></table><p><br></p>';
     exec('insertHTML', html);
   };
+  // „Rozhodnutí" blok — barevný blockquote, který snadno najdeš v přehledu
+  // (např. „Na poradě 15.7. rozhodli…"). Používá se hlavně v zápisech z porad.
+  const insertDecision = () => {
+    exec('insertHTML',
+      '<div class="rte-decision" data-decision="1"><strong>⚖️ Rozhodnutí:</strong>&nbsp;<span>&nbsp;</span></div><p><br></p>');
+  };
   const insertImage = () => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -167,6 +173,7 @@ export default function RichTextEditor({ value, onChange }) {
         <Btn onClick={insertChecklist} title="Zaškrtávací seznam">☑</Btn>
         <Btn onClick={insertTable} title="Vložit tabulku">▦</Btn>
         <Btn onClick={insertImage} title="Vložit obrázek">🖼</Btn>
+        <Btn onClick={insertDecision} title="Rozhodnutí (barevný blok pro klíčová rozhodnutí porady)">⚖️</Btn>
       </div>
 
       {/* Editovatelná plocha */}

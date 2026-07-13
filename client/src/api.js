@@ -103,6 +103,10 @@ export const meetings = {
   getMeeting:     (id) => api.get(`/meetings/meetings/${id}`).then(r => r.data),
   updateMeeting:  (id, data) => api.patch(`/meetings/meetings/${id}`, data).then(r => r.data),
   removeMeeting:  (id) => api.delete(`/meetings/meetings/${id}`).then(r => r.data),
+  // AI: shrnutí předchozích porad + status úkolů + doporučení
+  summary:        (id) => api.post(`/meetings/meetings/${id}/summary`).then(r => r.data),
+  // AI: návrh dalších bodů agendy (mimo kostru)
+  suggestAgenda:  (id) => api.post(`/meetings/meetings/${id}/agenda-suggest`).then(r => r.data),
 };
 
 // MCP tokeny — každý uživatel si spravuje vlastní tokeny pro připojení

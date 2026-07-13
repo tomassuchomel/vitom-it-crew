@@ -37,3 +37,15 @@ h1, h2, h3, h4 { letter-spacing: -0.01em; font-weight: 700; }
 .rte-content .rte-check input[type="checkbox"], .rte-readonly .rte-check input[type="checkbox"] {
   margin-top: 3px; width: 15px; height: 15px; cursor: pointer;
 }
+/* Rozhodnutí blok — barevný panel, který vypíchne klíčová rozhodnutí porady. */
+.rte-content .rte-decision, .rte-readonly .rte-decision {
+  background: #fef3c7;
+  border-left: 4px solid #e72b78;
+  padding: 8px 12px;
+  margin: 8px 0;
+  border-radius: 4px;
+  font-size: 0.95em;
+}
+.rte-content .rte-decision strong, .rte-readonly .rte-decision strong {
+  color: #e72b78;
+}

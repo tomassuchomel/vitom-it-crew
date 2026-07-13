@@ -150,6 +150,8 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [teamUsers, setTeamUsers] = useState([]);
+  const [summary, setSummary] = useState(null);   // { text, loading }
+  const [aiBusy, setAiBusy] = useState(false);
   const { user } = useAuth();
 
   useEffect(() => {
@@ -232,6 +234,33 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
   };
   const removeGuest = (idx) => patch({ attendees: attendees.filter((_, i) => i !== idx) });
 
+  // AI: sumář předchozích porad. Otevře panel pod tlačítkem.
+  const genSummary = async () => {
+    setAiBusy(true); setSummary({ loading: true });
+    try {
+      const d = await api.summary(meeting.id);
+      setSummary({ text: d.text, empty: d.empty });
+    } catch (e) {
+      setSummary({ text: `❌ Chyba: ${e.response?.data?.message || e.message}` });
+    } finally { setAiBusy(false); }
+  };
+
+  // AI: navrhne body agendy — přidá je do agendy jako source='ai'.
+  const genAgenda = async () => {
+    setAiBusy(true);
+    try {
+      const d = await api.suggestAgenda(meeting.id);
+      const newItems = (d.items || []).map(it => ({ text: it.text, checked: false, source: 'ai' }));
+      if (newItems.length === 0) {
+        alert('AI nenavrhla žádné nové body (asi není z čeho čerpat).');
+      } else {
+        patch({ agenda: [...agenda, ...newItems] });
+      }
+    } catch (e) {
+      alert(`Chyba: ${e.response?.data?.message || e.message}`);
+    } finally { setAiBusy(false); }
+  };
+
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-4">
       {/* Header */}
@@ -267,6 +296,36 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
           </div>
         </div>
       </div>
+
+      {/* AI panel */}
+      <section className="bg-white border border-cream-200 rounded-lg p-4">
+        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">🤖 AI pomocník</div>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={genSummary} disabled={aiBusy}
+            title="AI vygeneruje textové shrnutí předchozích porad tohoto typu: co se řešilo, které úkoly jsou hotové/pozdě/po termínu, a doporučí 3-5 věcí, na které se dnes zaměřit. Zobrazí se pod tlačítkem — nezmění zápis."
+            className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+            📊 Sumář předchozích porad
+          </button>
+          <button onClick={genAgenda} disabled={aiBusy}
+            title="AI navrhne 3-7 dalších bodů agendy nad rámec kostry — vezme v úvahu nedokončené úkoly z minulých porad a otevřené otázky. Body se PŘIDAJÍ do sekce Agenda níže (můžeš je smazat / upravit)."
+            className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+            🧠 Navrhnout agendu
+          </button>
+        </div>
+        {summary && (
+          <div className="mt-3 bg-cream-50 border border-cream-200 rounded p-3">
+            {summary.loading ? (
+              <div className="text-sm text-ink-500">Generuji sumář…</div>
+            ) : summary.empty ? (
+              <div className="text-sm text-ink-500 italic">{summary.text}</div>
+            ) : (
+              <div className="text-sm text-ink-800 whitespace-pre-wrap leading-relaxed">{summary.text}</div>
+            )}
+            <button onClick={() => setSummary(null)}
+              className="mt-2 text-xs text-ink-500 hover:underline">Skrýt sumář</button>
+          </div>
+        )}
+      </section>
 
       {/* Agenda */}
       <section className="bg-white border border-cream-200 rounded-lg p-4">
@@ -316,12 +375,15 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
             );
           })}
           {/* Hosté */}
-          {attendees.filter(a => !a.user_id).map((a, absIdx) => {
+          {attendees.filter(a => !a.user_id).map((a) => {
             const idx = attendees.findIndex(x => x === a);
+            const toggleGuest = () => {
+              const next = attendees.map((x, i) => i === idx ? { ...x, present: !x.present } : x);
+              patch({ attendees: next });
+            };
             return (
               <div key={`guest-${idx}`} className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={!!a.present}
-                  onChange={() => patchAgenda /* not agenda */} />
+                <input type="checkbox" checked={!!a.present} onChange={toggleGuest} />
                 <span className="text-ink-800">{a.guest_name}</span>
                 <span className="text-xs text-ink-400">{a.guest_email}</span>
                 <button onClick={() => removeGuest(idx)} className="text-red-500 text-xs">×</button>
@@ -336,13 +398,13 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
         </button>
       </section>
 
-      {/* Zápis (rich text) */}
+      {/* Zápis (rich text). content_json je JSONB, ale ukládáme HTML string. */}
       <section className="bg-white border border-cream-200 rounded-lg p-4">
         <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">✍ Zápis</div>
         <div className="min-h-[300px]">
           <RichTextEditor
-            value={meeting.content_json}
-            onChange={(json) => patch({ content_json: json })}
+            value={typeof meeting.content_json === 'string' ? meeting.content_json : ''}
+            onChange={(html) => patch({ content_json: html })}
           />
         </div>
       </section>
