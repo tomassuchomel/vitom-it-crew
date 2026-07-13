@@ -51,7 +51,8 @@ export default function Meetings() {
   const [selectedTypeId, setSelectedTypeId] = useState(null);
   const [meetingsList, setMeetingsList] = useState([]);
   const [selectedMeetingId, setSelectedMeetingId] = useState(null);
-  const [creatingType, setCreatingType] = useState(false);
+  // null = zavřený, 'new' = create, { ...type } = edit
+  const [typeModal, setTypeModal] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -72,7 +73,7 @@ export default function Meetings() {
       <aside className="w-64 border-r border-cream-200 bg-white flex flex-col">
         <div className="px-4 py-3 border-b border-cream-200 flex items-center justify-between">
           <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide">🗓 Typy porad</div>
-          <button onClick={() => setCreatingType(true)}
+          <button onClick={() => setTypeModal('new')}
             title="Vytvořit nový typ porady (např. 'středeční porada IT')"
             className="text-xs px-2 py-0.5 border border-ink-300 rounded hover:bg-cream-50">+</button>
         </div>
@@ -107,11 +108,14 @@ export default function Meetings() {
       {/* Middle: seznam zápisů */}
       {selectedType && (
         <aside className="w-72 border-r border-cream-200 bg-white flex flex-col">
-          <div className="px-4 py-3 border-b border-cream-200 flex items-center justify-between">
-            <div className="min-w-0">
+          <div className="px-4 py-3 border-b border-cream-200 flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
               <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide truncate">{selectedType.name}</div>
               <div className="text-[10px] text-ink-400">{meetingsList.length} zápisů</div>
             </div>
+            <button onClick={() => setTypeModal(selectedType)}
+              title="Upravit typ porady (název, kostru agendy, organizátora, viditelnost)"
+              className="text-xs px-2 py-0.5 border border-ink-300 rounded hover:bg-cream-50 shrink-0">⚙</button>
             <button onClick={async () => {
                 const today = new Date().toISOString().slice(0, 10);
                 const d = await api.createMeeting(selectedType.id, { meeting_date: today });
@@ -119,7 +123,7 @@ export default function Meetings() {
                 setMeetingsList(prev => [d.meeting, ...prev]);
               }}
               title="Vytvořit nový zápis (agenda se předvyplní z kostry typu)"
-              className="text-xs px-2 py-0.5 bg-brand-500 text-white rounded hover:bg-brand-600">+ Nový zápis</button>
+              className="text-xs px-2 py-0.5 bg-brand-500 text-white rounded hover:bg-brand-600 shrink-0">+ Zápis</button>
           </div>
           <div className="flex-1 overflow-y-auto py-2">
             {meetingsList.length === 0 ? (
@@ -173,8 +177,18 @@ export default function Meetings() {
         )}
       </main>
 
-      {creatingType && (
-        <CreateTypeModal onClose={() => setCreatingType(false)} onCreated={() => { setCreatingType(false); load(); }} />
+      {typeModal && (
+        <TypeModal
+          type={typeModal === 'new' ? null : typeModal}
+          onClose={() => setTypeModal(null)}
+          onSaved={() => { setTypeModal(null); load(); }}
+          onDeleted={() => {
+            setTypeModal(null);
+            setSelectedTypeId(null);
+            setSelectedMeetingId(null);
+            load();
+          }}
+        />
       )}
     </div>
   );
@@ -807,30 +821,39 @@ function AttendanceButtons({ status, onSet }) {
   );
 }
 
-// ==================== Modal: vytvořit typ porady ====================
+// ==================== Modal: vytvořit / editovat typ porady ====================
+//
+// Pokud je `type` prop nastavený → edit mode (přehrání dat, PATCH, tlačítko Smazat).
+// Jinak → create mode.
 
-function CreateTypeModal({ onClose, onCreated }) {
+function TypeModal({ type, onClose, onSaved, onDeleted }) {
+  const isEdit = !!type;
   const { teams } = useTeams();
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [visibility, setVisibility] = useState('team');
-  const [teamId, setTeamId] = useState(teams?.[0]?.id || '');
-  const [customUsers, setCustomUsers] = useState([]);
-  const [allUsers, setAllUsers] = useState([]);
-  const [organizerId, setOrganizerId] = useState('');
-  const [agendaTemplate, setAgendaTemplate] = useState(['', '', '']);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(null);
   const { user } = useAuth();
 
+  const [name, setName] = useState(type?.name || '');
+  const [description, setDescription] = useState(type?.description || '');
+  const [visibility, setVisibility] = useState(type?.visibility || 'team');
+  const [teamId, setTeamId] = useState(type?.team_id || teams?.[0]?.id || '');
+  const [customUsers, setCustomUsers] = useState(Array.isArray(type?.custom_users) ? type.custom_users.map(Number) : []);
+  const [allUsers, setAllUsers] = useState([]);
+  const [organizerId, setOrganizerId] = useState(type?.organizer_id || '');
+  const [agendaTemplate, setAgendaTemplate] = useState(
+    Array.isArray(type?.agenda_template) && type.agenda_template.length > 0
+      ? type.agenda_template.map(t => t.text || '')
+      : ['', '', '']
+  );
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
   useEffect(() => { usersApi.list().then(d => setAllUsers(d.users || [])); }, []);
-  useEffect(() => { if (!organizerId) setOrganizerId(user?.id); }, [user?.id]);
+  useEffect(() => { if (!organizerId && !isEdit) setOrganizerId(user?.id); }, [user?.id, isEdit]);
 
   const submit = async () => {
     if (!name.trim()) { setErr('Zadej název typu porady.'); return; }
     setBusy(true); setErr(null);
     try {
-      await api.createType({
+      const payload = {
         name: name.trim(),
         description: description.trim() || null,
         visibility,
@@ -838,8 +861,21 @@ function CreateTypeModal({ onClose, onCreated }) {
         custom_users: visibility === 'custom' ? customUsers : [],
         organizer_id: Number(organizerId) || null,
         agenda_template: agendaTemplate.filter(t => t.trim()).map(t => ({ text: t.trim() })),
-      });
-      onCreated();
+      };
+      if (isEdit) await api.updateType(type.id, payload);
+      else       await api.createType(payload);
+      onSaved();
+    } catch (e) {
+      setErr(e.response?.data?.message || e.message);
+    } finally { setBusy(false); }
+  };
+
+  const remove = async () => {
+    if (!confirm(`Opravdu smazat typ porady „${type.name}"?\n\nSmažou se i VŠECHNY zápisy tohoto typu. Tuto akci nelze vrátit.`)) return;
+    setBusy(true); setErr(null);
+    try {
+      await api.removeType(type.id);
+      onDeleted();
     } catch (e) {
       setErr(e.response?.data?.message || e.message);
     } finally { setBusy(false); }
@@ -848,12 +884,18 @@ function CreateTypeModal({ onClose, onCreated }) {
   const toggleCustomUser = (id) => setCustomUsers(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   return (
-    <Modal open={true} onClose={onClose} title="Nový typ porady"
+    <Modal open={true} onClose={onClose} title={isEdit ? `Upravit typ: ${type.name}` : 'Nový typ porady'}
       footer={<>
+        {isEdit && (
+          <button onClick={remove} disabled={busy}
+            className="px-3 py-1.5 text-sm rounded border border-red-300 text-red-600 hover:bg-red-50 mr-auto">
+            Smazat typ
+          </button>
+        )}
         <button onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-ink-300">Zrušit</button>
         <button onClick={submit} disabled={busy}
           className="px-3 py-1.5 text-sm rounded bg-brand-500 text-white disabled:opacity-50">
-          {busy ? 'Vytvářím…' : 'Vytvořit'}
+          {busy ? (isEdit ? 'Ukládám…' : 'Vytvářím…') : (isEdit ? 'Uložit' : 'Vytvořit')}
         </button>
       </>}>
       <div className="space-y-3 text-sm">
