@@ -91,6 +91,14 @@ export const navCounts = {
   get: () => api.get('/nav-counts').then(r => r.data),
 };
 
+// MCP tokeny — každý uživatel si spravuje vlastní tokeny pro připojení
+// externího Claude klienta (Cowork/Desktop/Code) ke svým úkolům.
+export const mcpTokens = {
+  list:   () => api.get('/mcp-tokens').then(r => r.data),
+  create: (name) => api.post('/mcp-tokens', { name }).then(r => r.data),
+  remove: (id) => api.delete(`/mcp-tokens/${id}`).then(r => r.data),
+};
+
 // Žádosti o změnu termínu úkolu.
 export const dueChangeRequests = {
   list:      (box) => api.get('/due-change-requests', { params: { box } }).then(r => r.data),

@@ -32,6 +32,7 @@ import notificationsRoutes from './routes/notifications.js';
 import ideasRoutes from './routes/ideas.js';
 import navCountsRoutes from './routes/nav-counts.js';
 import dueChangeRequestsRoutes from './routes/due-change-requests.js';
+import mcpTokensRoutes from './routes/mcp-tokens.js';
 import { requireMcpAuth, handleMcpRequest } from './mcp/index.js';
 import { startPushCron } from './pushCron.js';
 import { agentConfig, describeAgentConfig, validateAgentConfig } from './aiAgent/config.js';
@@ -77,6 +78,7 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/ideas', ideasRoutes);
 app.use('/api/nav-counts', navCountsRoutes);
 app.use('/api/due-change-requests', dueChangeRequestsRoutes);
+app.use('/api/mcp-tokens', mcpTokensRoutes);
 
 // MCP server — /mcp přes Streamable HTTP + Bearer auth (MCP_AUTH_TOKEN).
 // Není pod /api aby externí Claude klient dostal čistou URL. Používá jiný

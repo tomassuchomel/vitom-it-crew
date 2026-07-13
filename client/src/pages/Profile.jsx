@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { useAuth, ROLE_LABELS } from '../auth.jsx';
-import { users as usersApi } from '../api.js';
+import { users as usersApi, mcpTokens as mcpTokensApi } from '../api.js';
 import PushOptIn from '../components/PushOptIn.jsx';
 import EmailNotificationPrefs from '../components/EmailNotificationPrefs.jsx';
 
@@ -23,6 +23,119 @@ export default function Profile() {
         <Card title="Notifikace e‑mailem" subtitle="Vyber, na které události chceš dostávat e‑maily.">
           <EmailNotificationPrefs />
         </Card>
+        <Card title="MCP tokeny (Claude / Cowork)"
+          subtitle="Vytvoř si vlastní token pro připojení AI klienta ke svým úkolům. Token vidíš JEN JEDNOU po vytvoření — ulož si ho hned.">
+          <McpTokensCard />
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function McpTokensCard() {
+  const [tokens, setTokens] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [freshToken, setFreshToken] = useState(null); // { plain, name, prefix }
+
+  const load = () => {
+    setLoading(true);
+    mcpTokensApi.list()
+      .then(d => setTokens(d.tokens || []))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const create = async (e) => {
+    e.preventDefault();
+    setBusy(true); setErr(null);
+    try {
+      const d = await mcpTokensApi.create(name.trim() || null);
+      setFreshToken({ plain: d.token, name: d.name, prefix: d.token_prefix });
+      setName('');
+      load();
+    } catch (e) {
+      setErr(e.response?.data?.message || 'Vytvoření selhalo.');
+    } finally { setBusy(false); }
+  };
+
+  const remove = async (id) => {
+    if (!confirm('Opravdu smazat token? Klient, který ho používá, se odpojí.')) return;
+    try { await mcpTokensApi.remove(id); load(); } catch { /* ignore */ }
+  };
+
+  const copy = (text) => navigator.clipboard?.writeText(text);
+
+  return (
+    <div className="space-y-3">
+      {/* Fresh token výpis — jen jednou */}
+      {freshToken && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 space-y-2">
+          <div className="text-xs font-semibold text-amber-800">
+            🔑 Nový token — zkopíruj ho HNED, znovu ho neuvidíš.
+          </div>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 text-xs bg-white border border-amber-200 rounded px-2 py-1.5 font-mono break-all">
+              {freshToken.plain}
+            </code>
+            <button onClick={() => copy(freshToken.plain)}
+              className="px-3 py-1.5 bg-amber-500 text-white text-xs rounded hover:bg-amber-600">
+              📋 Kopírovat
+            </button>
+          </div>
+          <div className="text-[11px] text-amber-700">
+            Použij ho jako <code>Authorization: Bearer {freshToken.plain.slice(0, 8)}…</code>
+          </div>
+          <button onClick={() => setFreshToken(null)}
+            className="text-xs text-amber-700 hover:underline">Skrýt</button>
+        </div>
+      )}
+
+      {/* Form na vytvoření */}
+      <form onSubmit={create} className="flex gap-2 items-end">
+        <label className="flex-1">
+          <span className="text-xs font-medium text-ink-500">Popisek (např. MacBook, iPhone)</span>
+          <input type="text" value={name} onChange={e => setName(e.target.value)}
+            placeholder="MacBook Cowork"
+            className="mt-1 w-full px-3 py-1.5 border border-ink-300 rounded text-sm" />
+        </label>
+        <button type="submit" disabled={busy}
+          className="px-3 py-1.5 bg-brand-500 text-white text-sm rounded hover:bg-brand-600 disabled:opacity-50">
+          {busy ? 'Vytvářím…' : '+ Vytvořit token'}
+        </button>
+      </form>
+      {err && <div className="text-xs text-red-600">{err}</div>}
+
+      {/* Seznam existujících */}
+      {loading ? (
+        <div className="text-xs text-ink-400">Načítám…</div>
+      ) : tokens.length === 0 ? (
+        <div className="text-xs text-ink-400 italic">Zatím žádný token. Vytvoř si první výše.</div>
+      ) : (
+        <ul className="divide-y divide-cream-100 border border-cream-200 rounded-lg">
+          {tokens.map(t => (
+            <li key={t.id} className="px-3 py-2 flex items-center gap-3 text-sm">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-ink-800 truncate">{t.name || <span className="italic text-ink-400">bez popisku</span>}</div>
+                <div className="text-[11px] text-ink-500 font-mono">
+                  {t.token_prefix}…
+                  <span className="ml-2 text-ink-400">vytvořeno {new Date(t.created_at).toLocaleDateString('cs-CZ')}</span>
+                  {t.last_used_at && <span className="ml-2 text-emerald-600">použito {new Date(t.last_used_at).toLocaleDateString('cs-CZ')}</span>}
+                </div>
+              </div>
+              <button onClick={() => remove(t.id)}
+                className="text-xs text-red-600 hover:underline">Smazat</button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="text-[11px] text-ink-500 bg-cream-50 border border-cream-200 rounded p-2">
+        <strong>Připojení v Coworku / Claude Desktop:</strong> URL <code>https://it.realitniekosystem.cz/mcp</code>,
+        header <code>Authorization: Bearer &lt;token&gt;</code>. Token uvidí a bude ovládat <strong>jen tvoje úkoly</strong> —
+        cizí úkoly jsou pro něj neviditelné.
       </div>
     </div>
   );

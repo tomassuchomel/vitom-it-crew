@@ -15,48 +15,48 @@ import {
   MCP_TO_DB, DB_TO_MCP, ALLOWED_TRANSITIONS,
 } from '../index.js';
 
-// --- (a) auth ---
+// --- (a) auth (middleware je nyní async — musíme awaitovat) ---
 
-test('auth: bez Authorization header → 401', () => {
+test('auth: bez Authorization header → 401', async () => {
   process.env.MCP_AUTH_TOKEN = 'secret123';
   const req = { headers: {} };
   const captured = {};
   const res = { status(s) { captured.status = s; return this; }, json(b) { captured.body = b; } };
   let nextCalled = false;
-  requireMcpAuth(req, res, () => { nextCalled = true; });
+  await requireMcpAuth(req, res, () => { nextCalled = true; });
   assert.equal(nextCalled, false);
   assert.equal(captured.status, 401);
   assert.equal(captured.body.error, 'unauthorized');
 });
 
-test('auth: špatný token → 401', () => {
+test('auth: špatný token (global env se nezhoduje, DB lookup nenajde) → 401', async () => {
   process.env.MCP_AUTH_TOKEN = 'secret123';
   const req = { headers: { authorization: 'Bearer wrong' } };
   const captured = {};
   const res = { status(s) { captured.status = s; return this; }, json(b) { captured.body = b; } };
   let nextCalled = false;
-  requireMcpAuth(req, res, () => { nextCalled = true; });
+  await requireMcpAuth(req, res, () => { nextCalled = true; });
   assert.equal(nextCalled, false);
   assert.equal(captured.status, 401);
 });
 
-test('auth: správný Bearer token → volá next()', () => {
+test('auth: správný global Bearer token → volá next() + mcpUser.global=true', async () => {
   process.env.MCP_AUTH_TOKEN = 'secret123';
   const req = { headers: { authorization: 'Bearer secret123' } };
   const res = { status() { return this; }, json() {} };
   let nextCalled = false;
-  requireMcpAuth(req, res, () => { nextCalled = true; });
+  await requireMcpAuth(req, res, () => { nextCalled = true; });
   assert.equal(nextCalled, true);
+  assert.deepEqual(req.mcpUser, { global: true });
 });
 
-test('auth: bez env var → 503 (not configured)', () => {
+test('auth: bez env var + neznámý token → 401 (DB lookup vrátí null)', async () => {
   delete process.env.MCP_AUTH_TOKEN;
   const req = { headers: { authorization: 'Bearer whatever' } };
   const captured = {};
   const res = { status(s) { captured.status = s; return this; }, json(b) { captured.body = b; } };
-  requireMcpAuth(req, res, () => { throw new Error('should not call next'); });
-  assert.equal(captured.status, 503);
-  assert.equal(captured.body.error, 'mcp_not_configured');
+  await requireMcpAuth(req, res, () => { throw new Error('should not call next'); });
+  assert.equal(captured.status, 401);
 });
 
 // --- (b) status mapy ---

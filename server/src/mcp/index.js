@@ -17,6 +17,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { query } from '../db.js';
+import { verifyMcpToken } from '../routes/mcp-tokens.js';
 
 // Mapa MCP status ↔ naše tasks.status.
 const MCP_TO_DB = {
@@ -59,7 +60,10 @@ const GLOBAL_RULES = `\
 
 // Vytvoří novou McpServer instanci s všemi tools zaregistrovanými.
 // Voláno per request (stateless mode) — každý request = fresh server + transport.
-function buildMcpServer() {
+//
+// mcpUser: { global: true } → vidí a mění všechny tickety
+//          { userId: N }    → vidí a mění jen svoje úkoly (assignee_id = N)
+function buildMcpServer(mcpUser = { global: true }) {
   const server = new McpServer(
     { name: 'vitom-tickets', version: '1.0.0' },
     { capabilities: { tools: {} } }
@@ -78,7 +82,8 @@ function buildMcpServer() {
     },
     async (args) => {
       const statusMcp = args.status ?? 'todo';
-      const assignee  = args.assignee ?? 'claude';
+      // Per-user token → default filter = jeho úkoly. Global token → default 'claude'.
+      const assignee  = args.assignee ?? (mcpUser.userId ? String(mcpUser.userId) : 'claude');
       const limit     = args.limit ?? 50;
 
       const dbStatus = MCP_TO_DB[statusMcp];
@@ -86,17 +91,20 @@ function buildMcpServer() {
         return { content: [{ type: 'text', text: `Invalid status: ${statusMcp}` }], isError: true };
       }
 
-      // "assignee = 'claude'" filter → ai_assignee = TRUE.
-      // Jiná hodnota (např. user_id) → filter na tasks.assignee_id = Number(...).
+      // Per-user token: vždy filter na jeho assignee_id, ignoruje argument assignee
+      // (bezpečnostní gate — user nemá vidět cizí úkoly).
       const params = [dbStatus];
       let assigneeFilter;
-      if (assignee === 'claude') {
+      if (mcpUser.userId) {
+        params.push(mcpUser.userId);
+        assigneeFilter = `t.assignee_id = $${params.length}`;
+      } else if (assignee === 'claude') {
         assigneeFilter = `t.ai_assignee = TRUE`;
       } else if (/^\d+$/.test(String(assignee))) {
         params.push(Number(assignee));
         assigneeFilter = `t.assignee_id = $${params.length}`;
       } else {
-        assigneeFilter = `TRUE`; // neznámý identifier — nemáme table s "handles"
+        assigneeFilter = `TRUE`;
       }
 
       params.push(limit);
@@ -140,6 +148,10 @@ function buildMcpServer() {
       `, [id]);
       const row = r.rows[0];
       if (!row) return { content: [{ type: 'text', text: `Ticket ${id} nenalezen` }], isError: true };
+      // Per-user token: vidí jen svoje úkoly (kde je assignee).
+      if (mcpUser.userId && row.assignee_id !== mcpUser.userId) {
+        return { content: [{ type: 'text', text: `Ticket ${id} není přiřazen tobě.` }], isError: true };
+      }
 
       // Komentáře čerpáme z task_reviews (review workflow komentáře).
       const c = await query(`
@@ -183,9 +195,13 @@ function buildMcpServer() {
     },
     async ({ id }) => {
       // Idempotence: pokud už je in_progress AND ai_assignee=TRUE, vrátíme OK.
-      const cur = await query(`SELECT status, ai_assignee FROM tasks WHERE id = $1`, [id]);
+      const cur = await query(`SELECT status, ai_assignee, assignee_id FROM tasks WHERE id = $1`, [id]);
       const row = cur.rows[0];
       if (!row) return { content: [{ type: 'text', text: `Ticket ${id} nenalezen` }], isError: true };
+      // Per-user token: může claim jen vlastní úkol.
+      if (mcpUser.userId && row.assignee_id !== mcpUser.userId) {
+        return { content: [{ type: 'text', text: `Nemůžeš claim cizí ticket ${id}.` }], isError: true };
+      }
       if (row.status === 'in_progress' && row.ai_assignee) {
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, id, status: 'in_progress', note: 'already_claimed' }) }] };
       }
@@ -231,9 +247,12 @@ function buildMcpServer() {
       },
     },
     async ({ id, status, note }) => {
-      const cur = await query(`SELECT status FROM tasks WHERE id = $1`, [id]);
+      const cur = await query(`SELECT status, assignee_id FROM tasks WHERE id = $1`, [id]);
       const row = cur.rows[0];
       if (!row) return { content: [{ type: 'text', text: `Ticket ${id} nenalezen` }], isError: true };
+      if (mcpUser.userId && row.assignee_id !== mcpUser.userId) {
+        return { content: [{ type: 'text', text: `Nemůžeš měnit stav cizího ticketu ${id}.` }], isError: true };
+      }
       const fromMcp = DB_TO_MCP[row.status] || row.status;
       if (!ALLOWED_TRANSITIONS[fromMcp]?.includes(status)) {
         return {
@@ -268,8 +287,11 @@ function buildMcpServer() {
       },
     },
     async ({ id, body }) => {
-      const cur = await query(`SELECT id FROM tasks WHERE id = $1`, [id]);
+      const cur = await query(`SELECT id, assignee_id FROM tasks WHERE id = $1`, [id]);
       if (!cur.rows[0]) return { content: [{ type: 'text', text: `Ticket ${id} nenalezen` }], isError: true };
+      if (mcpUser.userId && cur.rows[0].assignee_id !== mcpUser.userId) {
+        return { content: [{ type: 'text', text: `Nemůžeš komentovat cizí ticket ${id}.` }], isError: true };
+      }
 
       const ins = await query(`
         INSERT INTO task_reviews (task_id, reviewer_id, verdict, comment)
@@ -295,18 +317,33 @@ function buildMcpServer() {
 
 // ==================== Express handler ====================
 
-// Bearer auth middleware. Bez tokenu → 401.
-export function requireMcpAuth(req, res, next) {
-  const expected = process.env.MCP_AUTH_TOKEN;
-  if (!expected) {
-    return res.status(503).json({ error: 'mcp_not_configured', message: 'Nastav MCP_AUTH_TOKEN env var.' });
-  }
+// Bearer auth middleware. Přijímá dva typy tokenů:
+//   1) MCP_AUTH_TOKEN (env var) → "admin" režim, vidí a mění všechny tickety.
+//      Používáme na server-to-server integrace / development.
+//   2) Per-user token z tabulky user_mcp_tokens → user vidí a mění JEN
+//      svoje úkoly. Vytvořený uživatelem v Profile.
+// req.mcpUser = { global: true } nebo { userId: N }.
+export async function requireMcpAuth(req, res, next) {
   const auth = req.headers['authorization'] || '';
   const m = auth.match(/^Bearer\s+(.+)$/i);
-  if (!m || m[1] !== expected) {
-    return res.status(401).json({ error: 'unauthorized' });
+  if (!m) return res.status(401).json({ error: 'unauthorized' });
+  const token = m[1];
+
+  // 1) Global admin token
+  const globalToken = process.env.MCP_AUTH_TOKEN;
+  if (globalToken && token === globalToken) {
+    req.mcpUser = { global: true };
+    return next();
   }
-  next();
+
+  // 2) Per-user token — hash lookup v DB
+  const userId = await verifyMcpToken(token);
+  if (userId) {
+    req.mcpUser = { userId };
+    return next();
+  }
+
+  return res.status(401).json({ error: 'unauthorized' });
 }
 
 // Stateless handler — každý request si vytvoří vlastní server+transport.
@@ -315,7 +352,8 @@ export async function handleMcpRequest(req, res) {
   try {
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => { transport.close?.(); });
-    const server = buildMcpServer();
+    // req.mcpUser byl nastaven middlewarem requireMcpAuth.
+    const server = buildMcpServer(req.mcpUser);
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   } catch (err) {
