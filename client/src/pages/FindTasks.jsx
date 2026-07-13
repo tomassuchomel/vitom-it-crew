@@ -34,7 +34,8 @@ export default function FindTasks() {
   const [teamId, setTeamId]   = useState(''); // '' = všechny (cross-team, jen admin) / mé týmy (non-admin)
   const [userId, setUserId]   = useState('');
   const [projectId, setProjectId] = useState('');
-  const [status, setStatus]   = useState('');
+  // Default 'todo' — user typicky hledá co čeká na akci, ne archiv.
+  const [status, setStatus]   = useState('todo');
   const [allTeams, setAllTeams] = useState([]);   // pro admin
   const [teamUsers, setTeamUsers] = useState([]); // pro dropdown users
   const [projects, setProjects]   = useState([]);

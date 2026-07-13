@@ -23,8 +23,10 @@ const STATUS_FILTERS = [
 export default function Questions() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [box, setBox] = useState(searchParams.get('box') || 'mine');
-  const [status, setStatus] = useState(searchParams.get('status') || '');
+  // Defaulty: inbox (dotazy pro mě) + status=pending (nezodpovězené) —
+  // user typicky chce vidět, co má vyřešit hned, ne archiv.
+  const [box, setBox] = useState(searchParams.get('box') || 'inbox');
+  const [status, setStatus] = useState(searchParams.get('status') || 'pending');
   const [items, setItems] = useState([]);
   const [counts, setCounts] = useState({ mineTotal: 0, inboxTotal: 0, sentTotal: 0, inboxPending: 0, sentPending: 0 });
   const [loading, setLoading] = useState(true);

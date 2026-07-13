@@ -38,7 +38,9 @@ export default function MyTasks() {
   const { currentTeam } = useTeams();
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('all');
+  // Default 'todo' — user typicky chce vidět, co příště udělat, ne archiv.
+  // Přepínač 'Vše' zůstává k dispozici pro plný pohled.
+  const [filter, setFilter] = useState('todo');
   const [view, setView] = useState(() => localStorage.getItem('myTasks.view') || 'list');
   const [detailTaskId, setDetailTaskId] = useState(null);
   const [completingTask, setCompletingTask] = useState(null);
