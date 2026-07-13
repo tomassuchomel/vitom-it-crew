@@ -51,19 +51,21 @@ export default function FindTasks() {
 
   const teamOptions = isAdmin ? allTeams : (myTeams || []);
 
-  // Načti uživatele daného týmu (nebo napříč mými týmy, když teamId='').
+  // Načti uživatele daného týmu (nebo napříč mými týmy / všechny pro admina).
   useEffect(() => {
     if (teamId) {
       usersApi.listInTeam(Number(teamId))
         .then(d => setTeamUsers(d.users || []))
         .catch(() => setTeamUsers([]));
-    } else if (!isAdmin) {
+    } else if (isAdmin) {
+      // Admin + "Všechny týmy" → všichni aktivní uživatelé napříč všemi týmy.
+      usersApi.listAll()
+        .then(d => setTeamUsers((d.users || []).filter(u => u.active)))
+        .catch(() => setTeamUsers([]));
+    } else {
       usersApi.listAcrossMyTeams()
         .then(d => setTeamUsers(d.users || []))
         .catch(() => setTeamUsers([]));
-    } else {
-      // Admin bez teamu → nemá dropdown users (moc lidí). Nechme prázdné, filter přes User nedostupný.
-      setTeamUsers([]);
     }
     setUserId(''); // reset user při změně týmu
     setProjectId('');

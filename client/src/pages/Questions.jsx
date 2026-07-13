@@ -23,10 +23,18 @@ const STATUS_FILTERS = [
 export default function Questions() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
-  // Defaulty: inbox (dotazy pro mě) + status=pending (nezodpovězené) —
-  // user typicky chce vidět, co má vyřešit hned, ne archiv.
-  const [box, setBox] = useState(searchParams.get('box') || 'inbox');
-  const [status, setStatus] = useState(searchParams.get('status') || 'pending');
+  // Defaulty: inbox (dotazy pro mě) + status=pending (nezodpovězené).
+  // URL param respektujeme JEN pro validní hodnoty. Starý default 'mine'
+  // (co user možná má v bookmarku) explicitně přepneme na 'inbox' —
+  // user očekává, že vidí "co čeká na vyřízení", ne archiv.
+  const [box, setBox] = useState(() => {
+    const p = searchParams.get('box');
+    return (p === 'inbox' || p === 'sent' || p === 'all') ? p : 'inbox';
+  });
+  const [status, setStatus] = useState(() => {
+    const p = searchParams.get('status');
+    return (p === 'pending' || p === 'answered') ? p : 'pending';
+  });
   const [items, setItems] = useState([]);
   const [counts, setCounts] = useState({ mineTotal: 0, inboxTotal: 0, sentTotal: 0, inboxPending: 0, sentPending: 0 });
   const [loading, setLoading] = useState(true);

@@ -107,7 +107,10 @@ export default function Layout({ children }) {
         >
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
         </button>
-        <div className="font-bold text-sm tracking-tight">VITOM</div>
+        <div className="font-bold text-sm tracking-tight leading-tight">
+          Intelligent Task
+          <div className="text-[9px] font-normal text-accent-400 leading-none">by VITOM</div>
+        </div>
         <div className="text-[10px] uppercase tracking-[0.18em] text-accent-400 truncate">
           {currentTeam?.name || ''}
         </div>
@@ -124,9 +127,10 @@ export default function Layout({ children }) {
             <VitomLogo size={40} color="currentColor" />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xl font-bold tracking-tight text-cream-50 leading-tight">
-              VITOM
+            <div className="text-lg font-bold tracking-tight text-cream-50 leading-tight">
+              Intelligent Task
             </div>
+            <div className="text-[10px] uppercase tracking-[0.18em] text-accent-400 leading-tight mt-0.5">by VITOM</div>
             <TeamSwitcher />
           </div>
         </div>
