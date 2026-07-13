@@ -135,6 +135,8 @@ export const mzv = {
   reopen:       (id) => api.post(`/mzv/meetings/${id}/reopen`).then(r => r.data),
   removeMeeting: (id) => api.delete(`/mzv/meetings/${id}`).then(r => r.data),
   summarize:    (id) => api.post(`/mzv/meetings/${id}/summarize`).then(r => r.data),
+  // AI shrnutí historie MZV konkrétního podřízeného + doporučení co dnes řešit.
+  historySummary: (userId) => api.post(`/mzv/subordinates/${userId}/summary`).then(r => r.data),
   suggestTasks: (id) => api.post(`/mzv/meetings/${id}/suggest-tasks`).then(r => r.data),
   listTasks:    (id) => api.get(`/mzv/meetings/${id}/tasks`).then(r => r.data),
 };

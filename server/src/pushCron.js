@@ -195,9 +195,38 @@ async function dailyEmailSummary({ h, m, ymd, dayOfWeek } = {}) {
         if (err.code !== '42P01') console.warn('[dailyEmailSummary] meetings check', err.message);
       }
 
+      // MZV reminder: pokud je uživatel manager v nějakém týmu a má tam podřízené,
+      // kterým MZV visí déle než 30 dní (nebo vůbec neproběhlo), vypíšeme je.
+      let mzvReminder = null;
+      try {
+        const zR = await query(`
+          WITH my_teams AS (
+            SELECT team_id FROM team_members WHERE user_id = $1 AND team_role = 'manager'
+          ),
+          my_subs AS (
+            SELECT DISTINCT sub.user_id
+            FROM team_members sub
+            JOIN my_teams t ON t.team_id = sub.team_id
+            WHERE sub.user_id != $1
+          )
+          SELECT u.id, u.name,
+                 (SELECT MAX(meeting_date) FROM mzv_meetings m WHERE m.subordinate_id = u.id AND m.manager_id = $1) AS last_mzv_date
+          FROM my_subs s JOIN users u ON u.id = s.user_id
+          WHERE (
+            (SELECT MAX(meeting_date) FROM mzv_meetings m WHERE m.subordinate_id = u.id AND m.manager_id = $1) IS NULL
+            OR (SELECT MAX(meeting_date) FROM mzv_meetings m WHERE m.subordinate_id = u.id AND m.manager_id = $1) < (CURRENT_DATE - INTERVAL '30 days')::date
+          )
+          ORDER BY last_mzv_date ASC NULLS FIRST, u.name ASC
+          LIMIT 10
+        `, [u.id]);
+        if (zR.rows.length > 0) mzvReminder = zR.rows;
+      } catch (err) {
+        if (err.code !== '42P01') console.warn('[dailyEmailSummary] mzv check', err.message);
+      }
+
       // AI doporučení — jeden Claude call per user
       const ai = await summarizeUserTasks(u, tasksR.rows, apiKey);
-      const html = buildDailySummaryHtml(u, ai, tasksR.rows, meetingReminder);
+      const html = buildDailySummaryHtml(u, ai, tasksR.rows, meetingReminder, mzvReminder);
       const r = await sendMail({
         to: u.email,
         subject: `VITOM: Tvůj plán na dnes (${tasksR.rows.length} úkolů)`,
@@ -259,7 +288,7 @@ PRAVIDLA:
   }
 }
 
-function buildDailySummaryHtml(user, ai, tasks, meetingReminder) {
+function buildDailySummaryHtml(user, ai, tasks, meetingReminder, mzvReminder) {
   const base = (process.env.APP_BASE_URL?.trim() || 'https://it.realitniekosystem.cz').replace(/\/$/, '');
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const PRIO_LABEL = { urgent: '🔥 Urgent', high: '⬆ Vysoká', normal: 'Normální', low: '⬇ Nízká' };
@@ -320,6 +349,23 @@ function buildDailySummaryHtml(user, ai, tasks, meetingReminder) {
             📅 ${esc(m.type_name)} — ${dayLabel}${m.meeting_time ? ` v ${m.meeting_time.slice(0, 5)}` : ''}.
             Zadej agendu <a href="${base}/porady" style="color:#e72b78;font-weight:600;">v aplikaci</a>,
             jinak ji AI vygeneruje sama a rozešle účastníkům.
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
+    ${mzvReminder && mzvReminder.length > 0 ? `
+    <!-- MZV reminder: podřízení, kteří nemají MZV déle než 30 dní -->
+    <div style="background:#dbeafe;border-left:4px solid #3b82f6;padding:14px 16px;border-radius:6px;margin-bottom:20px;">
+      <div style="font-weight:600;color:#1e3a8a;font-size:14px;margin-bottom:4px;">🎯 MZV vyprchává — ${mzvReminder.length} ${mzvReminder.length === 1 ? 'člověk' : mzvReminder.length < 5 ? 'lidé' : 'lidí'}</div>
+      <div style="color:#1e3a8a;font-size:13px;line-height:1.5;">
+        ${mzvReminder.map(s => {
+          const label = s.last_mzv_date
+            ? `poslední ${new Date(s.last_mzv_date).toLocaleDateString('cs-CZ')}`
+            : '<strong>ještě nikdy</strong>';
+          return `<div style="margin:6px 0;">
+            👤 <strong>${esc(s.name)}</strong> — ${label}.
+            <a href="${base}/mzv" style="color:#e72b78;font-weight:600;">Naplánovat MZV →</a>
           </div>`;
         }).join('')}
       </div>

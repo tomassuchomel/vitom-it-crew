@@ -104,12 +104,24 @@ function SubordinateDetail({ user, onProfileSaved }) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [openMeetingId, setOpenMeetingId] = useState(null);
+  const [historySummary, setHistorySummary] = useState(null);
+  const [aiBusy, setAiBusy] = useState(false);
+
+  const genHistorySummary = async () => {
+    setAiBusy(true); setHistorySummary({ loading: true });
+    try {
+      const d = await api.historySummary(user.id);
+      setHistorySummary({ text: d.text, empty: d.empty });
+    } catch (e) {
+      setHistorySummary({ text: `❌ ${e.response?.data?.message || e.message}` });
+    } finally { setAiBusy(false); }
+  };
 
   const loadDetail = () => {
     api.getProfile(user.id).then(d => setProfile(d.profile || null)).catch(() => {});
     api.listMeetings(user.id).then(d => setMeetings(d.meetings || [])).catch(() => setMeetings([]));
   };
-  useEffect(() => { loadDetail(); setOpenMeetingId(null); }, [user.id]);
+  useEffect(() => { loadDetail(); setOpenMeetingId(null); setHistorySummary(null); }, [user.id]);
 
   const startMZV = async () => {
     if (!confirm(`Zahájit MZV s ${user.name}?\n\nVytvoří se nový zápis na dnešní datum a rovnou tě přepnu do editoru.`)) return;
@@ -167,9 +179,29 @@ function SubordinateDetail({ user, onProfileSaved }) {
 
       {/* Historie MZV */}
       <section className="bg-white border border-cream-200 rounded-lg p-4">
-        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-3">
-          🗓 Historie MZV ({meetings.length})
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide">
+            🗓 Historie MZV ({meetings.length})
+          </div>
+          <button onClick={genHistorySummary} disabled={aiBusy || meetings.length === 0}
+            title="AI projde poslední MZV, úkoly z nich, profil a vytvoří shrnutí + doporučení co dnes řešit."
+            className="text-xs px-2 py-1 bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+            📊 AI shrnutí historie
+          </button>
         </div>
+        {historySummary && (
+          <div className="mb-3 bg-cream-50 border border-cream-200 rounded p-3">
+            {historySummary.loading ? (
+              <div className="text-sm text-ink-500">Generuji shrnutí…</div>
+            ) : historySummary.empty ? (
+              <div className="text-sm text-ink-500 italic">{historySummary.text}</div>
+            ) : (
+              <div className="text-sm text-ink-800 whitespace-pre-wrap leading-relaxed">{historySummary.text}</div>
+            )}
+            <button onClick={() => setHistorySummary(null)}
+              className="mt-2 text-xs text-ink-500 hover:underline">Skrýt</button>
+          </div>
+        )}
         {meetings.length === 0 ? (
           <div className="text-sm text-ink-400 italic">
             Zatím žádné MZV. Klikni „Zahájit MZV" nahoře — vytvoří se draft.
@@ -296,6 +328,16 @@ function MeetingView({ meetingId, user, profile, onBack }) {
     } finally { setAiBusy(false); }
   };
 
+  const genHistorySummary = async () => {
+    setAiBusy(true); setSummary({ loading: true, kind: 'history' });
+    try {
+      const d = await api.historySummary(user.id);
+      setSummary({ text: d.text, kind: 'history', empty: d.empty });
+    } catch (e) {
+      setSummary({ text: `❌ ${e.response?.data?.message || e.message}`, kind: 'history' });
+    } finally { setAiBusy(false); }
+  };
+
   const genSuggestTasks = async () => {
     setAiBusy(true);
     try {
@@ -376,10 +418,15 @@ function MeetingView({ meetingId, user, profile, onBack }) {
       <section className="bg-white border border-cream-200 rounded-lg p-4">
         <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">🤖 AI</div>
         <div className="flex flex-wrap gap-2">
+          <button onClick={genHistorySummary} disabled={aiBusy}
+            title="AI projde poslední MZV s tímto člověkem, úkoly z nich, profil — a vytvoří shrnutí + 3-5 doporučení co dnes řešit."
+            className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+            📊 Shrnutí historie + doporučení
+          </button>
           <button onClick={genSummary} disabled={aiBusy}
             title="AI shrne obsah tohoto zápisu (rozhovor + priority + zlepšit + pokračovat) do 3-5 vět."
             className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50">
-            📝 Shrnout zápis
+            📝 Shrnout tento zápis
           </button>
           <button onClick={genSuggestTasks} disabled={aiBusy}
             title={'AI vytáhne z Priorit a „Co zlepšit" konkrétní úkoly. Otevře se dialog pro potvrzení.'}

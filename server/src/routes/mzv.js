@@ -365,6 +365,115 @@ router.post('/meetings/:id/suggest-tasks', requireAuth, async (req, res) => {
   res.json(result);
 });
 
+// AI shrnutí historie MZV se subordinate + doporučení co dnes řešit.
+// Bere posledních 5 uzavřených zápisů + profil. Manager nebo admin.
+router.post('/subordinates/:userId/summary', requireAuth, async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!await canManage(req.user.id, req.user.role, userId)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+
+  const uR = await query(`SELECT name FROM users WHERE id = $1`, [userId]);
+  if (!uR.rows[0]) return res.status(404).json({ error: 'not_found' });
+  const subName = uR.rows[0].name;
+
+  const profile = (await query(`SELECT * FROM mzv_profiles WHERE user_id = $1`, [userId])).rows[0];
+
+  // Posledních 5 zápisů (upřednostníme completed, ale draft ke konci taky).
+  const prev = (await query(`
+    SELECT id, meeting_date, status, rozhovor, priorities, to_improve, to_continue, kpi_ratings, manager_notes
+    FROM mzv_meetings
+    WHERE subordinate_id = $1
+    ORDER BY meeting_date DESC, id DESC
+    LIMIT 5
+  `, [userId])).rows;
+
+  if (prev.length === 0) {
+    return res.json({
+      empty: true,
+      text: 'Zatím neexistuje žádný předchozí MZV zápis. První setkání je fajn věnovat kalibraci — projít profil a domluvit se na 5 KPI sekcích, kterými se budete pravidelně řídit.',
+    });
+  }
+
+  // Priority a úkoly, které vzešly z minulých MZV — jejich reálný status.
+  const meetingIds = prev.map(m => m.id);
+  const tasks = meetingIds.length > 0 ? (await query(`
+    SELECT t.id, t.title, t.status, t.due_date, t.completed_at, t.mzv_meeting_id,
+           u.name AS assignee_name
+    FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
+    WHERE t.mzv_meeting_id = ANY($1::int[])
+  `, [meetingIds])).rows : [];
+
+  const tasksSummary = tasks.map(t => ({
+    title: t.title,
+    status: t.status,
+    due: t.due_date,
+    completed: t.completed_at,
+    on_time: t.completed_at && t.due_date ? (new Date(t.completed_at) <= new Date(t.due_date)) : null,
+    from_mzv: prev.find(m => m.id === t.mzv_meeting_id)?.meeting_date,
+  }));
+
+  const profileSummary = profile ? {
+    ambition: profile.ambition_type,
+    career_direction: profile.career_direction,
+    strengths: profile.strengths,
+    development_areas: profile.development_areas,
+    feedback_style: profile.feedback_style,
+    personal_context: profile.personal_context,
+    feedback_history: profile.feedback_history,
+    kpi_sections: profile.kpi_sections,
+  } : null;
+
+  const prevCompact = prev.map(m => ({
+    date: m.meeting_date,
+    status: m.status,
+    rozhovor: stripHtml(m.rozhovor || '').slice(0, 600),
+    priorities: stripHtml(m.priorities || '').slice(0, 600),
+    to_improve: stripHtml(m.to_improve || '').slice(0, 400),
+    to_continue: stripHtml(m.to_continue || '').slice(0, 400),
+    kpi_ratings: m.kpi_ratings,
+  }));
+
+  const system = `Jsi kouč a asistent manažera při přípravě na MZV (měsíční zpětnou vazbu)
+s podřízeným. Píšeš česky, věcně, konkrétně. Nevymýšlej si — pracuj striktně s daty,
+která ti pošlu (profil pracovníka, minulé zápisy, úkoly z nich).
+
+Cíl: pomoci manažerovi rychle si připomenout, kde s tímto člověkem je, a najít
+3-5 věcí, které dnes dává smysl řešit. Buď stručný a užitečný, ne akademický.`;
+
+  const userMsg = `Podřízený: "${subName}"
+
+PROFIL (Radical Candor kolonky):
+${JSON.stringify(profileSummary, null, 2)}
+
+POSLEDNÍCH ${prev.length} MZV ZÁPISŮ (nejnovější první):
+${JSON.stringify(prevCompact, null, 2)}
+
+STATUS ÚKOLŮ vzešlých z těch MZV:
+${JSON.stringify(tasksSummary, null, 2)}
+
+VYTVOŘ SHRNUTÍ v tomto formátu (Markdown, česky):
+
+## Kde s ${subName} teď jsme
+(2-4 věty přehledu: aktuální fáze, směřování, kontext)
+
+## Opakovaná témata
+(co se v minulých MZV vracelo — pochvaly i výtky. Bulletpointy.)
+
+## Sliby vs realita
+(priority a úkoly z minulých MZV — kolik splněných včas, kolik po termínu, které visí. Konkrétně.)
+
+## Trendy
+(zlepšuje se? zhoršuje? V čem konkrétně?)
+
+## 📌 Doporučení na dnešek
+(3-5 konkrétních bodů — na co se dnes zaměřit, co se zeptat, co pochválit, co řešit. Krátce a akčně.)`;
+
+  const out = await callAI(system, userMsg, 2500);
+  if (out.error) return res.status(500).json(out);
+  res.json({ text: out.text, empty: false });
+});
+
 // Seznam úkolů propojených s tímto zápisem (tasks.mzv_meeting_id).
 router.get('/meetings/:id/tasks', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
