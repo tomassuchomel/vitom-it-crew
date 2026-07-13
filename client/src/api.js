@@ -114,7 +114,7 @@ export const meetings = {
   // List úkolů propojených se zápisem (tasks.meeting_id)
   listTasks:      (id) => api.get(`/meetings/meetings/${id}/tasks`).then(r => r.data),
   // Přechod stavu draft/in_progress/completed. reason povinný pro reopen.
-  transition:     (id, to, reason) => api.post(`/meetings/meetings/${id}/transition`, { to, reason }).then(r => r.data),
+  transition:     (id, to, reason, extra) => api.post(`/meetings/meetings/${id}/transition`, { to, reason, ...(extra || {}) }).then(r => r.data),
   // Follow-up mail účastníkům po zápisu (šéf/admin only)
   followUp:       (id) => api.post(`/meetings/meetings/${id}/followup`).then(r => r.data),
   // Audit log editací

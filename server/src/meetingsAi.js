@@ -91,7 +91,9 @@ Navrhni další body agendy nad rámec kostry — akční, konkrétní, follow-u
   const out = await callAI(system, userMsg, 1500);
   if (out.error) return { error: out };
   try {
-    const parsed = JSON.parse(out.text.trim());
+    // Claude občas obalí JSON do ```json ... ``` fences — sundáme je.
+    const cleaned = String(out.text || '').replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+    const parsed = JSON.parse(cleaned);
     const items = Array.isArray(parsed.items)
       ? parsed.items.filter(x => x && typeof x.text === 'string').map(x => ({ text: String(x.text).slice(0, 200) }))
       : [];

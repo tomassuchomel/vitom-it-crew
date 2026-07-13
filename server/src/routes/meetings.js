@@ -282,9 +282,11 @@ router.patch('/meetings/:id', requireAuth, async (req, res) => {
 });
 
 // Sanitize attendees array — chrání DB proti garbage.
-// status: 'present' | 'late' | 'missed'. Backward compat: pokud přijde jen
+// status: 'present' | 'late' | 'missed' | 'excused'. Backward compat: pokud přijde jen
 // `present: bool`, přeložíme na status ('present' nebo 'missed').
-const VALID_STATUS = ['present', 'late', 'missed'];
+// Pro 'excused' držíme volitelné reason (dovolena/nemoc/jina) + reason_note.
+const VALID_STATUS = ['present', 'late', 'missed', 'excused'];
+const VALID_EXCUSE = ['dovolena', 'nemoc', 'jina'];
 function sanitizeAttendees(list) {
   return list.map(a => {
     let status = a.status;
@@ -293,6 +295,10 @@ function sanitizeAttendees(list) {
       status = a.present === true ? 'present' : a.present === false ? 'missed' : 'present';
     }
     const out = { status };
+    if (status === 'excused') {
+      if (VALID_EXCUSE.includes(a.reason)) out.reason = a.reason;
+      if (a.reason_note) out.reason_note = String(a.reason_note).slice(0, 300);
+    }
     if (a.user_id) out.user_id = Number(a.user_id);
     if (a.guest_name) out.guest_name = String(a.guest_name).slice(0, 200);
     if (a.guest_email) out.guest_email = String(a.guest_email).slice(0, 200);
@@ -392,13 +398,32 @@ router.post('/meetings/:id/followup', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'forbidden', message: 'Follow-up smí poslat jen organizátor nebo admin.' });
   }
 
-  // Attendees kdo byli přítomni (present nebo late — jen missed vynecháme).
+  // Attendees kdo byli přítomni (present nebo late — jen missed/excused vynecháme).
   // Backward-compat: staré záznamy s present: true.
-  const attendees = Array.isArray(cur.attendees) ? cur.attendees.filter(a => {
+  const allAtt = Array.isArray(cur.attendees) ? cur.attendees : [];
+  const attendees = allAtt.filter(a => {
     if (a.status) return a.status === 'present' || a.status === 'late';
     return a.present === true;
-  }) : [];
+  });
   if (attendees.length === 0) return res.status(400).json({ error: 'no_attendees', message: 'Nikdo nebyl označen jako přítomný.' });
+
+  // Omluvení účastníci (pro organizer sekci mailu). Doplníme jméno z DB.
+  const excusedRaw = allAtt.filter(a => a.status === 'excused');
+  const excusedNames = new Map();
+  if (excusedRaw.length > 0) {
+    const ids = excusedRaw.map(a => a.user_id).filter(Boolean);
+    if (ids.length > 0) {
+      const nR = await query(`SELECT id, name FROM users WHERE id = ANY($1::int[])`, [ids]);
+      nR.rows.forEach(u => excusedNames.set(u.id, u.name));
+    }
+  }
+  const EXCUSE_LABEL = { dovolena: 'dovolená', nemoc: 'nemoc', jina: 'jiné' };
+  const excusedList = excusedRaw.map(a => {
+    const who = a.user_id ? (excusedNames.get(a.user_id) || `#${a.user_id}`) : (a.guest_name || 'host');
+    const reason = a.reason ? EXCUSE_LABEL[a.reason] || a.reason : '(bez důvodu)';
+    const note = a.reason_note ? ` – ${a.reason_note}` : '';
+    return { who, reason, note };
+  });
 
   // Úkoly propojené s tímto zápisem
   const tasksR = await query(`
@@ -420,6 +445,12 @@ router.post('/meetings/:id/followup', requireAuth, async (req, res) => {
         ${t.due_date ? ` — termín ${new Date(t.due_date).toLocaleDateString('cs-CZ')}` : ''}
         ${isOrganizer && t.assignee_name ? ` <span style="color:#5b7177">(${escapeMail(t.assignee_name)})</span>` : ''}
       </li>`).join('') || '<li><em>Žádné úkoly nevzešly.</em></li>';
+    const excusedHtml = (isOrganizer && excusedList.length > 0)
+      ? `<h3 style="margin-top:16px">Omluveni (${excusedList.length})</h3>
+         <ul style="font-size:14px;line-height:1.6;color:#5b7177">
+           ${excusedList.map(e => `<li><strong>${escapeMail(e.who)}</strong> — ${escapeMail(e.reason)}${escapeMail(e.note)}</li>`).join('')}
+         </ul>`
+      : '';
     const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:20px;color:#1f3a40">
       <div style="max-width:560px;margin:auto;background:white;border-radius:8px;padding:20px">
         <div style="color:#e72b78;font-weight:bold;font-size:11px;letter-spacing:0.15em">VITOM PORADY</div>
@@ -427,6 +458,7 @@ router.post('/meetings/:id/followup', requireAuth, async (req, res) => {
         <div style="color:#5b7177;font-size:13px">${dateStr} · ${escapeMail(cur.type_name)}</div>
         <h3 style="margin-top:16px">${isOrganizer ? 'Všechny úkoly z porady' : 'Tvoje úkoly z porady'}</h3>
         <ul style="font-size:14px;line-height:1.6">${listHtml}</ul>
+        ${excusedHtml}
         <div style="margin-top:20px;padding-top:12px;border-top:1px solid #e2dcd3;font-size:12px;color:#5b7177">
           <a href="${meetingUrl}" style="color:#e72b78">Otevřít zápis v aplikaci →</a>
         </div>
@@ -598,7 +630,21 @@ router.post('/meetings/:id/transition', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'forbidden', message: 'Uzavřít zápis smí jen organizátor nebo admin.' });
   }
 
-  await query(`UPDATE meetings SET status = $1, updated_at = NOW() WHERE id = $2`, [to, id]);
+  // Volitelně: přechod draft → in_progress může přijít se start_date+start_time
+  // z browseru („Zahájit poradu" tlačítko). Přepíšeme meeting_date/time,
+  // aby zápis odpovídal skutečnému začátku (ne plánovanému).
+  const startDate = /^\d{4}-\d{2}-\d{2}$/.test(req.body?.start_date || '') ? req.body.start_date : null;
+  const startTime = /^\d{2}:\d{2}(:\d{2})?$/.test(req.body?.start_time || '') ? req.body.start_time.slice(0, 5) : null;
+  const applyStart = from === 'draft' && to === 'in_progress' && startDate && startTime;
+
+  if (applyStart) {
+    await query(
+      `UPDATE meetings SET status = $1, meeting_date = $2::date, meeting_time = $3::time, updated_at = NOW() WHERE id = $4`,
+      [to, startDate, startTime, id]
+    );
+  } else {
+    await query(`UPDATE meetings SET status = $1, updated_at = NOW() WHERE id = $2`, [to, id]);
+  }
 
   // Log do meeting_edits — přechod stavu je významná událost.
   await query(`

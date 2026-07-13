@@ -328,13 +328,14 @@ router.get('/attendance', requireAuth, async (req, res) => {
           COUNT(*) FILTER (WHERE status = 'present')::int AS present,
           COUNT(*) FILTER (WHERE status = 'late')::int    AS late,
           COUNT(*) FILTER (WHERE status = 'missed')::int  AS missed,
+          COUNT(*) FILTER (WHERE status = 'excused')::int AS excused,
           COUNT(DISTINCT meeting_id)::int                 AS meetings_count
         FROM att
         WHERE status IS NOT NULL
         GROUP BY user_id
       )
       SELECT s.user_id, u.name, u.avatar_updated_at,
-        s.present, s.late, s.missed, s.meetings_count,
+        s.present, s.late, s.missed, s.excused, s.meetings_count,
         (s.present + s.late + s.missed) AS total,
         CASE
           WHEN (s.present + s.late + s.missed) = 0 THEN NULL

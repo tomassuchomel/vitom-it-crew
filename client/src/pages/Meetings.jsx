@@ -12,7 +12,7 @@ import RichTextEditor from '../components/RichTextEditor.jsx';
 import SuggestedTasksModal from '../components/SuggestedTasksModal.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import { StatusBadge } from '../components/TaskStatus.jsx';
-import { meetings as api, users as usersApi, teams as teamsApi, tasks as tasksApi } from '../api.js';
+import { meetings as api, users as usersApi, teams as teamsApi, tasks as tasksApi, projects as projectsApi } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import { useTeams } from '../teams.jsx';
 
@@ -207,6 +207,7 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
   const [suggestion, setSuggestion] = useState(null); // AI navržené úkoly → SuggestedTasksModal
   const [meetingTasks, setMeetingTasks] = useState([]);
   const [detailTask, setDetailTask] = useState(null);
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
   const { user } = useAuth();
 
   useEffect(() => {
@@ -271,21 +272,30 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
   const addAgendaItem = () => patch({ agenda: [...agenda, { text: '', checked: false, source: 'user' }] });
   const removeAgendaItem = (idx) => patch({ agenda: agenda.filter((_, i) => i !== idx) });
 
-  // Nastaví stav docházky pro člena týmu. Cycluje mezi 4 stavy:
-  //   žádný záznam → present → late → missed → žádný záznam
-  // Přímý set na konkrétní stav přes setAttendanceStatus(userId, status).
-  const setAttendanceStatus = (userId, newStatus) => {
+  // Nastaví stav docházky pro člena týmu. Pokud newStatus === null, odebere záznam.
+  // Pro 'excused' přijímá volitelný reasonObj = { reason, reason_note }.
+  const setAttendanceStatus = (userId, newStatus, reasonObj = null) => {
     const idx = attendees.findIndex(a => a.user_id === userId);
+    // Sestavíme čistý objekt: základní status + reason jen pro excused
+    const buildAttendee = (base) => {
+      const out = { ...base, user_id: userId, status: newStatus };
+      // Uklidíme staré reason kolonky pokud přecházíme mimo excused
+      if (newStatus !== 'excused') { delete out.reason; delete out.reason_note; }
+      if (newStatus === 'excused' && reasonObj) {
+        if (reasonObj.reason) out.reason = reasonObj.reason;
+        if (reasonObj.reason_note) out.reason_note = reasonObj.reason_note;
+      }
+      return out;
+    };
     let next;
     if (idx >= 0) {
       if (newStatus === null) {
-        // Odebrat záznam úplně
         next = attendees.filter((_, i) => i !== idx);
       } else {
-        next = attendees.map((a, i) => i === idx ? { ...a, status: newStatus } : a);
+        next = attendees.map((a, i) => i === idx ? buildAttendee(a) : a);
       }
     } else if (newStatus) {
-      next = [...attendees, { user_id: userId, status: newStatus }];
+      next = [...attendees, buildAttendee({})];
     } else {
       next = attendees;
     }
@@ -420,9 +430,9 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
         </div>
       </div>
 
-      {/* AI panel */}
+      {/* AI panel — před poradou (příprava) */}
       <section className="bg-white border border-cream-200 rounded-lg p-4">
-        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">🤖 AI pomocník</div>
+        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">🤖 AI — příprava porady</div>
         <div className="flex flex-wrap gap-2">
           <button onClick={genSummary} disabled={aiBusy}
             title="AI vygeneruje textové shrnutí předchozích porad tohoto typu: co se řešilo, které úkoly jsou hotové/pozdě/po termínu, a doporučí 3-5 věcí, na které se dnes zaměřit. Zobrazí se pod tlačítkem — nezmění zápis."
@@ -434,38 +444,7 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
             className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
             🧠 Navrhnout agendu
           </button>
-          <button onClick={sendFollowUp} disabled={aiBusy}
-            title="Pošle e-mail všem účastníkům označeným jako 'přítomný'. Každý dostane jen SVÉ úkoly z porady (tasks propojené s tímto zápisem přes meeting_id). Organizátor dostane přehled všech úkolů."
-            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50">
-            📧 Poslat follow-up mail{meeting.followed_up_at ? ' znovu' : ''}
-          </button>
-          <button onClick={genNotesSummary} disabled={aiBusy}
-            title="AI shrne obsah TOHOTO zápisu do 3-5 vět. Zobrazí se pod tlačítkem, nezmění zápis. Vhodné před uzavřením porady."
-            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50">
-            📝 Shrnout tento zápis
-          </button>
-          <button onClick={genTasksFromNotes} disabled={aiBusy}
-            title="AI vytáhne ze zápisu konkrétní úkoly (kdo co má udělat, termín, priorita). Otevře se dialog pro potvrzení — úkoly pak založíš do projektu a propojí se s tímto zápisem."
-            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50">
-            🎯 Vygenerovat úkoly ze zápisu
-          </button>
         </div>
-        {notesSummary && (
-          <div className="mt-3 bg-slate-50 border border-slate-200 rounded p-3">
-            {notesSummary.loading ? (
-              <div className="text-sm text-ink-500">Generuji shrnutí…</div>
-            ) : (
-              <div className="text-sm text-ink-800 whitespace-pre-wrap leading-relaxed">{notesSummary.text}</div>
-            )}
-            <button onClick={() => setNotesSummary(null)}
-              className="mt-2 text-xs text-ink-500 hover:underline">Skrýt</button>
-          </div>
-        )}
-        {meeting.followed_up_at && (
-          <div className="mt-2 text-[11px] text-emerald-700">
-            ✅ Follow-up už byl odeslán: {new Date(meeting.followed_up_at).toLocaleString('cs-CZ')}
-          </div>
-        )}
         {summary && (
           <div className="mt-3 bg-cream-50 border border-cream-200 rounded p-3">
             {summary.loading ? (
@@ -559,25 +538,39 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
           👥 Prezence
         </div>
         <div className="text-[11px] text-ink-500 mb-2">
-          Klik na status: <strong className="text-emerald-700">Byl</strong> · <strong className="text-amber-700">Pozdě</strong> · <strong className="text-red-600">Nepřišel</strong>. Historie se ukládá do skóre docházky každého člověka.
+          Klik na status: <strong className="text-emerald-700">Byl</strong> · <strong className="text-amber-700">Pozdě</strong> · <strong className="text-red-600">Nepřišel</strong> · <strong className="text-sky-700">Omluven</strong> (nepočítá se do skóre docházky). Historie se ukládá do skóre docházky každého člověka.
         </div>
         <div className="space-y-1.5">
           {/* Členové týmu — 3-state buttons */}
-          {teamUsers.map(u => (
-            <AttendanceRow
-              key={u.id}
-              name={u.name}
-              avatarUser={u}
-              status={getAttendanceStatus(u.id)}
-              onSet={(s) => setAttendanceStatus(u.id, s)}
-            />
-          ))}
+          {teamUsers.map(u => {
+            const rec = attendees.find(x => x.user_id === u.id) || {};
+            return (
+              <AttendanceRow
+                key={u.id}
+                name={u.name}
+                avatarUser={u}
+                status={getAttendanceStatus(u.id)}
+                reason={rec.reason}
+                reasonNote={rec.reason_note}
+                onSet={(s, r) => setAttendanceStatus(u.id, s, r)}
+              />
+            );
+          })}
           {/* Hosté */}
           {attendees.filter(a => !a.user_id).map((a) => {
             const idx = attendees.findIndex(x => x === a);
             const guestStatus = a.status || (a.present ? 'present' : 'missed');
-            const setGuest = (s) => {
-              const next = attendees.map((x, i) => i === idx ? { ...x, status: s } : x);
+            const setGuest = (s, r) => {
+              const next = attendees.map((x, i) => {
+                if (i !== idx) return x;
+                const out = { ...x, status: s };
+                if (s !== 'excused') { delete out.reason; delete out.reason_note; }
+                if (s === 'excused' && r) {
+                  if (r.reason) out.reason = r.reason;
+                  if (r.reason_note) out.reason_note = r.reason_note;
+                }
+                return out;
+              });
               patch({ attendees: next });
             };
             return (
@@ -585,6 +578,11 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
                 <AttendanceButtons status={guestStatus} onSet={setGuest} />
                 <div className="w-5 h-5 rounded-full bg-cream-200 flex items-center justify-center text-[10px]">👤</div>
                 <span className="text-ink-800 flex-1">{a.guest_name}</span>
+                {guestStatus === 'excused' && (
+                  <span className="text-[11px] text-ink-500 italic truncate">
+                    {EXCUSE_LABEL[a.reason] || '(bez důvodu)'}{a.reason_note ? ` — ${a.reason_note}` : ''}
+                  </span>
+                )}
                 <span className="text-[10px] text-ink-400 shrink-0">{a.guest_email}</span>
                 <button onClick={() => removeGuest(idx)} className="text-red-500 text-xs">×</button>
               </div>
@@ -609,14 +607,59 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
         </div>
       </section>
 
+      {/* AI panel — po poradě (uzavření + follow-up) */}
+      <section className="bg-white border border-cream-200 rounded-lg p-4">
+        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">🤖 AI — po poradě</div>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={genNotesSummary} disabled={aiBusy}
+            title="AI shrne obsah TOHOTO zápisu do 3-5 vět. Zobrazí se pod tlačítkem, nezmění zápis. Vhodné před uzavřením porady."
+            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50">
+            📝 Shrnout tento zápis
+          </button>
+          <button onClick={genTasksFromNotes} disabled={aiBusy}
+            title="AI vytáhne ze zápisu konkrétní úkoly (kdo co má udělat, termín, priorita). Otevře se dialog pro potvrzení — úkoly pak založíš do projektu a propojí se s tímto zápisem."
+            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50">
+            🎯 Vygenerovat úkoly ze zápisu
+          </button>
+          <button onClick={sendFollowUp} disabled={aiBusy}
+            title="Pošle e-mail všem účastníkům označeným jako 'přítomný'. Každý dostane jen SVÉ úkoly z porady (tasks propojené s tímto zápisem přes meeting_id). Organizátor dostane přehled všech úkolů."
+            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50">
+            📧 Poslat follow-up mail{meeting.followed_up_at ? ' znovu' : ''}
+          </button>
+        </div>
+        {notesSummary && (
+          <div className="mt-3 bg-slate-50 border border-slate-200 rounded p-3">
+            {notesSummary.loading ? (
+              <div className="text-sm text-ink-500">Generuji shrnutí…</div>
+            ) : (
+              <div className="text-sm text-ink-800 whitespace-pre-wrap leading-relaxed">{notesSummary.text}</div>
+            )}
+            <button onClick={() => setNotesSummary(null)}
+              className="mt-2 text-xs text-ink-500 hover:underline">Skrýt</button>
+          </div>
+        )}
+        {meeting.followed_up_at && (
+          <div className="mt-2 text-[11px] text-emerald-700">
+            ✅ Follow-up už byl odeslán: {new Date(meeting.followed_up_at).toLocaleString('cs-CZ')}
+          </div>
+        )}
+      </section>
+
       {/* Úkoly z porady */}
       <section className="bg-white border border-cream-200 rounded-lg p-4">
-        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
-          🎯 Úkoly z porady ({meetingTasks.length})
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide">
+            🎯 Úkoly z porady ({meetingTasks.length})
+          </div>
+          <button onClick={() => setNewTaskOpen(true)}
+            title="Založit úkol ručně a propojit ho s touto poradou (meeting_id)."
+            className="text-xs px-2 py-1 bg-brand-500 text-white rounded hover:bg-brand-600">
+            + Přidat úkol
+          </button>
         </div>
         {meetingTasks.length === 0 ? (
           <div className="text-sm text-ink-400 italic">
-            Zatím žádné úkoly. Použij tlačítko „🎯 Vygenerovat úkoly ze zápisu" nahoře.
+            Zatím žádné úkoly. Klikni „+ Přidat úkol" nahoře nebo použij AI „Vygenerovat úkoly ze zápisu".
           </div>
         ) : (
           <ul className="divide-y divide-cream-100">
@@ -659,6 +702,15 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
       )}
       {detailTask && (
         <TaskDetailModal task={detailTask} onClose={() => { setDetailTask(null); reloadMeetingTasks(); }} onUpdate={() => {}} />
+      )}
+      {newTaskOpen && (
+        <MeetingNewTaskModal
+          meetingId={meeting.id}
+          teamId={type?.team_id}
+          currentUser={user}
+          onClose={() => setNewTaskOpen(false)}
+          onCreated={() => { setNewTaskOpen(false); reloadMeetingTasks(); }}
+        />
       )}
 
       {dirty && (
@@ -738,9 +790,20 @@ function StatusBar({ meeting, type, user, onChanged }) {
       reason = prompt('Napiš důvod, proč otevíráš zápis k opravě:');
       if (!reason?.trim()) return;
     }
+    // Zahájení porady: pošleme aktuální datum+čas z browseru, ať zápis
+    // odpovídá skutečnému začátku (v lokální zóně organizátora).
+    let start = null;
+    if (to === 'in_progress' && meeting.status === 'draft') {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      start = {
+        start_date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+        start_time: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+      };
+    }
     setBusy(true);
     try {
-      await api.transition(meeting.id, to, reason);
+      await api.transition(meeting.id, to, reason, start);
       await onChanged();
     } catch (e) {
       alert(e.response?.data?.message || 'Přechod selhal');
@@ -788,25 +851,58 @@ function StatusBar({ meeting, type, user, onChanged }) {
   );
 }
 
-// Řádek prezence pro jednoho člena týmu. 3-state selektor + odebrat.
-function AttendanceRow({ name, avatarUser, status, onSet }) {
+// Řádek prezence pro jednoho člena týmu. 4-state selektor + zobrazení důvodu u „Omluven".
+function AttendanceRow({ name, avatarUser, status, reason, reasonNote, onSet }) {
   return (
     <div className="flex items-center gap-2 text-sm hover:bg-cream-50 rounded px-1 py-0.5">
       <AttendanceButtons status={status} onSet={onSet} />
       <Avatar user={{ id: avatarUser.id, name: avatarUser.name, avatar_updated_at: avatarUser.avatar_updated_at }} size={20} />
       <span className={status ? 'text-ink-800' : 'text-ink-500'}>{name}</span>
+      {status === 'excused' && (
+        <span className="text-[11px] text-ink-500 italic truncate">
+          {EXCUSE_LABEL[reason] || '(bez důvodu)'}{reasonNote ? ` — ${reasonNote}` : ''}
+        </span>
+      )}
     </div>
   );
 }
 
-// 3 tlačítka: ✅ Byl / ⏰ Pozdě / ❌ Nepřišel. Klik na aktivní tlačítko = odebrat záznam.
+const EXCUSE_LABEL = { dovolena: 'dovolená', nemoc: 'nemoc', jina: 'jiné' };
+
+// Prompty na důvod omluvy. Vrací { reason, reason_note } nebo null pokud zrušeno.
+function askExcuseReason(currentReason, currentNote) {
+  const menu = `Zvol důvod omluvy:\n  1 = dovolená\n  2 = nemoc\n  3 = jiné (napíšeš důvod)\n\nzadej číslo:`;
+  const cur = currentReason === 'dovolena' ? '1' : currentReason === 'nemoc' ? '2' : currentReason === 'jina' ? '3' : '';
+  const pick = prompt(menu, cur);
+  if (pick === null) return null;
+  const p = String(pick).trim();
+  if (p === '1') return { reason: 'dovolena' };
+  if (p === '2') return { reason: 'nemoc' };
+  if (p === '3') {
+    const note = prompt('Napiš krátce důvod:', currentNote || '');
+    if (!note?.trim()) return null;
+    return { reason: 'jina', reason_note: note.trim().slice(0, 300) };
+  }
+  return null;
+}
+
+// 4 tlačítka: ✅ Byl / ⏰ Pozdě / ❌ Nepřišel / 📄 Omluven. Klik na aktivní = odebrat záznam.
 function AttendanceButtons({ status, onSet }) {
   const btn = (val, cls, label, title) => {
     const active = status === val;
     return (
       <button type="button"
         title={title}
-        onClick={() => onSet(active ? null : val)}
+        onClick={() => {
+          if (active) { onSet(null); return; }
+          if (val === 'excused') {
+            const r = askExcuseReason();
+            if (!r) return;
+            onSet('excused', r);
+          } else {
+            onSet(val);
+          }
+        }}
         className={`w-7 h-6 text-xs rounded transition ${
           active ? cls : 'bg-cream-100 text-ink-400 hover:bg-cream-200'
         }`}>{label}</button>
@@ -817,7 +913,125 @@ function AttendanceButtons({ status, onSet }) {
       {btn('present', 'bg-emerald-500 text-white', '✓', 'Byl přítomen')}
       {btn('late',    'bg-amber-500 text-white',   '⏰', 'Přišel pozdě')}
       {btn('missed',  'bg-red-500 text-white',     '✗', 'Nepřišel (měl být)')}
+      {btn('excused', 'bg-sky-500 text-white',     '📄', 'Omluven — dovolená / nemoc / jiné (zeptá se na důvod)')}
     </div>
+  );
+}
+
+// ==================== Modal: přidat úkol ručně k poradě ====================
+// Malý dedikovaný formulář — projekt + název + assignee + priorita + termín.
+// Vždy uloží meeting_id, aby úkol byl navázaný na tento zápis.
+
+function MeetingNewTaskModal({ meetingId, teamId, currentUser, onClose, onCreated }) {
+  const [projects, setProjects] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [form, setForm] = useState({
+    project_id: '', title: '', assignee_id: currentUser?.id || '',
+    priority: 'normal', due_date: '',
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    // Projekty napříč týmy (aby úkol z porady mohl padnout i do jiného projektu).
+    (projectsApi.listAll ? projectsApi.listAll() : projectsApi.list())
+      .then(d => {
+        const active = (d.projects || []).filter(p => !p.status || p.status === 'active');
+        setProjects(active);
+        if (active.length === 1) setForm(f => ({ ...f, project_id: active[0].id }));
+      })
+      .catch(() => setErr('Nepodařilo se načíst projekty.'));
+  }, []);
+
+  // Když je vybraný projekt, načteme assignees jeho týmu.
+  useEffect(() => {
+    if (!form.project_id) { setUsers([]); return; }
+    const proj = projects.find(p => String(p.id) === String(form.project_id));
+    if (!proj?.team_id) { usersApi.list().then(d => setUsers(d.users || [])); return; }
+    usersApi.listInTeam(proj.team_id).then(d => {
+      const list = d.users || [];
+      setUsers(list);
+      if (!list.some(u => u.id === currentUser?.id)) {
+        setForm(f => ({ ...f, assignee_id: list[0]?.id || '' }));
+      }
+    }).catch(() => setUsers([]));
+  }, [form.project_id, projects, currentUser?.id]);
+
+  const submit = async () => {
+    setErr(null);
+    if (!form.project_id) { setErr('Vyber projekt.'); return; }
+    if (!form.title.trim()) { setErr('Vyplň název úkolu.'); return; }
+    if (!form.assignee_id) { setErr('Vyber, komu úkol patří.'); return; }
+    setBusy(true);
+    try {
+      await tasksApi.create({
+        project_id: Number(form.project_id),
+        title: form.title.trim(),
+        assignee_id: Number(form.assignee_id),
+        priority: form.priority,
+        due_date: form.due_date || null,
+        meeting_id: meetingId,
+      });
+      onCreated();
+    } catch (e) {
+      setErr(e.response?.data?.message || e.response?.data?.error || 'Vytvoření selhalo.');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open={true} onClose={onClose} title="Přidat úkol z porady"
+      footer={<>
+        <button onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-ink-300">Zrušit</button>
+        <button onClick={submit} disabled={busy}
+          className="px-3 py-1.5 text-sm rounded bg-brand-500 text-white disabled:opacity-50">
+          {busy ? 'Vytvářím…' : 'Vytvořit úkol'}
+        </button>
+      </>}>
+      <div className="space-y-3 text-sm">
+        <label className="block">
+          <span className="text-xs font-medium text-ink-600">Projekt *</span>
+          <select value={form.project_id} onChange={e => setForm({ ...form, project_id: e.target.value })}
+            className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5">
+            <option value="">— vyber projekt —</option>
+            {projects.map(p => (
+              <option key={p.id} value={p.id}>{p.name}{p.team_name ? ` · ${p.team_name}` : ''}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-ink-600">Název úkolu *</span>
+          <input type="text" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })}
+            className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5" autoFocus />
+        </label>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <label className="block">
+            <span className="text-xs font-medium text-ink-600">Komu</span>
+            <select value={form.assignee_id} onChange={e => setForm({ ...form, assignee_id: e.target.value })}
+              className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5">
+              <option value="">—</option>
+              {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-ink-600">Priorita</span>
+            <select value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}
+              className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5">
+              <option value="low">Nízká</option>
+              <option value="normal">Normální</option>
+              <option value="high">Vysoká</option>
+              <option value="urgent">Urgentní</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-ink-600">Termín</span>
+            <input type="date" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })}
+              className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5" />
+          </label>
+        </div>
+        <div className="text-[11px] text-ink-400">Úkol se propojí s tímto zápisem (meeting_id) a objeví se v jeho seznamu úkolů.</div>
+        {err && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{err}</div>}
+      </div>
+    </Modal>
   );
 }
 
