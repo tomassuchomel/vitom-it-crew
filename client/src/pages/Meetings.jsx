@@ -16,6 +16,32 @@ import { useTeams } from '../teams.jsx';
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric' }) : '';
 const fmtDateShort = (iso) => iso ? new Date(iso).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: '2-digit' }) : '—';
 
+// Vyparsuje bodové doporučení ze sekce '## 📌 Doporučení k řešení dnes' v Markdownu.
+// Vrátí array krátkých názvů (max 150 znaků) — buď mezi **...** kdyz je bod
+// psaný jako "1. **Název** – popis", nebo první část řádku.
+function parseRecommendations(text) {
+  if (!text) return [];
+  const idx = text.search(/##\s*[^\n]*Doporučení/i);
+  if (idx === -1) return [];
+  const section = text.slice(idx);
+  const lines = section.split('\n');
+  const items = [];
+  for (const line of lines) {
+    // "1. **Název** – popis" nebo "- **Název** – ..."
+    const m1 = line.match(/^\s*(?:\d+\.|-|\*)\s*\*\*([^*]+)\*\*/);
+    if (m1) { items.push(m1[1].trim()); continue; }
+    // "1. Text bodu" (bez tučného)
+    const m2 = line.match(/^\s*(?:\d+\.|-|\*)\s+([^*].+)$/);
+    if (m2) {
+      const raw = m2[1].trim();
+      // Odstřih po pomlčce (obvykle "Název – popis")
+      const cut = raw.split(/\s+[–\-—]\s+/)[0];
+      items.push(cut.slice(0, 150));
+    }
+  }
+  return items;
+}
+
 export default function Meetings() {
   const [types, setTypes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -319,7 +345,50 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
             ) : summary.empty ? (
               <div className="text-sm text-ink-500 italic">{summary.text}</div>
             ) : (
-              <div className="text-sm text-ink-800 whitespace-pre-wrap leading-relaxed">{summary.text}</div>
+              <>
+                <div className="text-sm text-ink-800 whitespace-pre-wrap leading-relaxed">{summary.text}</div>
+                {/* Extrakce doporučení → rychlé přidání do agendy */}
+                {(() => {
+                  const recs = parseRecommendations(summary.text);
+                  if (recs.length === 0) return null;
+                  return (
+                    <div className="mt-3 pt-3 border-t border-cream-300">
+                      <div className="text-xs font-semibold text-ink-600 mb-2">
+                        📌 {recs.length} doporučení — přidat do agendy:
+                      </div>
+                      <div className="space-y-1.5">
+                        {recs.map((r, i) => {
+                          const alreadyIn = agenda.some(a => (a.text || '').toLowerCase() === r.toLowerCase());
+                          return (
+                            <div key={i} className="flex items-start gap-2 text-sm">
+                              <button
+                                disabled={alreadyIn}
+                                onClick={() => patch({ agenda: [...agenda, { text: r, checked: false, source: 'ai' }] })}
+                                title={alreadyIn ? 'Bod už je v agendě' : 'Přidat jako bod agendy'}
+                                className={`shrink-0 mt-0.5 w-6 h-6 rounded ${
+                                  alreadyIn ? 'bg-emerald-100 text-emerald-600 cursor-default'
+                                            : 'bg-brand-500 text-white hover:bg-brand-600'
+                                }`}
+                              >{alreadyIn ? '✓' : '+'}</button>
+                              <span className="flex-1 text-ink-700">{r}</span>
+                            </div>
+                          );
+                        })}
+                        <button
+                          onClick={() => {
+                            const newItems = recs
+                              .filter(r => !agenda.some(a => (a.text || '').toLowerCase() === r.toLowerCase()))
+                              .map(r => ({ text: r, checked: false, source: 'ai' }));
+                            if (newItems.length > 0) patch({ agenda: [...agenda, ...newItems] });
+                          }}
+                          className="mt-2 text-xs text-brand-500 hover:underline">
+                          + Přidat všechny nezařazené
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </>
             )}
             <button onClick={() => setSummary(null)}
               className="mt-2 text-xs text-ink-500 hover:underline">Skrýt sumář</button>
