@@ -144,7 +144,7 @@ router.get('/types/:id/meetings', requireAuth, async (req, res) => {
 
   const r = await query(`
     SELECT m.id, m.title, m.meeting_date, m.meeting_time, m.agenda_finalized_at,
-           m.is_locked, m.created_at, m.updated_at,
+           m.status, m.is_locked, m.created_at, m.updated_at,
            u.name AS created_by_name,
            (SELECT COUNT(*)::int FROM jsonb_array_elements(m.attendees) a
               WHERE a->>'status' IN ('present', 'late')
@@ -210,8 +210,9 @@ router.patch('/meetings/:id', requireAuth, async (req, res) => {
   `, [id])).rows[0];
   if (!cur) return res.status(404).json({ error: 'not_found' });
   if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
-  if (cur.is_locked && cur.organizer_id !== req.user.id && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'locked', message: 'Zápis je zamknutý pro editaci.' });
+  // Zápis ve stavu 'completed' je zamknutý — edituje se jen po reopenu.
+  if (cur.status === 'completed' && cur.organizer_id !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'locked', message: 'Zápis je uzavřený. Zažádej o otevření k opravě.' });
   }
 
   const b = req.body || {};
@@ -476,6 +477,56 @@ router.get('/meetings/:id/edits', requireAuth, async (req, res) => {
     LIMIT 20
   `, [id]);
   res.json({ edits: r.rows });
+});
+
+// Přechod stavu zápisu.
+// draft → in_progress: kdokoli s přístupem (obvykle organizer zahájí poradu)
+// in_progress → completed: organizer/admin (uzavře + automaticky posílá follow-up? ne, nechme na tlačítko)
+// completed → draft: reopen — jen organizer/admin, vyžaduje důvod (audit log)
+router.post('/meetings/:id/transition', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`
+    SELECT m.*, t.organizer_id, t.team_id, t.visibility, t.custom_users
+    FROM meetings m JOIN meeting_types t ON t.id = m.type_id WHERE m.id = $1
+  `, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
+
+  const to = String(req.body?.to || '').trim();
+  const reason = req.body?.reason ? String(req.body.reason).trim().slice(0, 1000) : null;
+  const isOrgOrAdmin = cur.organizer_id === req.user.id || req.user.role === 'admin';
+  const from = cur.status || 'draft';
+
+  // Validace přechodu
+  const ALLOWED = {
+    'draft':       ['in_progress'],
+    'in_progress': ['completed', 'draft'],
+    'completed':   ['draft'],  // reopen
+  };
+  if (!(ALLOWED[from] || []).includes(to)) {
+    return res.status(400).json({ error: 'invalid_transition', from, to });
+  }
+
+  // Přechod completed → draft (reopen) vyžaduje org/admin + reason.
+  if (from === 'completed' && to === 'draft') {
+    if (!isOrgOrAdmin) return res.status(403).json({ error: 'forbidden', message: 'Reopen smí jen organizátor nebo admin.' });
+    if (!reason) return res.status(400).json({ error: 'reason_required', message: 'Napiš prosím krátký důvod, proč zápis otevíráš.' });
+  }
+  // Přechod in_progress → completed vyžaduje org/admin.
+  if (from === 'in_progress' && to === 'completed' && !isOrgOrAdmin) {
+    return res.status(403).json({ error: 'forbidden', message: 'Uzavřít zápis smí jen organizátor nebo admin.' });
+  }
+
+  await query(`UPDATE meetings SET status = $1, updated_at = NOW() WHERE id = $2`, [to, id]);
+
+  // Log do meeting_edits — přechod stavu je významná událost.
+  await query(`
+    INSERT INTO meeting_edits (meeting_id, editor_id, change_type, before_value, after_value)
+    VALUES ($1, $2, 'status', $3::jsonb, $4::jsonb)
+  `, [id, req.user.id, JSON.stringify(from), JSON.stringify({ status: to, reason })]).catch(err => console.warn('[transition/audit]', err.message));
+
+  const r = await query(`SELECT * FROM meetings WHERE id = $1`, [id]);
+  res.json({ meeting: r.rows[0] });
 });
 
 // Smazat zápis.

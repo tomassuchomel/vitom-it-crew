@@ -129,13 +129,21 @@ export default function Meetings() {
                       className={`w-full text-left px-4 py-2.5 hover:bg-cream-50 border-b border-cream-100 transition ${
                         selectedMeetingId === m.id ? 'bg-accent-50 border-l-2 border-l-accent-500' : ''
                       }`}>
-                      <div className="text-sm font-medium text-ink-800 truncate">{m.title}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm font-medium text-ink-800 truncate flex-1">{m.title}</div>
+                        {m.status && (
+                          <span className="text-[9px]">
+                            {m.status === 'draft' && '📝'}
+                            {m.status === 'in_progress' && '🔴'}
+                            {m.status === 'completed' && '✅'}
+                          </span>
+                        )}
+                      </div>
                       <div className="text-[10px] text-ink-500">
                         📅 {fmtDateShort(m.meeting_date)}
                         {m.meeting_time && ` ${m.meeting_time.slice(0, 5)}`}
                         {' · '}
                         <span title="Přítomní / pozvaní">👥 {m.present_count}/{m.attendee_count}</span>
-                        {m.is_locked && ' · 🔒'}
                       </div>
                     </button>
                   </li>
@@ -323,11 +331,17 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
     <div className="max-w-4xl mx-auto p-6 space-y-4">
       {/* Header */}
       <div className="bg-white border border-cream-200 rounded-lg p-4">
+        <StatusBar meeting={meeting} type={type} user={user} onChanged={async () => {
+          const d = await api.getMeeting(meeting.id);
+          setMeeting(d.meeting);
+          onChanged?.();
+        }} />
         <input
           type="text"
           value={meeting.title}
           onChange={e => patch({ title: e.target.value })}
-          className="w-full text-2xl font-bold text-ink-800 border-0 focus:outline-none focus:ring-0 bg-transparent"
+          disabled={meeting.status === 'completed' && meeting.organizer_id !== user?.id && user?.role !== 'admin'}
+          className="w-full text-2xl font-bold text-ink-800 border-0 focus:outline-none focus:ring-0 bg-transparent disabled:bg-cream-50"
         />
         <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
           <label>
@@ -580,7 +594,78 @@ const CHANGE_LABEL = {
   notes: 'zápis',
   agenda: 'agendu',
   attendees: 'prezenci',
+  status: 'stav',
 };
+
+// Status bar zápisu: badge + tlačítka přechodu.
+// draft → in_progress → completed (uzavře) ↺ draft (reopen, jen org/admin)
+const STATUS_META = {
+  draft:       { label: '📝 Příprava',  cls: 'bg-slate-100 text-slate-700 border-slate-300' },
+  in_progress: { label: '🔴 Probíhá',   cls: 'bg-emerald-100 text-emerald-700 border-emerald-300 animate-pulse' },
+  completed:   { label: '✅ Uzavřeno',  cls: 'bg-brand-50 text-brand-700 border-brand-300' },
+};
+
+function StatusBar({ meeting, type, user, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const status = meeting.status || 'draft';
+  const isOrgOrAdmin = meeting.organizer_id === user?.id || user?.role === 'admin';
+  const badge = STATUS_META[status] || STATUS_META.draft;
+
+  const doTransition = async (to, needsReason = false) => {
+    let reason = null;
+    if (needsReason) {
+      reason = prompt('Napiš důvod, proč otevíráš zápis k opravě:');
+      if (!reason?.trim()) return;
+    }
+    setBusy(true);
+    try {
+      await api.transition(meeting.id, to, reason);
+      await onChanged();
+    } catch (e) {
+      alert(e.response?.data?.message || 'Přechod selhal');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 mb-2">
+      <span className={`text-xs font-semibold px-2.5 py-1 rounded border ${badge.cls}`}>{badge.label}</span>
+      {/* Tlačítka přechodu */}
+      {status === 'draft' && (
+        <button onClick={() => doTransition('in_progress')} disabled={busy}
+          title="Zahájit poradu — od teď mohou účastníci upravovat zápis a prezenci."
+          className="text-xs px-2 py-1 bg-emerald-500 text-white rounded hover:bg-emerald-600 disabled:opacity-50">
+          ▶️ Zahájit poradu
+        </button>
+      )}
+      {status === 'in_progress' && (
+        <>
+          {isOrgOrAdmin && (
+            <button onClick={() => doTransition('completed')} disabled={busy}
+              title="Uzavřít poradu — zápis se zamkne, jen organizátor může vyvolat opravu."
+              className="text-xs px-2 py-1 bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+              ✅ Uzavřít a zamknout
+            </button>
+          )}
+          <button onClick={() => doTransition('draft')} disabled={busy}
+            title="Přerušit — vrátit zápis do přípravy."
+            className="text-xs px-2 py-1 bg-white border border-ink-300 text-ink-700 rounded hover:bg-cream-50 disabled:opacity-50">
+            ⏸ Přerušit (zpět příprava)
+          </button>
+        </>
+      )}
+      {status === 'completed' && isOrgOrAdmin && (
+        <button onClick={() => doTransition('draft', true)} disabled={busy}
+          title="Otevřít zámek pro úpravy. Musíš napsat důvod, který se zaznamená do historie změn."
+          className="text-xs px-2 py-1 bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50">
+          🔓 Otevřít k opravě
+        </button>
+      )}
+      {status === 'completed' && !isOrgOrAdmin && (
+        <span className="text-xs text-ink-500 italic">Uzavřeno. Pro úpravy kontaktuj organizátora ({type?.organizer_name || '—'}).</span>
+      )}
+    </div>
+  );
+}
 
 // Řádek prezence pro jednoho člena týmu. 3-state selektor + odebrat.
 function AttendanceRow({ name, avatarUser, status, onSet }) {

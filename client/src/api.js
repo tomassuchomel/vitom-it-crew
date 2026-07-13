@@ -107,6 +107,8 @@ export const meetings = {
   summary:        (id) => api.post(`/meetings/meetings/${id}/summary`).then(r => r.data),
   // AI: návrh dalších bodů agendy (mimo kostru)
   suggestAgenda:  (id) => api.post(`/meetings/meetings/${id}/agenda-suggest`).then(r => r.data),
+  // Přechod stavu draft/in_progress/completed. reason povinný pro reopen.
+  transition:     (id, to, reason) => api.post(`/meetings/meetings/${id}/transition`, { to, reason }).then(r => r.data),
   // Follow-up mail účastníkům po zápisu (šéf/admin only)
   followUp:       (id) => api.post(`/meetings/meetings/${id}/followup`).then(r => r.data),
   // Audit log editací
