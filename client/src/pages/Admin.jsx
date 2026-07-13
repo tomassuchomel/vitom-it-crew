@@ -781,6 +781,7 @@ function EditUserModal({ userId, users, onClose, onSaved }) {
     hourly_rate:userData?.hourly_rate || 0,
     active:     userData?.active ?? true,
     can_see_all_teams: !!userData?.can_see_all_teams,
+    is_idea_pm: !!userData?.is_idea_pm,
   });
   const [allTeams, setAllTeams] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -871,6 +872,11 @@ function EditUserModal({ userId, users, onClose, onSaved }) {
             <input type="checkbox" checked={form.can_see_all_teams}
               onChange={e => setForm({ ...form, can_see_all_teams: e.target.checked })} />
             Vidí AI Coach napříč všemi týmy (executive view)
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={form.is_idea_pm}
+              onChange={e => setForm({ ...form, is_idea_pm: e.target.checked })} />
+            💡 PM Nápadníku (vidí Report + Dashboard, edituje metadata, ale neschvaluje)
           </label>
           <button onClick={resetPassword} className="text-xs text-brand-500 hover:text-brand-600 underline">
             Resetovat heslo na výchozí

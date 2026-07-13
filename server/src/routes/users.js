@@ -67,20 +67,42 @@ router.get('/', requireAuth, async (req, res) => {
   // scope=all = admin přehled napříč teamy
   if (scopeAll) {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
-    const r = await query(
-      `SELECT u.id, u.email, u.name, u.first_name, u.last_name, u.role, u.hourly_rate, u.active,
-              u.must_change_password, u.avatar_updated_at, u.can_see_all_teams,
-              COALESCE(
-                (SELECT json_agg(json_build_object('team_id', tm.team_id, 'team_role', tm.team_role, 'team_name', t.name, 'team_slug', t.slug)
-                                 ORDER BY tm.team_id)
-                 FROM team_members tm JOIN teams t ON t.id = tm.team_id
-                 WHERE tm.user_id = u.id),
-                '[]'::json
-              ) AS teams
-       FROM users u
-       ORDER BY u.id`
-    );
-    return res.json({ users: r.rows.map(u => ({ ...publicUser(u, { includeRate: showRates }), teams: u.teams })) });
+    // is_idea_pm přes LEFT JOIN idea_pms. Defenzivně: pokud tabulka
+    // neexistuje (migrace neběžela), spadne to na fallback bez sloupce.
+    let r;
+    try {
+      r = await query(
+        `SELECT u.id, u.email, u.name, u.first_name, u.last_name, u.role, u.hourly_rate, u.active,
+                u.must_change_password, u.avatar_updated_at, u.can_see_all_teams,
+                (ip.user_id IS NOT NULL) AS is_idea_pm,
+                COALESCE(
+                  (SELECT json_agg(json_build_object('team_id', tm.team_id, 'team_role', tm.team_role, 'team_name', t.name, 'team_slug', t.slug)
+                                   ORDER BY tm.team_id)
+                   FROM team_members tm JOIN teams t ON t.id = tm.team_id
+                   WHERE tm.user_id = u.id),
+                  '[]'::json
+                ) AS teams
+         FROM users u
+         LEFT JOIN idea_pms ip ON ip.user_id = u.id
+         ORDER BY u.id`
+      );
+    } catch (err) {
+      if (err.code !== '42P01') throw err;
+      r = await query(
+        `SELECT u.id, u.email, u.name, u.first_name, u.last_name, u.role, u.hourly_rate, u.active,
+                u.must_change_password, u.avatar_updated_at, u.can_see_all_teams,
+                FALSE AS is_idea_pm,
+                COALESCE(
+                  (SELECT json_agg(json_build_object('team_id', tm.team_id, 'team_role', tm.team_role, 'team_name', t.name, 'team_slug', t.slug)
+                                   ORDER BY tm.team_id)
+                   FROM team_members tm JOIN teams t ON t.id = tm.team_id
+                   WHERE tm.user_id = u.id),
+                  '[]'::json
+                ) AS teams
+         FROM users u ORDER BY u.id`
+      );
+    }
+    return res.json({ users: r.rows.map(u => ({ ...publicUser(u, { includeRate: showRates }), teams: u.teams, is_idea_pm: u.is_idea_pm })) });
   }
 
   // ?team_id=N → členové konkrétního týmu (pro cross-team task creation,
@@ -230,6 +252,9 @@ router.put('/:id', requireAuth, requireRole('admin'), async (req, res) => {
     hourly_rate = cur.hourly_rate,
     active = cur.active,
     can_see_all_teams = cur.can_see_all_teams,
+    // Speciální nesloupcový flag: přiřazení role „PM Nápadníku" (tabulka idea_pms).
+    // Undefined = neměnit; true/false = toggle.
+    is_idea_pm,
   } = req.body || {};
 
   // Pokud admin pošle first/last, použijeme je a přegenerujeme name
@@ -247,6 +272,23 @@ router.put('/:id', requireAuth, requireRole('admin'), async (req, res) => {
      WHERE id = $8`,
     [newName, first, last, role, Number(hourly_rate) || 0, !!active, !!can_see_all_teams, id]
   );
+
+  // Toggle PM Nápadníku (tabulka idea_pms). Defenzivně — tabulka mohla
+  // ještě nevzniknout, kdyby migrace neběžela.
+  if (typeof is_idea_pm === 'boolean') {
+    try {
+      if (is_idea_pm) {
+        await query(`
+          INSERT INTO idea_pms (user_id, assigned_by) VALUES ($1, $2)
+          ON CONFLICT (user_id) DO NOTHING
+        `, [id, req.user.id]);
+      } else {
+        await query(`DELETE FROM idea_pms WHERE user_id = $1`, [id]);
+      }
+    } catch (err) {
+      if (err.code !== '42P01') throw err; // tabulka neexistuje — nechme být
+    }
+  }
   const r = await query(
     `SELECT id, email, name, first_name, last_name, role, hourly_rate, active,
             must_change_password, avatar_updated_at, can_see_all_teams
