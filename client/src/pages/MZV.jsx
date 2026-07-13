@@ -1,14 +1,20 @@
 // MZV (Měsíční Zpětná Vazba) — dashboard „moji lidi + kdy byla poslední MZV" +
-// editor profilu + list minulých MZV + tlačítko Zahájit MZV (zatím jen vytvoří draft).
+// editor profilu + list minulých MZV + editor zápisu (F2).
 //
-// F1: kostra. F2 přidá editor zápisu (rozhovor, priority, zlepšit, pokračovat + 5 KPI sekcí).
-// F3: AI shrnutí předchozích, návrh úkolů, shrnutí zápisu.
+// F1: kostra + profil.
+// F2: editor zápisu (4 rich-text sekce + 5 KPI hodnocení + manager notes),
+//     AI shrnutí zápisu + suggest tasks, seznam úkolů z MZV.
+// F3: AI shrnutí předchozích + reminder v denním reportu.
 
 import { useEffect, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import Modal from '../components/Modal.jsx';
 import Avatar from '../components/Avatar.jsx';
-import { mzv as api } from '../api.js';
+import RichTextEditor from '../components/RichTextEditor.jsx';
+import SuggestedTasksModal from '../components/SuggestedTasksModal.jsx';
+import TaskDetailModal from '../components/TaskDetailModal.jsx';
+import { StatusBadge } from '../components/TaskStatus.jsx';
+import { mzv as api, tasks as tasksApi } from '../api.js';
 
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('cs-CZ') : '—';
 const daysAgo = (iso) => {
@@ -91,28 +97,43 @@ export default function MZV() {
 }
 
 // Detail jednoho podřízeného: profil + historie MZV + tlačítko Zahájit MZV.
+// Když je vybraný konkrétní MZV zápis, přepneme do MeetingView místo historie.
 function SubordinateDetail({ user, onProfileSaved }) {
   const [profile, setProfile] = useState(null);
   const [meetings, setMeetings] = useState([]);
   const [profileOpen, setProfileOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [openMeetingId, setOpenMeetingId] = useState(null);
 
   const loadDetail = () => {
     api.getProfile(user.id).then(d => setProfile(d.profile || null)).catch(() => {});
     api.listMeetings(user.id).then(d => setMeetings(d.meetings || [])).catch(() => setMeetings([]));
   };
-  useEffect(() => { loadDetail(); }, [user.id]);
+  useEffect(() => { loadDetail(); setOpenMeetingId(null); }, [user.id]);
 
   const startMZV = async () => {
-    if (!confirm(`Zahájit MZV s ${user.name}?\n\nVytvoří se draft na dnešní datum. Zápis editace přijde v další verzi.`)) return;
+    if (!confirm(`Zahájit MZV s ${user.name}?\n\nVytvoří se nový zápis na dnešní datum a rovnou tě přepnu do editoru.`)) return;
     setCreating(true);
     try {
-      await api.createMeeting(user.id, new Date().toISOString().slice(0, 10));
+      const d = await api.createMeeting(user.id, new Date().toISOString().slice(0, 10));
       loadDetail();
+      setOpenMeetingId(d.meeting.id);
     } catch (e) {
       alert(`Chyba: ${e.response?.data?.message || e.message}`);
     } finally { setCreating(false); }
   };
+
+  // Když je otevřený konkrétní zápis, ukazujeme editor. Profil vlevo v aside.
+  if (openMeetingId) {
+    return (
+      <MeetingView
+        meetingId={openMeetingId}
+        user={user}
+        profile={profile}
+        onBack={() => { setOpenMeetingId(null); loadDetail(); }}
+      />
+    );
+  }
 
   return (
     <div className="space-y-4 max-w-4xl">
@@ -156,7 +177,9 @@ function SubordinateDetail({ user, onProfileSaved }) {
         ) : (
           <ul className="divide-y divide-cream-100">
             {meetings.map(m => (
-              <li key={m.id} className="py-2 flex items-center gap-3">
+              <li key={m.id}
+                onClick={() => setOpenMeetingId(m.id)}
+                className="py-2 flex items-center gap-3 cursor-pointer hover:bg-cream-50 rounded px-1">
                 <span className={`text-[10px] px-2 py-0.5 rounded border ${
                   m.status === 'completed'
                     ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
@@ -170,7 +193,7 @@ function SubordinateDetail({ user, onProfileSaved }) {
                     Manager: {m.manager_name || '—'} · vytvořeno {fmtDate(m.created_at)}
                   </div>
                 </div>
-                <span className="text-[11px] text-ink-400">Editor přijde ve F2</span>
+                <span className="text-[11px] text-brand-500">Otevřít →</span>
               </li>
             ))}
           </ul>
@@ -185,6 +208,404 @@ function SubordinateDetail({ user, onProfileSaved }) {
           onSaved={() => { setProfileOpen(false); loadDetail(); onProfileSaved?.(); }}
         />
       )}
+    </div>
+  );
+}
+
+// ==================== Editor MZV zápisu (F2) ====================
+// 4 rich-text sekce + 5 KPI hodnocení + manager notes + AI tlačítka + úkoly.
+
+function MeetingView({ meetingId, user, profile, onBack }) {
+  const [meeting, setMeeting] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [summary, setSummary] = useState(null);
+  const [suggestion, setSuggestion] = useState(null);
+  const [meetingTasks, setMeetingTasks] = useState([]);
+  const [detailTask, setDetailTask] = useState(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+
+  useEffect(() => {
+    api.getMeeting(meetingId).then(d => setMeeting(d.meeting));
+    api.listTasks(meetingId).then(d => setMeetingTasks(d.tasks || [])).catch(() => setMeetingTasks([]));
+  }, [meetingId]);
+
+  const patch = (delta) => { setMeeting(m => ({ ...m, ...delta })); setDirty(true); };
+
+  const save = async () => {
+    if (!meeting) return;
+    setSaving(true);
+    try {
+      await api.updateMeeting(meeting.id, {
+        meeting_date: meeting.meeting_date,
+        rozhovor: meeting.rozhovor || '',
+        priorities: meeting.priorities || '',
+        to_improve: meeting.to_improve || '',
+        to_continue: meeting.to_continue || '',
+        manager_notes: meeting.manager_notes || '',
+        kpi_ratings: Array.isArray(meeting.kpi_ratings) ? meeting.kpi_ratings : [],
+      });
+      setDirty(false);
+    } catch (e) {
+      alert(e.response?.data?.message || 'Uložení selhalo');
+    } finally { setSaving(false); }
+  };
+
+  const complete = async () => {
+    if (dirty && !confirm('Máš neuložené změny — nejdřív ulož. Pokračovat i tak?')) return;
+    if (!confirm('Uzavřít tento MZV zápis? Po uzavření ho lze upravit jen po znovu-otevření.')) return;
+    setSaving(true);
+    try {
+      const d = await api.complete(meeting.id);
+      setMeeting(d.meeting);
+      setDirty(false);
+    } catch (e) {
+      alert(e.response?.data?.message || 'Uzavření selhalo');
+    } finally { setSaving(false); }
+  };
+
+  const reopen = async () => {
+    if (!confirm('Otevřít uzavřený zápis k opravě?')) return;
+    setSaving(true);
+    try {
+      const d = await api.reopen(meeting.id);
+      setMeeting(d.meeting);
+    } catch (e) {
+      alert(e.response?.data?.message || 'Otevření selhalo');
+    } finally { setSaving(false); }
+  };
+
+  const remove = async () => {
+    if (!confirm('Opravdu smazat tento MZV zápis? Nelze vrátit.')) return;
+    try {
+      await api.removeMeeting(meeting.id);
+      onBack();
+    } catch (e) {
+      alert(e.response?.data?.message || 'Smazání selhalo');
+    }
+  };
+
+  const genSummary = async () => {
+    setAiBusy(true); setSummary({ loading: true });
+    try {
+      const d = await api.summarize(meeting.id);
+      setSummary({ text: d.text });
+    } catch (e) {
+      setSummary({ text: `❌ ${e.response?.data?.message || e.message}` });
+    } finally { setAiBusy(false); }
+  };
+
+  const genSuggestTasks = async () => {
+    setAiBusy(true);
+    try {
+      const d = await api.suggestTasks(meeting.id);
+      if (!d.tasks || d.tasks.length === 0) {
+        alert('AI z Priorit + „Co zlepšit" nevytáhla žádné úkoly. Napiš konkrétněji „kdo co má udělat".');
+        return;
+      }
+      setSuggestion(d);
+    } catch (e) {
+      alert(`Chyba: ${e.response?.data?.message || e.message}`);
+    } finally { setAiBusy(false); }
+  };
+
+  const reloadMeetingTasks = () => api.listTasks(meeting.id).then(d => setMeetingTasks(d.tasks || [])).catch(() => {});
+
+  if (!meeting) return <div className="p-8 text-ink-400">Načítám…</div>;
+
+  const locked = meeting.status === 'completed';
+  const kpiSections = Array.isArray(profile?.kpi_sections) ? profile.kpi_sections.slice(0, 5) : [];
+  const kpiRatings = Array.isArray(meeting.kpi_ratings) ? meeting.kpi_ratings : [];
+  const patchKpi = (i, delta) => {
+    const next = Array.from({ length: 5 }, (_, idx) => ({
+      rating: kpiRatings[idx]?.rating || null,
+      comment: kpiRatings[idx]?.comment || '',
+      ...(idx === i ? delta : {}),
+    }));
+    patch({ kpi_ratings: next });
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-4">
+      {/* Header */}
+      <div className="flex items-center gap-3 bg-white border border-cream-200 rounded-lg p-3">
+        <button onClick={onBack}
+          className="text-xs px-2 py-1 border border-ink-300 rounded hover:bg-cream-50">← Zpět</button>
+        <Avatar user={user} size={32} />
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold text-ink-800 truncate">
+            MZV s {user.name}
+          </div>
+          <div className="text-[11px] text-ink-500">Datum:
+            <input type="date" value={meeting.meeting_date?.slice(0, 10) || ''} disabled={locked}
+              onChange={e => patch({ meeting_date: e.target.value })}
+              className="ml-1 border border-ink-300 rounded px-1 py-0.5 text-[11px] disabled:bg-cream-50" />
+          </div>
+        </div>
+        <span className={`text-[10px] px-2 py-1 rounded border ${
+          locked
+            ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
+            : 'bg-slate-100 text-slate-700 border-slate-300'
+        }`}>{locked ? '✅ Uzavřeno' : '📝 Rozpracováno'}</span>
+        {dirty && !locked && (
+          <button onClick={save} disabled={saving}
+            className="text-xs px-2 py-1 bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+            {saving ? 'Ukládám…' : 'Uložit'}
+          </button>
+        )}
+        {!locked && (
+          <button onClick={complete} disabled={saving}
+            className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50">
+            ✅ Uzavřít
+          </button>
+        )}
+        {locked && (
+          <button onClick={reopen} disabled={saving}
+            className="text-xs px-2 py-1 bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50">
+            🔓 Otevřít
+          </button>
+        )}
+        <button onClick={remove} className="text-xs text-red-500 hover:underline">Smazat</button>
+      </div>
+
+      {/* Kompaktní profil karta — vždy na očích */}
+      <ProfileCard profile={profile} onEdit={() => setProfileOpen(true)} />
+
+      {/* AI panel */}
+      <section className="bg-white border border-cream-200 rounded-lg p-4">
+        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">🤖 AI</div>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={genSummary} disabled={aiBusy}
+            title="AI shrne obsah tohoto zápisu (rozhovor + priority + zlepšit + pokračovat) do 3-5 vět."
+            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50">
+            📝 Shrnout zápis
+          </button>
+          <button onClick={genSuggestTasks} disabled={aiBusy}
+            title={'AI vytáhne z Priorit a „Co zlepšit" konkrétní úkoly. Otevře se dialog pro potvrzení.'}
+            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50">
+            🎯 Vygenerovat úkoly ze zápisu
+          </button>
+        </div>
+        {summary && (
+          <div className="mt-3 bg-slate-50 border border-slate-200 rounded p-3">
+            {summary.loading
+              ? <div className="text-sm text-ink-500">Generuji shrnutí…</div>
+              : <div className="text-sm text-ink-800 whitespace-pre-wrap leading-relaxed">{summary.text}</div>}
+            <button onClick={() => setSummary(null)} className="mt-2 text-xs text-ink-500 hover:underline">Skrýt</button>
+          </div>
+        )}
+      </section>
+
+      {/* 4 textové sekce zápisu */}
+      <NoteSection label="💬 Rozhovor" hint="Volně o čem jste si povídali — osobní i pracovní."
+        value={meeting.rozhovor || ''} onChange={v => patch({ rozhovor: v })} disabled={locked} />
+      <NoteSection label="🎯 Priority na další období" hint="3–5 konkrétních bodů. AI z nich vytáhne úkoly."
+        value={meeting.priorities || ''} onChange={v => patch({ priorities: v })} disabled={locked} />
+      <NoteSection label="🔧 Co by měl zlepšit" hint="1–3 věci konstruktivně."
+        value={meeting.to_improve || ''} onChange={v => patch({ to_improve: v })} disabled={locked} />
+      <NoteSection label="⭐ V čem je dobrý a v čem pokračovat" hint="1–3 věci — pochvala."
+        value={meeting.to_continue || ''} onChange={v => patch({ to_continue: v })} disabled={locked} />
+
+      {/* 5 KPI hodnocení — manager only */}
+      <section className="bg-white border border-cream-200 rounded-lg p-4">
+        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
+          📊 5 KPI sekcí — hodnocení (jen manager)
+        </div>
+        {kpiSections.length === 0 ? (
+          <div className="text-sm text-ink-400 italic">
+            V profilu nejsou definované KPI sekce. Otevři profil a přidej je (max 5).
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {kpiSections.map((s, i) => (
+              <KpiRow key={i}
+                index={i}
+                section={s}
+                rating={kpiRatings[i]?.rating}
+                comment={kpiRatings[i]?.comment || ''}
+                disabled={locked}
+                onSet={(delta) => patchKpi(i, delta)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Privátní poznámky managera */}
+      <section className="bg-white border border-cream-200 rounded-lg p-4">
+        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
+          🔒 Poznámky managera (privátní — nevidí podřízený)
+        </div>
+        <textarea rows={4} value={meeting.manager_notes || ''} disabled={locked}
+          onChange={e => patch({ manager_notes: e.target.value })}
+          placeholder="Cokoli, co si potřebuješ pamatovat — dojmy, obavy, plány, které zatím nechceš sdílet."
+          className="w-full border border-ink-300 rounded px-2 py-1.5 text-sm disabled:bg-cream-50" />
+      </section>
+
+      {/* Úkoly z MZV */}
+      <section className="bg-white border border-cream-200 rounded-lg p-4">
+        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
+          🎯 Úkoly z MZV ({meetingTasks.length})
+        </div>
+        {meetingTasks.length === 0 ? (
+          <div className="text-sm text-ink-400 italic">
+            Zatím žádné úkoly. Použij „🎯 Vygenerovat úkoly ze zápisu" nahoře — AI vytáhne z Priorit + Co zlepšit.
+          </div>
+        ) : (
+          <ul className="divide-y divide-cream-100">
+            {meetingTasks.map(t => (
+              <li key={t.id}
+                onClick={async () => {
+                  try { const d = await tasksApi.get(t.id); setDetailTask(d.task); } catch { /* ignore */ }
+                }}
+                className="py-2 flex items-center gap-3 cursor-pointer hover:bg-cream-50 rounded px-1">
+                <StatusBadge status={t.status} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-ink-800 truncate">{t.title}</div>
+                  <div className="text-[11px] text-ink-500 truncate">
+                    {t.project_name}
+                    {t.assignee_name && ` · 👤 ${t.assignee_name}`}
+                    {t.due_date && ` · 📅 ${new Date(t.due_date).toLocaleDateString('cs-CZ')}`}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {dirty && !locked && (
+        <div className="sticky bottom-4 flex justify-end">
+          <button onClick={save} disabled={saving}
+            className="px-4 py-2 bg-brand-500 text-white rounded-lg shadow-lg hover:bg-brand-600 disabled:opacity-50">
+            {saving ? 'Ukládám…' : '💾 Uložit změny'}
+          </button>
+        </div>
+      )}
+
+      {suggestion && (
+        <SuggestedTasksModal
+          suggestion={suggestion}
+          sourceNote={{ id: meeting.id, title: `MZV ${fmtDate(meeting.meeting_date)}`, mzv_meeting_id: meeting.id }}
+          sourceScope="mzv"
+          onClose={() => setSuggestion(null)}
+          onCreated={() => { setSuggestion(null); reloadMeetingTasks(); }}
+        />
+      )}
+      {detailTask && (
+        <TaskDetailModal task={detailTask} onClose={() => { setDetailTask(null); reloadMeetingTasks(); }} onUpdate={() => {}} />
+      )}
+      {profileOpen && (
+        <ProfileModal
+          user={user}
+          profile={profile}
+          onClose={() => setProfileOpen(false)}
+          onSaved={() => { setProfileOpen(false); onBack(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Kompaktní karta profilu — přehled klíčových údajů. Klik na „upravit" otevře modal.
+function ProfileCard({ profile, onEdit }) {
+  if (!profile) {
+    return (
+      <section className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-amber-700">⚠️ Profil zatím není vyplněný.</span>
+          <button onClick={onEdit} className="text-xs text-brand-500 hover:underline">Vyplnit teď →</button>
+        </div>
+      </section>
+    );
+  }
+  const children = Array.isArray(profile.children) ? profile.children : [];
+  return (
+    <section className="bg-cream-25 border border-cream-200 rounded-lg p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+          <MiniField label="Ve firmě od" value={profile.hire_date && fmtDate(profile.hire_date)} />
+          <MiniField label="Narozeniny"  value={profile.birth_date && fmtDate(profile.birth_date)} />
+          <MiniField label="Ambice"
+            value={profile.ambition_type === 'growth' ? '🚀 Růst'
+                  : profile.ambition_type === 'stability' ? '⭐ Stabilita' : '—'} />
+          <MiniField label="Děti" value={children.length > 0 ? children.map(c => c.name).join(', ') : '—'} />
+        </div>
+        <button onClick={onEdit}
+          className="shrink-0 text-xs px-2 py-1 border border-ink-300 rounded hover:bg-cream-50">
+          Upravit profil
+        </button>
+      </div>
+      {profile.career_direction && (
+        <div className="mt-2 text-[12px] text-ink-700">
+          <strong>Směřování:</strong> {profile.career_direction}
+        </div>
+      )}
+      {profile.feedback_history && (
+        <div className="mt-1 text-[12px] text-ink-600 italic">
+          {profile.feedback_history}
+        </div>
+      )}
+    </section>
+  );
+}
+function MiniField({ label, value }) {
+  return (
+    <div>
+      <div className="uppercase tracking-wide text-ink-500">{label}</div>
+      <div className="text-ink-800">{value || '—'}</div>
+    </div>
+  );
+}
+
+// Jedna textová sekce zápisu s rich text editorem.
+function NoteSection({ label, hint, value, onChange, disabled }) {
+  return (
+    <section className="bg-white border border-cream-200 rounded-lg p-4">
+      <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide">{label}</div>
+      {hint && <div className="text-[11px] text-ink-400 mb-2">{hint}</div>}
+      <div className={disabled ? 'opacity-70 pointer-events-none' : ''}>
+        <RichTextEditor value={value} onChange={onChange} />
+      </div>
+    </section>
+  );
+}
+
+// Řádek pro jednu KPI sekci: název + 1-5 hodnocení + komentář.
+function KpiRow({ index, section, rating, comment, disabled, onSet }) {
+  const buttons = [1, 2, 3, 4, 5];
+  return (
+    <div className="border border-cream-200 rounded p-2">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-ink-800 truncate">
+            {index + 1}. {section.name || <em className="text-ink-400 font-normal">(bez názvu)</em>}
+          </div>
+          {section.description && (
+            <div className="text-[11px] text-ink-500 truncate">{section.description}</div>
+          )}
+        </div>
+        <div className="flex gap-0.5 shrink-0">
+          {buttons.map(n => {
+            const active = rating === n;
+            return (
+              <button key={n} type="button" disabled={disabled}
+                onClick={() => onSet({ rating: active ? null : n })}
+                title={`${n}/5`}
+                className={`w-7 h-7 text-xs rounded transition ${
+                  active
+                    ? (n <= 2 ? 'bg-red-500 text-white' : n === 3 ? 'bg-amber-500 text-white' : 'bg-emerald-500 text-white')
+                    : 'bg-cream-100 text-ink-400 hover:bg-cream-200 disabled:opacity-50'
+                }`}>{n}</button>
+            );
+          })}
+        </div>
+      </div>
+      <input type="text" value={comment} disabled={disabled}
+        onChange={e => onSet({ comment: e.target.value })}
+        placeholder="Krátký komentář (co konkrétně vidím)"
+        className="w-full border border-cream-300 rounded px-2 py-1 text-xs disabled:bg-cream-50" />
     </div>
   );
 }

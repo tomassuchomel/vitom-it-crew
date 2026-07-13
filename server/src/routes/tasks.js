@@ -414,6 +414,15 @@ router.post('/', requireAuth, async (req, res) => {
       if (err.code !== '42703') throw err;
     }
   }
+  // Propojení s MZV zápisem (tasks.mzv_meeting_id) — stejný pattern jako u porady.
+  if (req.body?.mzv_meeting_id) {
+    try {
+      await query(`UPDATE tasks SET mzv_meeting_id = $1 WHERE id = $2`, [Number(req.body.mzv_meeting_id), task.id]);
+      task.mzv_meeting_id = Number(req.body.mzv_meeting_id);
+    } catch (err) {
+      if (err.code !== '42703') throw err;
+    }
+  }
   // AI odhad na pozadí (neblokuje response)
   kickoffAIEstimate(task);
 

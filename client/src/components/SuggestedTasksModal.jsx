@@ -76,10 +76,13 @@ export default function SuggestedTasksModal({ suggestion, sourceNote, sourceScop
           assignee_id: t.assignee_id ? Number(t.assignee_id) : null,
           priority: t.priority || 'normal',
           due_date: t.due_date || null,
-          // Propojení zpět na poznámku (source_note_id) — pokud jde o poradu
-          // (sourceScope='meeting'), pošleme meeting_id a source_note_id nastavíme null.
-          source_note_id: sourceScope === 'meeting' ? null : (sourceNote?.id || null),
-          meeting_id: sourceScope === 'meeting' ? (sourceNote?.meeting_id || sourceNote?.id) : null,
+          // Propojení zpět na zdroj:
+          //   - 'meeting' → tasks.meeting_id (porada)
+          //   - 'mzv'     → tasks.mzv_meeting_id (MZV zápis)
+          //   - jinak     → tasks.source_note_id (poznámka)
+          source_note_id: (sourceScope === 'meeting' || sourceScope === 'mzv') ? null : (sourceNote?.id || null),
+          meeting_id:     sourceScope === 'meeting' ? (sourceNote?.meeting_id || sourceNote?.id) : null,
+          mzv_meeting_id: sourceScope === 'mzv'     ? (sourceNote?.mzv_meeting_id || sourceNote?.id) : null,
         });
         createdByProject[t.project_id] = (createdByProject[t.project_id] || 0) + 1;
       }

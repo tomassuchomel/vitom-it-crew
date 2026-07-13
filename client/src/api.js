@@ -121,7 +121,8 @@ export const meetings = {
   edits:          (id) => api.get(`/meetings/meetings/${id}/edits`).then(r => r.data),
 };
 
-// MZV (Měsíční Zpětná Vazba). F1: subordinates, profile CRUD, meetings list+create.
+// MZV (Měsíční Zpětná Vazba). F1: subordinates, profile CRUD, meetings CRUD.
+// F2: PATCH, complete, reopen, delete, AI summarize + suggest tasks, list tasks.
 export const mzv = {
   subordinates: () => api.get('/mzv/subordinates').then(r => r.data),
   getProfile:   (userId) => api.get(`/mzv/profile/${userId}`).then(r => r.data),
@@ -129,6 +130,13 @@ export const mzv = {
   listMeetings: (subordinateId) => api.get('/mzv/meetings', { params: { subordinate_id: subordinateId } }).then(r => r.data),
   createMeeting: (subordinateId, meetingDate) => api.post('/mzv/meetings', { subordinate_id: subordinateId, meeting_date: meetingDate }).then(r => r.data),
   getMeeting:   (id) => api.get(`/mzv/meetings/${id}`).then(r => r.data),
+  updateMeeting: (id, data) => api.patch(`/mzv/meetings/${id}`, data).then(r => r.data),
+  complete:     (id) => api.post(`/mzv/meetings/${id}/complete`).then(r => r.data),
+  reopen:       (id) => api.post(`/mzv/meetings/${id}/reopen`).then(r => r.data),
+  removeMeeting: (id) => api.delete(`/mzv/meetings/${id}`).then(r => r.data),
+  summarize:    (id) => api.post(`/mzv/meetings/${id}/summarize`).then(r => r.data),
+  suggestTasks: (id) => api.post(`/mzv/meetings/${id}/suggest-tasks`).then(r => r.data),
+  listTasks:    (id) => api.get(`/mzv/meetings/${id}/tasks`).then(r => r.data),
 };
 
 // MCP tokeny — každý uživatel si spravuje vlastní tokeny pro připojení

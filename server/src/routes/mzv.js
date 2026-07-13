@@ -8,6 +8,8 @@
 import { Router } from 'express';
 import { query } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { callAI, stripHtml } from '../meetingsAi.js';
+import { processNote } from '../ai.js';
 
 const router = Router();
 
@@ -213,6 +215,181 @@ router.get('/meetings/:id', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'forbidden' });
   }
   res.json({ meeting: m });
+});
+
+// PATCH — parciální update polí zápisu. Manager tohoto člověka nebo admin.
+// Když je meeting completed, editovat nesmí (musí nejdřív reopen).
+router.patch('/meetings/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`SELECT * FROM mzv_meetings WHERE id = $1`, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canManage(req.user.id, req.user.role, cur.subordinate_id)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  if (cur.status === 'completed') {
+    return res.status(400).json({ error: 'meeting_completed', message: 'Zápis je uzavřený — nejdřív ho otevři k opravě.' });
+  }
+
+  const b = req.body || {};
+  const sets = [];
+  const params = [];
+  const push = (col, val, cast = '') => { params.push(val); sets.push(`${col} = $${params.length}${cast}`); };
+
+  if ('meeting_date' in b) {
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(b.meeting_date || '') ? b.meeting_date : null;
+    push('meeting_date', d);
+  }
+  if ('rozhovor' in b)      push('rozhovor',      String(b.rozhovor || ''));
+  if ('priorities' in b)    push('priorities',    String(b.priorities || ''));
+  if ('to_improve' in b)    push('to_improve',    String(b.to_improve || ''));
+  if ('to_continue' in b)   push('to_continue',   String(b.to_continue || ''));
+  if ('manager_notes' in b) push('manager_notes', String(b.manager_notes || ''));
+  if ('kpi_ratings' in b) {
+    // Whitelist: [{rating: 1-5, comment}]. Max 5 slotů.
+    const kpi = Array.isArray(b.kpi_ratings)
+      ? b.kpi_ratings.slice(0, 5).map(x => ({
+          rating: Number.isInteger(x?.rating) && x.rating >= 1 && x.rating <= 5 ? x.rating : null,
+          comment: String(x?.comment || '').slice(0, 500),
+        }))
+      : [];
+    push('kpi_ratings', JSON.stringify(kpi), '::jsonb');
+  }
+  if (sets.length === 0) return res.status(400).json({ error: 'no_fields' });
+  sets.push('updated_at = NOW()');
+  params.push(id);
+  await query(`UPDATE mzv_meetings SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+  const r = await query(`SELECT * FROM mzv_meetings WHERE id = $1`, [id]);
+  res.json({ meeting: r.rows[0] });
+});
+
+// Uzavřít zápis (draft → completed). Manager nebo admin.
+router.post('/meetings/:id/complete', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`SELECT * FROM mzv_meetings WHERE id = $1`, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canManage(req.user.id, req.user.role, cur.subordinate_id)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  if (cur.status === 'completed') return res.json({ meeting: cur });
+  await query(`UPDATE mzv_meetings SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = $1`, [id]);
+  const r = await query(`SELECT * FROM mzv_meetings WHERE id = $1`, [id]);
+  res.json({ meeting: r.rows[0] });
+});
+
+// Otevřít zpět k opravě (completed → draft). Manager nebo admin.
+router.post('/meetings/:id/reopen', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`SELECT * FROM mzv_meetings WHERE id = $1`, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canManage(req.user.id, req.user.role, cur.subordinate_id)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  await query(`UPDATE mzv_meetings SET status = 'draft', completed_at = NULL, updated_at = NOW() WHERE id = $1`, [id]);
+  const r = await query(`SELECT * FROM mzv_meetings WHERE id = $1`, [id]);
+  res.json({ meeting: r.rows[0] });
+});
+
+// Smazat zápis. Manager (jeho vlastní) nebo admin.
+router.delete('/meetings/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`SELECT * FROM mzv_meetings WHERE id = $1`, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  const isMine = cur.manager_id === req.user.id;
+  if (!isMine && req.user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
+  await query(`DELETE FROM mzv_meetings WHERE id = $1`, [id]);
+  res.json({ ok: true });
+});
+
+// AI: shrň obsah zápisu (rozhovor + priority + zlepšit + pokračovat).
+// Vrátí text. Manager tohoto člověka nebo admin.
+router.post('/meetings/:id/summarize', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`SELECT * FROM mzv_meetings WHERE id = $1`, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canManage(req.user.id, req.user.role, cur.subordinate_id)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+
+  const parts = [
+    ['Rozhovor',                cur.rozhovor],
+    ['Priority na další období', cur.priorities],
+    ['Co zlepšit',              cur.to_improve],
+    ['V čem pokračovat',        cur.to_continue],
+  ].map(([label, html]) => {
+    const t = stripHtml(html);
+    return t ? `## ${label}\n${t}` : null;
+  }).filter(Boolean).join('\n\n');
+
+  if (!parts.trim()) {
+    return res.status(400).json({ error: 'empty_notes', message: 'Zápis je prázdný — nemám co shrnout.' });
+  }
+
+  const system = `Jsi asistent, který shrne zápis z měsíční zpětné vazby (MZV) mezi manažerem
+a podřízeným. Odpověz česky, věcně, max 5 odrážek nebo 4 věty. Vytáhni klíčové body,
+priority a rozhodnutí. Nevymýšlej nic, co v zápise není.`;
+  const userMsg = `Shrň tento MZV zápis:\n\n${parts.slice(0, 6000)}`;
+
+  const out = await callAI(system, userMsg, 1200);
+  if (out.error) return res.status(500).json(out);
+  res.json({ text: out.text });
+});
+
+// AI: navrhne úkoly ze zápisu — hlavně z Priorit a „co zlepšit". Reuse processNote.
+router.post('/meetings/:id/suggest-tasks', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`SELECT * FROM mzv_meetings WHERE id = $1`, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canManage(req.user.id, req.user.role, cur.subordinate_id)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+
+  // Zdroj pro AI: hlavně Priority + Co zlepšit (akční části). Rozhovor je diskuse,
+  // to_continue je pochvala — z těch úkoly nedělat.
+  const html = [
+    cur.priorities ? `<h3>Priority</h3>${cur.priorities}` : '',
+    cur.to_improve ? `<h3>Co zlepšit</h3>${cur.to_improve}` : '',
+  ].join('');
+  if (!stripHtml(html).trim()) {
+    return res.status(400).json({ error: 'empty_notes', message: 'V zápise není nic akčního (Priority ani „Co zlepšit" nejsou vyplněné).' });
+  }
+
+  const subordinate = (await query(`SELECT name FROM users WHERE id = $1`, [cur.subordinate_id])).rows[0];
+  const result = await processNote({
+    noteTitle: `MZV s ${subordinate?.name || 'pracovníkem'} — ${cur.meeting_date}`,
+    noteContent: html,
+    action: 'suggest_tasks',
+    teamId: null,       // cross-team fallback (admin/manager může vidět všechny týmy)
+    userId: req.user.id,
+  });
+  if (result.error) return res.status(500).json(result);
+  res.json(result);
+});
+
+// Seznam úkolů propojených s tímto zápisem (tasks.mzv_meeting_id).
+router.get('/meetings/:id/tasks', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`SELECT subordinate_id FROM mzv_meetings WHERE id = $1`, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canManage(req.user.id, req.user.role, cur.subordinate_id)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  try {
+    const r = await query(`
+      SELECT t.id, t.title, t.status, t.priority, t.due_date, t.completed_at,
+             u.name AS assignee_name, p.name AS project_name
+      FROM tasks t
+      LEFT JOIN users u ON u.id = t.assignee_id
+      LEFT JOIN projects p ON p.id = t.project_id
+      WHERE t.mzv_meeting_id = $1
+      ORDER BY
+        CASE t.status WHEN 'todo' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'review' THEN 2 WHEN 'done' THEN 3 ELSE 4 END,
+        t.due_date NULLS LAST, t.id
+    `, [id]);
+    res.json({ tasks: r.rows });
+  } catch (err) {
+    if (err.code === '42703') return res.json({ tasks: [] }); // sloupec ještě neexistuje
+    throw err;
+  }
 });
 
 export default router;
