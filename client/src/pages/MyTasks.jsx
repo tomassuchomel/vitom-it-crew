@@ -405,6 +405,7 @@ function ViewSwitcher({ value, onChange }) {
 
 // ---------- LIST VIEW ----------
 function ListView({ tasks, filter, currentTeamId, onStatusChange, onOpen }) {
+  const { user } = useAuth();
   if (tasks.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-cream-200 p-10 text-center text-ink-400">
@@ -461,6 +462,13 @@ function ListView({ tasks, filter, currentTeamId, onStatusChange, onOpen }) {
                   <span className="inline-flex items-center gap-1 text-ink-600">
                     <span>📁</span>{t.project_name}
                   </span>
+                  {/* Kdo zadal úkol — pomáhá poznat kontext (self-assigned vs cizí). */}
+                  {t.created_by_name && (
+                    <span className="inline-flex items-center gap-1 text-ink-500"
+                      title="Zadavatel úkolu">
+                      <span>👤</span>{t.created_by_name}{t.created_by === user?.id && ' (já)'}
+                    </span>
+                  )}
                   {/* Host badge: úkol z týmu, kde současný user není členem. */}
                   {t.project_team_name && currentTeamId && t.project_team_id !== currentTeamId && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-800"

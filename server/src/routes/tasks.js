@@ -174,6 +174,7 @@ router.get('/mine', requireAuth, async (req, res) => {
       p.manager_id AS project_manager_id,
       p.team_id AS project_team_id,
       tm.name AS project_team_name,
+      cb.name AS created_by_name,
       -- Pro cross-team subtask masking: členství aktuálního usera v projektově teamu
       (EXISTS (SELECT 1 FROM team_members tmc WHERE tmc.user_id = $1 AND tmc.team_id = p.team_id)) AS user_is_team_member,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.to_user_id = $1 AND q.status = 'pending') AS pending_questions_for_me,
@@ -184,6 +185,7 @@ router.get('/mine', requireAuth, async (req, res) => {
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
     LEFT JOIN teams tm ON tm.id = p.team_id
+    LEFT JOIN users cb ON cb.id = t.created_by
     WHERE t.assignee_id = $2 ${extra}
     ORDER BY
       CASE t.status WHEN 'in_progress' THEN 0 WHEN 'review' THEN 1 WHEN 'todo' THEN 2 WHEN 'done' THEN 3 END,
@@ -520,9 +522,15 @@ router.put('/:id', requireAuth, async (req, res) => {
     const keys = Object.keys(req.body || {}).filter(k => allowed.includes(k));
     if (keys.length === 0) return res.status(400).json({ error: 'no_allowed_fields' });
 
+    // Self-assigned úkol (created_by = assignee_id = user): review nedává smysl —
+    // kdo by ho schvaloval? Přepneme review → done automaticky.
+    const isSelfAssigned = cur.created_by && cur.created_by === req.user.id;
+    if ('status' in req.body && req.body.status === 'review' && isSelfAssigned) {
+      req.body.status = 'done';
+    }
     // Assignee NEMŮŽE označit úkol jako 'done' přímo – musí přes review workflow.
-    // Místo toho posílá in_progress → review. Schválit/vrátit pak manager.
-    if ('status' in req.body && req.body.status === 'done') {
+    // Výjimka: self-assigned tasky (viz výše).
+    if ('status' in req.body && req.body.status === 'done' && !isSelfAssigned) {
       return res.status(403).json({ error: 'must_go_via_review', message: 'Úkol nelze ukončit přímo. Předej ho k review tlačítkem „Předat k review", manager ho schválí.' });
     }
 
