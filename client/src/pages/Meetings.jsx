@@ -238,15 +238,34 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
   const addAgendaItem = () => patch({ agenda: [...agenda, { text: '', checked: false, source: 'user' }] });
   const removeAgendaItem = (idx) => patch({ agenda: agenda.filter((_, i) => i !== idx) });
 
-  const toggleUserPresent = (userId) => {
+  // Nastaví stav docházky pro člena týmu. Cycluje mezi 4 stavy:
+  //   žádný záznam → present → late → missed → žádný záznam
+  // Přímý set na konkrétní stav přes setAttendanceStatus(userId, status).
+  const setAttendanceStatus = (userId, newStatus) => {
     const idx = attendees.findIndex(a => a.user_id === userId);
     let next;
     if (idx >= 0) {
-      next = attendees.map((a, i) => i === idx ? { ...a, present: !a.present } : a);
+      if (newStatus === null) {
+        // Odebrat záznam úplně
+        next = attendees.filter((_, i) => i !== idx);
+      } else {
+        next = attendees.map((a, i) => i === idx ? { ...a, status: newStatus } : a);
+      }
+    } else if (newStatus) {
+      next = [...attendees, { user_id: userId, status: newStatus }];
     } else {
-      next = [...attendees, { user_id: userId, present: true }];
+      next = attendees;
     }
     patch({ attendees: next });
+  };
+  // Backward-compat: staré záznamy s present: true|false převedeme na status.
+  const getAttendanceStatus = (userId) => {
+    const a = attendees.find(x => x.user_id === userId);
+    if (!a) return null;
+    if (a.status) return a.status;
+    if (a.present === true) return 'present';
+    if (a.present === false) return 'missed';
+    return null;
   };
   const addGuest = () => {
     const name = prompt('Jméno hosta (mimo tým):');
@@ -451,40 +470,43 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
       {/* Prezence */}
       <section className="bg-white border border-cream-200 rounded-lg p-4">
         <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
-          👥 Prezence ({attendees.filter(a => a.present).length}/{attendees.length + teamUsers.filter(u => !attendees.some(a => a.user_id === u.id)).length})
+          👥 Prezence
+        </div>
+        <div className="text-[11px] text-ink-500 mb-2">
+          Klik na status: <strong className="text-emerald-700">Byl</strong> · <strong className="text-amber-700">Pozdě</strong> · <strong className="text-red-600">Nepřišel</strong>. Historie se ukládá do skóre docházky každého člověka.
         </div>
         <div className="space-y-1.5">
-          {/* Členové týmu (checkboxy) */}
-          {teamUsers.map(u => {
-            const att = attendees.find(a => a.user_id === u.id);
-            const present = !!att?.present;
-            return (
-              <label key={u.id} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-cream-50 rounded px-1 py-0.5">
-                <input type="checkbox" checked={present} onChange={() => toggleUserPresent(u.id)} />
-                <Avatar user={{ id: u.id, name: u.name, avatar_updated_at: u.avatar_updated_at }} size={20} />
-                <span className={present ? 'text-ink-800' : 'text-ink-500'}>{u.name}</span>
-              </label>
-            );
-          })}
+          {/* Členové týmu — 3-state buttons */}
+          {teamUsers.map(u => (
+            <AttendanceRow
+              key={u.id}
+              name={u.name}
+              avatarUser={u}
+              status={getAttendanceStatus(u.id)}
+              onSet={(s) => setAttendanceStatus(u.id, s)}
+            />
+          ))}
           {/* Hosté */}
           {attendees.filter(a => !a.user_id).map((a) => {
             const idx = attendees.findIndex(x => x === a);
-            const toggleGuest = () => {
-              const next = attendees.map((x, i) => i === idx ? { ...x, present: !x.present } : x);
+            const guestStatus = a.status || (a.present ? 'present' : 'missed');
+            const setGuest = (s) => {
+              const next = attendees.map((x, i) => i === idx ? { ...x, status: s } : x);
               patch({ attendees: next });
             };
             return (
               <div key={`guest-${idx}`} className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={!!a.present} onChange={toggleGuest} />
-                <span className="text-ink-800">{a.guest_name}</span>
-                <span className="text-xs text-ink-400">{a.guest_email}</span>
+                <AttendanceButtons status={guestStatus} onSet={setGuest} />
+                <div className="w-5 h-5 rounded-full bg-cream-200 flex items-center justify-center text-[10px]">👤</div>
+                <span className="text-ink-800 flex-1">{a.guest_name}</span>
+                <span className="text-[10px] text-ink-400 shrink-0">{a.guest_email}</span>
                 <button onClick={() => removeGuest(idx)} className="text-red-500 text-xs">×</button>
               </div>
             );
           })}
         </div>
         <button onClick={addGuest}
-          className="mt-2 text-xs text-brand-500 hover:underline"
+          className="mt-3 text-xs text-brand-500 hover:underline"
           title="Přidej hosta mimo tým. Zadáš jméno a e-mail; ten se použije pro follow-up mail po poradě.">
           + Přidat hosta mimo tým
         </button>
@@ -559,6 +581,39 @@ const CHANGE_LABEL = {
   agenda: 'agendu',
   attendees: 'prezenci',
 };
+
+// Řádek prezence pro jednoho člena týmu. 3-state selektor + odebrat.
+function AttendanceRow({ name, avatarUser, status, onSet }) {
+  return (
+    <div className="flex items-center gap-2 text-sm hover:bg-cream-50 rounded px-1 py-0.5">
+      <AttendanceButtons status={status} onSet={onSet} />
+      <Avatar user={{ id: avatarUser.id, name: avatarUser.name, avatar_updated_at: avatarUser.avatar_updated_at }} size={20} />
+      <span className={status ? 'text-ink-800' : 'text-ink-500'}>{name}</span>
+    </div>
+  );
+}
+
+// 3 tlačítka: ✅ Byl / ⏰ Pozdě / ❌ Nepřišel. Klik na aktivní tlačítko = odebrat záznam.
+function AttendanceButtons({ status, onSet }) {
+  const btn = (val, cls, label, title) => {
+    const active = status === val;
+    return (
+      <button type="button"
+        title={title}
+        onClick={() => onSet(active ? null : val)}
+        className={`w-7 h-6 text-xs rounded transition ${
+          active ? cls : 'bg-cream-100 text-ink-400 hover:bg-cream-200'
+        }`}>{label}</button>
+    );
+  };
+  return (
+    <div className="flex gap-1 shrink-0">
+      {btn('present', 'bg-emerald-500 text-white', '✓', 'Byl přítomen')}
+      {btn('late',    'bg-amber-500 text-white',   '⏰', 'Přišel pozdě')}
+      {btn('missed',  'bg-red-500 text-white',     '✗', 'Nepřišel (měl být)')}
+    </div>
+  );
+}
 
 // ==================== Modal: vytvořit typ porady ====================
 

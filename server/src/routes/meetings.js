@@ -147,7 +147,8 @@ router.get('/types/:id/meetings', requireAuth, async (req, res) => {
            m.is_locked, m.created_at, m.updated_at,
            u.name AS created_by_name,
            (SELECT COUNT(*)::int FROM jsonb_array_elements(m.attendees) a
-              WHERE (a->>'present')::boolean = TRUE) AS present_count,
+              WHERE a->>'status' IN ('present', 'late')
+                 OR (a->>'status' IS NULL AND (a->>'present')::boolean = TRUE)) AS present_count,
            (SELECT COUNT(*)::int FROM jsonb_array_elements(m.attendees)) AS attendee_count
     FROM meetings m
     LEFT JOIN users u ON u.id = m.created_by
@@ -279,9 +280,17 @@ router.patch('/meetings/:id', requireAuth, async (req, res) => {
 });
 
 // Sanitize attendees array — chrání DB proti garbage.
+// status: 'present' | 'late' | 'missed'. Backward compat: pokud přijde jen
+// `present: bool`, přeložíme na status ('present' nebo 'missed').
+const VALID_STATUS = ['present', 'late', 'missed'];
 function sanitizeAttendees(list) {
   return list.map(a => {
-    const out = { present: !!a.present };
+    let status = a.status;
+    if (!VALID_STATUS.includes(status)) {
+      // Backward-compat: převod present: true|false → present|missed.
+      status = a.present === true ? 'present' : a.present === false ? 'missed' : 'present';
+    }
+    const out = { status };
     if (a.user_id) out.user_id = Number(a.user_id);
     if (a.guest_name) out.guest_name = String(a.guest_name).slice(0, 200);
     if (a.guest_email) out.guest_email = String(a.guest_email).slice(0, 200);
@@ -381,8 +390,12 @@ router.post('/meetings/:id/followup', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'forbidden', message: 'Follow-up smí poslat jen organizátor nebo admin.' });
   }
 
-  // Attendees kdo byli přítomni
-  const attendees = Array.isArray(cur.attendees) ? cur.attendees.filter(a => a.present) : [];
+  // Attendees kdo byli přítomni (present nebo late — jen missed vynecháme).
+  // Backward-compat: staré záznamy s present: true.
+  const attendees = Array.isArray(cur.attendees) ? cur.attendees.filter(a => {
+    if (a.status) return a.status === 'present' || a.status === 'late';
+    return a.present === true;
+  }) : [];
   if (attendees.length === 0) return res.status(400).json({ error: 'no_attendees', message: 'Nikdo nebyl označen jako přítomný.' });
 
   // Úkoly propojené s tímto zápisem
