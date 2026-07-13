@@ -207,6 +207,9 @@ export const scoreboard = {
   list:          (team_id) => api.get('/scoreboard', { params: team_id != null ? { team_id } : {} }).then(r => r.data),
   history:       (team_id, months = 6) => api.get('/scoreboard/history', { params: { months, ...(team_id != null ? { team_id } : {}) } }).then(r => r.data),
   teamsOverview: () => api.get('/scoreboard/teams-overview').then(r => r.data),
+  tasks:         (user_id, category, team_id) => api.get('/scoreboard/tasks', {
+    params: { user_id, category, ...(team_id != null ? { team_id } : {}) },
+  }).then(r => r.data),
 };
 
 // AI agent (Claude vykonává úkoly autonomně)

@@ -189,6 +189,54 @@ router.get('/history', requireAuth, async (req, res) => {
   });
 });
 
+// Drill-down: seznam konkrétních úkolů pro daného usera + kategorii.
+// Volaný z klikatelných KPI karet ve Scoreboardu.
+// Kategorie:
+//   celkem      — všechny přiřazené úkoly
+//   hotove      — status='done' (všechny včas + pozdě + bez termínu)
+//   pozde       — status='done' AND completed_at > due_date+1d
+//   po_terminu  — status!='done' AND due_date < CURRENT_DATE
+router.get('/tasks', requireAuth, async (req, res) => {
+  const userId = Number(req.query.user_id);
+  const category = String(req.query.category || 'celkem');
+  if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'invalid_user_id' });
+  if (!['celkem', 'hotove', 'pozde', 'po_terminu'].includes(category)) return res.status(400).json({ error: 'invalid_category' });
+
+  const scope = await resolveTeamScope(req);
+  if (scope.mode === 'forbidden') return res.status(403).json({ error: 'forbidden' });
+  if (scope.mode === 'none') return res.json({ tasks: [] });
+
+  const params = [userId];
+  let teamFilter = '';
+  if (scope.mode === 'team') {
+    params.push(scope.teamId);
+    teamFilter = `AND p.team_id = $${params.length}`;
+  }
+
+  let statusFilter = '';
+  if (category === 'hotove') {
+    statusFilter = `AND t.status = 'done'`;
+  } else if (category === 'pozde') {
+    statusFilter = `AND t.status = 'done' AND t.due_date IS NOT NULL AND t.completed_at > (t.due_date + INTERVAL '1 day')`;
+  } else if (category === 'po_terminu') {
+    statusFilter = `AND t.status != 'done' AND t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE`;
+  }
+
+  const r = await query(`
+    SELECT t.id, t.title, t.status, t.priority, t.due_date, t.completed_at,
+           p.id AS project_id, p.name AS project_name, p.team_id, tm.name AS team_name
+    FROM tasks t
+    JOIN projects p ON p.id = t.project_id
+    LEFT JOIN teams tm ON tm.id = p.team_id
+    WHERE t.assignee_id = $1 ${teamFilter} ${statusFilter}
+    ORDER BY
+      CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END,
+      t.due_date ASC NULLS LAST,
+      t.id
+  `, params);
+  res.json({ tasks: r.rows });
+});
+
 // Přehled per tým — jen admin.
 router.get('/teams-overview', requireAuth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });

@@ -15,10 +15,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import PageHeader from '../components/PageHeader.jsx';
+import Modal from '../components/Modal.jsx';
 import Avatar from '../components/Avatar.jsx';
+import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import { useAuth } from '../auth.jsx';
 import { useTeams, useFeature } from '../teams.jsx';
-import { scoreboard as scoreboardApi } from '../api.js';
+import { scoreboard as scoreboardApi, tasks as tasksApi } from '../api.js';
 
 const MEDAL = ['🥇', '🥈', '🥉'];
 
@@ -47,6 +49,9 @@ export default function Scoreboard() {
   // null = celý tým (agregát), jinak trend jednoho uživatele.
   const [selectedUserId, setSelectedUserId] = useState(null);
   const trendRef = useRef(null);
+  // Drill-down modal: klik na KPI kartu → seznam úkolů dané kategorie.
+  const [drilldown, setDrilldown] = useState(null); // { user, category } | null
+  const [detailTask, setDetailTask] = useState(null); // klik na řádek v modalu
 
   // Klik na kartu → přepne trend na daného usera a odscrolluje na graf.
   const selectUser = (uid) => {
@@ -243,7 +248,7 @@ export default function Scoreboard() {
               </div>
             </div>
 
-            {/* Per user karty s vlastním sparklinem. Klik → trend přepne na tohoto usera. */}
+            {/* Per user karty s vlastním sparklinem. Klik na kartu → trend; klik na KPI → drill-down. */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {users.map(u => (
                 <UserCard
@@ -252,6 +257,7 @@ export default function Scoreboard() {
                   isMe={u.user_id === user?.id}
                   isSelected={selectedUserId === u.user_id}
                   onSelect={() => selectUser(u.user_id)}
+                  onKpiClick={(category) => setDrilldown({ user: u, category })}
                   seriesMonths={history.series?.find(s => s.user_id === u.user_id)?.months || []}
                   axis={history.months_axis || []}
                 />
@@ -342,6 +348,24 @@ export default function Scoreboard() {
           </>
         )}
       </div>
+
+      {drilldown && (
+        <TaskListModal
+          user={drilldown.user}
+          category={drilldown.category}
+          teamId={effectiveTeamId}
+          onClose={() => setDrilldown(null)}
+          onOpenTask={async (taskId) => {
+            try {
+              const d = await tasksApi.get(taskId);
+              setDetailTask(d.task);
+            } catch { /* ignore */ }
+          }}
+        />
+      )}
+      {detailTask && (
+        <TaskDetailModal task={detailTask} onClose={() => setDetailTask(null)} onUpdate={() => {}} />
+      )}
     </div>
   );
 }
@@ -356,8 +380,9 @@ function Kpi({ label, value, color }) {
 }
 
 // Karta per uživatel — bar (objem + úspěšnost) + sparkline trend úspěšnosti.
-// Klik → nadřazený scoreboard přepne velký trend graf na tohoto usera.
-function UserCard({ u, isMe, isSelected, onSelect, seriesMonths, axis }) {
+// Klik na kartu → nadřazený scoreboard přepne velký trend graf na tohoto usera.
+// Klik na mini-KPI → nadřazený scoreboard otevře drill-down modal.
+function UserCard({ u, isMe, isSelected, onSelect, onKpiClick, seriesMonths, axis }) {
   const doneAll  = (u.done_on_time || 0) + (u.done_late || 0) + (u.done_no_deadline || 0);
   const withDeadline = (u.done_on_time || 0) + (u.done_late || 0);
   const onPct   = withDeadline > 0 ? (u.done_on_time / withDeadline) * 100 : 0;
@@ -402,24 +427,18 @@ function UserCard({ u, isMe, isSelected, onSelect, seriesMonths, axis }) {
         </div>
       </div>
 
-      {/* 4 čísla: celkem / hotové / hotové po termínu (pozdě) / nehotové po termínu */}
+      {/* 4 čísla: celkem / hotové / hotové po termínu (pozdě) / nehotové po termínu.
+          Klikatelné — otevřou modal se seznamem úkolů. stopPropagation aby klik
+          nespustil card-level onSelect (výběr trendu). */}
       <div className="grid grid-cols-4 gap-1 text-[11px] mb-2">
-        <div className="bg-cream-50 rounded px-1.5 py-1 text-center">
-          <div className="font-bold text-ink-700 tabular-nums">{u.total || 0}</div>
-          <div className="text-ink-500 text-[10px]">celkem</div>
-        </div>
-        <div className="bg-emerald-50 rounded px-1.5 py-1 text-center">
-          <div className="font-bold text-emerald-700 tabular-nums">{doneAll}</div>
-          <div className="text-emerald-600/70 text-[10px]">hotové</div>
-        </div>
-        <div className="bg-amber-50 rounded px-1.5 py-1 text-center">
-          <div className="font-bold text-amber-700 tabular-nums">{u.done_late || 0}</div>
-          <div className="text-amber-600/70 text-[10px]">pozdě</div>
-        </div>
-        <div className="bg-red-50 rounded px-1.5 py-1 text-center">
-          <div className="font-bold text-red-600 tabular-nums">{u.overdue || 0}</div>
-          <div className="text-red-500/70 text-[10px]">po term.</div>
-        </div>
+        <KpiTile label="celkem"   value={u.total || 0}       cls="bg-cream-50 hover:bg-cream-100 text-ink-700"
+                 onClick={(e) => { e.stopPropagation(); onKpiClick?.('celkem'); }} />
+        <KpiTile label="hotové"   value={doneAll}            cls="bg-emerald-50 hover:bg-emerald-100 text-emerald-700"
+                 onClick={(e) => { e.stopPropagation(); onKpiClick?.('hotove'); }} />
+        <KpiTile label="pozdě"    value={u.done_late || 0}   cls="bg-amber-50 hover:bg-amber-100 text-amber-700"
+                 onClick={(e) => { e.stopPropagation(); onKpiClick?.('pozde'); }} />
+        <KpiTile label="po term." value={u.overdue || 0}     cls="bg-red-50 hover:bg-red-100 text-red-600"
+                 onClick={(e) => { e.stopPropagation(); onKpiClick?.('po_terminu'); }} />
       </div>
 
       {/* Bar úspěšnosti (jen dokončené úkoly s termínem — vizualizuje poměr včas/pozdě) */}
@@ -447,3 +466,90 @@ function UserCard({ u, isMe, isSelected, onSelect, seriesMonths, axis }) {
     </div>
   );
 }
+
+// Malá klikatelná KPI dlaždice.
+function KpiTile({ label, value, cls, onClick }) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`rounded px-1.5 py-1 text-center transition cursor-pointer ${cls}`}
+      title={`Zobrazit úkoly (${label})`}>
+      <div className="font-bold tabular-nums">{value}</div>
+      <div className="text-[10px] opacity-70">{label}</div>
+    </button>
+  );
+}
+
+// Modal se seznamem úkolů jedné kategorie pro daného uživatele.
+// Klik na řádek otevře plný TaskDetailModal (v Scoreboard state detailTask).
+const CATEGORY_LABEL = {
+  celkem:     'Všechny úkoly',
+  hotove:     'Hotové úkoly',
+  pozde:      'Hotové po termínu',
+  po_terminu: 'Nedokončené po termínu',
+};
+
+function TaskListModal({ user, category, teamId, onClose, onOpenTask }) {
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    scoreboardApi.tasks(user.user_id, category, teamId)
+      .then(d => setTasks(d.tasks || []))
+      .catch(() => setTasks([]))
+      .finally(() => setLoading(false));
+  }, [user.user_id, category, teamId]);
+
+  const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: '2-digit' }) : '—';
+  const title = `${CATEGORY_LABEL[category]} — ${user.name}`;
+
+  return (
+    <Modal open={true} onClose={onClose} title={title}>
+      {loading ? (
+        <div className="text-ink-500 text-sm">Načítám…</div>
+      ) : tasks.length === 0 ? (
+        <div className="text-ink-400 text-sm italic">Žádné úkoly v této kategorii.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-ink-500 uppercase tracking-wide">
+              <tr>
+                <th className="text-left py-2 pr-3">Úkol</th>
+                <th className="text-left py-2 pr-3">Projekt</th>
+                <th className="text-center py-2 px-2">Termín</th>
+                <th className="text-center py-2 px-2">Dokončeno</th>
+                <th className="text-center py-2 pl-2">Stav</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-cream-100">
+              {tasks.map(t => (
+                <tr key={t.id}
+                  onClick={() => onOpenTask?.(t.id)}
+                  className="cursor-pointer hover:bg-cream-50">
+                  <td className="py-2 pr-3 text-ink-800">{t.title}</td>
+                  <td className="py-2 pr-3 text-ink-600 text-xs">
+                    {t.project_name}
+                    {t.team_name && <span className="text-ink-400"> · {t.team_name}</span>}
+                  </td>
+                  <td className="py-2 px-2 text-center text-xs tabular-nums">{fmtDate(t.due_date)}</td>
+                  <td className="py-2 px-2 text-center text-xs tabular-nums">{fmtDate(t.completed_at)}</td>
+                  <td className="py-2 pl-2 text-center">
+                    <span className={`text-[10px] px-2 py-0.5 rounded border ${
+                      t.status === 'done' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : t.status === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200'
+                        : t.status === 'needs_fix' ? 'bg-amber-50 text-amber-800 border-amber-200'
+                        : t.status === 'review' ? 'bg-purple-50 text-purple-700 border-purple-200'
+                        : 'bg-slate-50 text-slate-600 border-slate-200'
+                    }`}>{t.status}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="text-[11px] text-ink-400 mt-2">Klikni na řádek pro plný detail úkolu.</div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
