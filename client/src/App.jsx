@@ -23,6 +23,7 @@ import AnsweredQuestions from './pages/AnsweredQuestions.jsx';
 import DueChangeRequests from './pages/DueChangeRequests.jsx';
 import FindTasks from './pages/FindTasks.jsx';
 import Meetings from './pages/Meetings.jsx';
+import MZV from './pages/MZV.jsx';
 import Napadnik from './pages/Napadnik.jsx';
 import NapadnikForm from './pages/NapadnikForm.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
@@ -61,6 +62,7 @@ function ProtectedRoutes() {
         <Route path="/due-requests" element={<DueChangeRequests />} />
         <Route path="/find-tasks" element={<FindTasks />} />
         <Route path="/porady" element={<Meetings />} />
+        <Route path="/mzv" element={<MZV />} />
         <Route path="/time" element={<TimeTracking />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/ai" element={<AIPage />} />

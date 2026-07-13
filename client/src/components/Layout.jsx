@@ -24,6 +24,7 @@ const NAV = [
   { to: '/due-requests', label: 'Žádosti o zm. termínu', icon: '📅', badge: 'dueRequests' },
   { to: '/notes',     label: 'Poznámky',           icon: '📝' },
   { to: '/porady',    label: 'Porady',             icon: '🗓' },
+  { to: '/mzv',       label: 'MZV',                icon: '🎯', requireManager: true },
   { to: '/napadnik',  label: 'Nápadník',           icon: '💡', requireIdeaAccess: true },
   { to: '/email',     label: 'Email',              icon: '📧' },
   { to: '/time',      label: 'Hodiny',             icon: '⏱️' },

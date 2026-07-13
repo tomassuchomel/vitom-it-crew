@@ -121,6 +121,16 @@ export const meetings = {
   edits:          (id) => api.get(`/meetings/meetings/${id}/edits`).then(r => r.data),
 };
 
+// MZV (Měsíční Zpětná Vazba). F1: subordinates, profile CRUD, meetings list+create.
+export const mzv = {
+  subordinates: () => api.get('/mzv/subordinates').then(r => r.data),
+  getProfile:   (userId) => api.get(`/mzv/profile/${userId}`).then(r => r.data),
+  putProfile:   (userId, data) => api.put(`/mzv/profile/${userId}`, data).then(r => r.data),
+  listMeetings: (subordinateId) => api.get('/mzv/meetings', { params: { subordinate_id: subordinateId } }).then(r => r.data),
+  createMeeting: (subordinateId, meetingDate) => api.post('/mzv/meetings', { subordinate_id: subordinateId, meeting_date: meetingDate }).then(r => r.data),
+  getMeeting:   (id) => api.get(`/mzv/meetings/${id}`).then(r => r.data),
+};
+
 // MCP tokeny — každý uživatel si spravuje vlastní tokeny pro připojení
 // externího Claude klienta (Cowork/Desktop/Code) ke svým úkolům.
 export const mcpTokens = {
