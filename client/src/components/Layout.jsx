@@ -23,6 +23,7 @@ const NAV = [
   { to: '/answers',   label: 'Odpovědi na dotazy', icon: '📩', badge: 'answersUnread', hasTeamSubmenu: true },
   { to: '/due-requests', label: 'Žádosti o zm. termínu', icon: '📅', badge: 'dueRequests' },
   { to: '/notes',     label: 'Poznámky',           icon: '📝' },
+  { to: '/porady',    label: 'Porady',             icon: '🗓' },
   { to: '/napadnik',  label: 'Nápadník',           icon: '💡', requireIdeaAccess: true },
   { to: '/email',     label: 'Email',              icon: '📧' },
   { to: '/time',      label: 'Hodiny',             icon: '⏱️' },

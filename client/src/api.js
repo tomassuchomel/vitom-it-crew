@@ -91,6 +91,20 @@ export const navCounts = {
   get: () => api.get('/nav-counts').then(r => r.data),
 };
 
+// Porady — sekce pro pravidelné schůzky/porady. Typy porad → jednotlivé zápisy.
+export const meetings = {
+  listTypes:      () => api.get('/meetings/types').then(r => r.data),
+  createType:     (data) => api.post('/meetings/types', data).then(r => r.data),
+  getType:        (id) => api.get(`/meetings/types/${id}`).then(r => r.data),
+  updateType:     (id, data) => api.patch(`/meetings/types/${id}`, data).then(r => r.data),
+  removeType:     (id) => api.delete(`/meetings/types/${id}`).then(r => r.data),
+  listMeetings:   (typeId) => api.get(`/meetings/types/${typeId}/meetings`).then(r => r.data),
+  createMeeting:  (typeId, data) => api.post(`/meetings/types/${typeId}/meetings`, data).then(r => r.data),
+  getMeeting:     (id) => api.get(`/meetings/meetings/${id}`).then(r => r.data),
+  updateMeeting:  (id, data) => api.patch(`/meetings/meetings/${id}`, data).then(r => r.data),
+  removeMeeting:  (id) => api.delete(`/meetings/meetings/${id}`).then(r => r.data),
+};
+
 // MCP tokeny — každý uživatel si spravuje vlastní tokeny pro připojení
 // externího Claude klienta (Cowork/Desktop/Code) ke svým úkolům.
 export const mcpTokens = {
