@@ -12,6 +12,8 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { query } from '../db.js';
+import { callAI, stripHtml, collectPrevContext, generateAgendaSuggestion } from '../meetingsAi.js';
+import { sendMail } from '../mailer.js';
 
 const router = Router();
 
@@ -216,18 +218,62 @@ router.patch('/meetings/:id', requireAuth, async (req, res) => {
   const params = [];
   const push = (col, val, cast = '') => { params.push(val); sets.push(`${col} = $${params.length}${cast}`); };
 
-  if ('title' in b)         push('title', String(b.title || '').trim().slice(0, 300));
-  if ('meeting_date' in b)  push('meeting_date', b.meeting_date || null);
-  if ('meeting_time' in b)  push('meeting_time', b.meeting_time ? String(b.meeting_time).slice(0, 8) : null);
-  if ('content_json' in b)  push('content_json', JSON.stringify(b.content_json || { type: 'doc', content: [] }), '::jsonb');
-  if ('agenda' in b)        push('agenda', JSON.stringify(Array.isArray(b.agenda) ? b.agenda : []), '::jsonb');
-  if ('attendees' in b)     push('attendees', JSON.stringify(Array.isArray(b.attendees) ? sanitizeAttendees(b.attendees) : []), '::jsonb');
+  // Audit log — sesbírej změny klíčových polí (title, date, agenda, content, attendees).
+  // Před save si uložíme snapshot těch, co se mění. Jen krátká hodnota → JSONB.
+  const auditChanges = [];
+  const truncate = (v) => typeof v === 'string' ? v.slice(0, 4000) : v;
+  const truncateJson = (v) => {
+    const s = typeof v === 'string' ? v : JSON.stringify(v || null);
+    return s.length > 4000 ? s.slice(0, 4000) + '…' : s;
+  };
+
+  if ('title' in b) {
+    push('title', String(b.title || '').trim().slice(0, 300));
+    if (String(b.title || '') !== String(cur.title || '')) {
+      auditChanges.push({ type: 'title', before: cur.title, after: String(b.title).slice(0, 300) });
+    }
+  }
+  if ('meeting_date' in b) {
+    push('meeting_date', b.meeting_date || null);
+    if (String(b.meeting_date || '') !== String(cur.meeting_date || '').slice(0, 10)) {
+      auditChanges.push({ type: 'date', before: cur.meeting_date, after: b.meeting_date });
+    }
+  }
+  if ('meeting_time' in b) {
+    push('meeting_time', b.meeting_time ? String(b.meeting_time).slice(0, 8) : null);
+  }
+  if ('content_json' in b) {
+    const newContent = typeof b.content_json === 'string' ? b.content_json : JSON.stringify(b.content_json);
+    push('content_json', JSON.stringify(b.content_json || ''), '::jsonb');
+    const oldContent = typeof cur.content_json === 'string' ? cur.content_json : JSON.stringify(cur.content_json || '');
+    if (oldContent !== newContent) {
+      auditChanges.push({ type: 'notes', before: truncate(oldContent), after: truncate(newContent) });
+    }
+  }
+  if ('agenda' in b) {
+    push('agenda', JSON.stringify(Array.isArray(b.agenda) ? b.agenda : []), '::jsonb');
+    auditChanges.push({ type: 'agenda', before: cur.agenda, after: b.agenda });
+  }
+  if ('attendees' in b) {
+    push('attendees', JSON.stringify(Array.isArray(b.attendees) ? sanitizeAttendees(b.attendees) : []), '::jsonb');
+    auditChanges.push({ type: 'attendees', before: cur.attendees, after: sanitizeAttendees(b.attendees) });
+  }
   if ('agenda_finalized_at' in b) push('agenda_finalized_at', b.agenda_finalized_at ? new Date(b.agenda_finalized_at) : null);
   if ('agenda_source' in b)       push('agenda_source', b.agenda_source || null);
   if (sets.length === 0) return res.status(400).json({ error: 'no_fields' });
   sets.push('updated_at = NOW()');
   params.push(id);
   await query(`UPDATE meetings SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+
+  // Zapiš audit log fire-and-forget (neblokuje response).
+  for (const c of auditChanges) {
+    query(`
+      INSERT INTO meeting_edits (meeting_id, editor_id, change_type, before_value, after_value)
+      VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+    `, [id, req.user.id, c.type, JSON.stringify(truncateJson(c.before)), JSON.stringify(truncateJson(c.after))])
+      .catch(err => console.warn('[meetings/audit]', c.type, err.message));
+  }
+
   const r = await query(`SELECT * FROM meetings WHERE id = $1`, [id]);
   res.json({ meeting: r.rows[0] });
 });
@@ -241,70 +287,6 @@ function sanitizeAttendees(list) {
     if (a.guest_email) out.guest_email = String(a.guest_email).slice(0, 200);
     return out;
   });
-}
-
-// ===== AI helpers =====
-
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
-
-// Prostý stripper HTML — pro krmení AI (odstraní tagy, zachová text).
-function stripHtml(html) {
-  return String(html || '').replace(/<style[^>]*>.*?<\/style>/gi, '')
-    .replace(/<script[^>]*>.*?<\/script>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-// Volá Anthropic API. Vrátí { text } nebo { error }.
-async function callAI(systemPrompt, userMsg, maxTokens = 2000) {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return { error: 'no_api_key', message: 'ANTHROPIC_API_KEY není nastaven.' };
-  try {
-    const res = await fetch(ANTHROPIC_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL, max_tokens: maxTokens,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userMsg }],
-      }),
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      return { error: 'api_error', status: res.status, message: t.slice(0, 500) };
-    }
-    const data = await res.json();
-    const text = data?.content?.[0]?.text || '';
-    return { text };
-  } catch (err) {
-    return { error: 'fetch_failed', message: err.message };
-  }
-}
-
-// Sesbírá kontext z předchozích porad + úkolů pro AI.
-async function collectPrevContext(typeId, currentMeetingId, limit = 5) {
-  // Předchozí zápisy stejného typu (chronologicky sestupně, kromě aktuálního)
-  const prev = (await query(`
-    SELECT id, title, meeting_date, content_json, agenda
-    FROM meetings
-    WHERE type_id = $1 AND id != $2
-    ORDER BY meeting_date DESC NULLS LAST, created_at DESC
-    LIMIT $3
-  `, [typeId, currentMeetingId, limit])).rows;
-
-  // Úkoly propojené s těmito porady
-  const meetingIds = prev.map(m => m.id);
-  const tasks = meetingIds.length > 0 ? (await query(`
-    SELECT t.id, t.title, t.status, t.due_date, t.completed_at, t.meeting_id,
-           u.name AS assignee_name
-    FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
-    WHERE t.meeting_id = ANY($1::int[])
-  `, [meetingIds])).rows : [];
-
-  return { previousMeetings: prev, relatedTasks: tasks };
 }
 
 // AI: shrnutí předchozích porad + status úkolů + doporučení co řešit.
@@ -371,61 +353,116 @@ VYTVOŘ SHRNUTÍ v tomto formátu (Markdown, česky):
 router.post('/meetings/:id/agenda-suggest', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const cur = (await query(`
-    SELECT m.*, t.name AS type_name, t.agenda_template, t.team_id, t.visibility, t.custom_users, t.organizer_id
+    SELECT m.*, t.name AS name_for_type, t.agenda_template, t.team_id, t.visibility, t.custom_users, t.organizer_id
     FROM meetings m JOIN meeting_types t ON t.id = m.type_id
     WHERE m.id = $1
   `, [id])).rows[0];
   if (!cur) return res.status(404).json({ error: 'not_found' });
   if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
 
-  const { previousMeetings, relatedTasks } = await collectPrevContext(cur.type_id, id, 3);
-  const template = Array.isArray(cur.agenda_template) ? cur.agenda_template.map(a => a.text).filter(Boolean) : [];
-  const unfinishedTasks = relatedTasks.filter(t => t.status !== 'done').slice(0, 20);
-  const lastNotes = previousMeetings.slice(0, 2).map(m => ({
-    date: m.meeting_date,
-    notes: stripHtml(typeof m.content_json === 'string' ? m.content_json : JSON.stringify(m.content_json)).slice(0, 800),
-  }));
+  const type = { id: cur.type_id, name: cur.name_for_type, agenda_template: cur.agenda_template };
+  const out = await generateAgendaSuggestion(cur, type);
+  if (out.error) return res.status(500).json(out.error);
+  res.json({ items: out.items });
+});
 
-  const system = `Jsi asistent, který navrhne agendu porady. Vrátíš POUZE validní JSON, bez markdown ozdob:
-{
-  "items": [
-    { "text": "krátký bod agendy (max 100 znaků)" },
-    ...
-  ]
-}
-Vrať 3-7 bodů. Píšeš česky, věcně.`;
-
-  const userMsg = `Typ porady: "${cur.type_name}"
-Datum aktuálního zápisu: ${cur.meeting_date || '(neuvedeno)'}
-
-KOSTRA (základní body — už jsou v agendě):
-${template.length > 0 ? template.join('\n') : '(žádná kostra)'}
-
-NEDOKONČENÉ ÚKOLY z posledních porad (probrat status):
-${JSON.stringify(unfinishedTasks.map(t => ({ title: t.title, assignee: t.assignee_name, due: t.due_date, status: t.status })), null, 2)}
-
-POSLEDNÍ 2 ZÁPISY (kontext, co se řešilo — nezopakovat, ale navázat):
-${JSON.stringify(lastNotes, null, 2)}
-
-Navrhni DALŠÍ body agendy, které NEJSOU v kostře. Konkrétní, akční. Zaměř se na:
-- follow-up na nedokončené úkoly (kdo/co)
-- otevřené otázky z minulých porad
-- nové věci, které z kontextu vyplynuly
-
-Vrať JSON.`;
-
-  const out = await callAI(system, userMsg, 1500);
-  if (out.error) return res.status(500).json(out);
-  // Parse JSON
-  try {
-    const parsed = JSON.parse(out.text.trim());
-    const items = Array.isArray(parsed.items)
-      ? parsed.items.filter(x => x && typeof x.text === 'string').map(x => ({ text: String(x.text).slice(0, 200) }))
-      : [];
-    res.json({ items });
-  } catch (err) {
-    res.status(500).json({ error: 'parse_failed', message: err.message, raw: out.text.slice(0, 500) });
+// Follow-up mail účastníkům po zápisu. Každý účastník (user_id nebo guest)
+// dostane email s vlastními úkoly + termíny (tasks.meeting_id = tento zápis).
+// Šéf (organizer) dostane přehled všech úkolů.
+router.post('/meetings/:id/followup', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`
+    SELECT m.*, t.name AS type_name, t.team_id, t.visibility, t.custom_users, t.organizer_id
+    FROM meetings m JOIN meeting_types t ON t.id = m.type_id WHERE m.id = $1
+  `, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
+  if (cur.organizer_id !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'forbidden', message: 'Follow-up smí poslat jen organizátor nebo admin.' });
   }
+
+  // Attendees kdo byli přítomni
+  const attendees = Array.isArray(cur.attendees) ? cur.attendees.filter(a => a.present) : [];
+  if (attendees.length === 0) return res.status(400).json({ error: 'no_attendees', message: 'Nikdo nebyl označen jako přítomný.' });
+
+  // Úkoly propojené s tímto zápisem
+  const tasksR = await query(`
+    SELECT t.id, t.title, t.due_date, t.priority, t.assignee_id, u.name AS assignee_name
+    FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
+    WHERE t.meeting_id = $1
+  `, [id]);
+  const tasks = tasksR.rows;
+
+  // Emails per attendee
+  let sent = 0;
+  const meetingUrl = `${process.env.CLIENT_URL || ''}/porady`;
+  const dateStr = cur.meeting_date ? new Date(cur.meeting_date).toLocaleDateString('cs-CZ') : '';
+
+  const respond = (email, ownTasks, isOrganizer) => {
+    const listHtml = (isOrganizer ? tasks : ownTasks).map(t => `
+      <li>
+        <strong>${escapeMail(t.title)}</strong>
+        ${t.due_date ? ` — termín ${new Date(t.due_date).toLocaleDateString('cs-CZ')}` : ''}
+        ${isOrganizer && t.assignee_name ? ` <span style="color:#5b7177">(${escapeMail(t.assignee_name)})</span>` : ''}
+      </li>`).join('') || '<li><em>Žádné úkoly nevzešly.</em></li>';
+    const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:20px;color:#1f3a40">
+      <div style="max-width:560px;margin:auto;background:white;border-radius:8px;padding:20px">
+        <div style="color:#e72b78;font-weight:bold;font-size:11px;letter-spacing:0.15em">VITOM PORADY</div>
+        <h2 style="margin:8px 0">Zápis: ${escapeMail(cur.title)}</h2>
+        <div style="color:#5b7177;font-size:13px">${dateStr} · ${escapeMail(cur.type_name)}</div>
+        <h3 style="margin-top:16px">${isOrganizer ? 'Všechny úkoly z porady' : 'Tvoje úkoly z porady'}</h3>
+        <ul style="font-size:14px;line-height:1.6">${listHtml}</ul>
+        <div style="margin-top:20px;padding-top:12px;border-top:1px solid #e2dcd3;font-size:12px;color:#5b7177">
+          <a href="${meetingUrl}" style="color:#e72b78">Otevřít zápis v aplikaci →</a>
+        </div>
+      </div></body></html>`;
+    return sendMail({ to: email, subject: `Porada ${dateStr}: ${cur.title}`, html })
+      .then(() => sent++).catch(err => console.warn('[followup]', email, err.message));
+  };
+
+  const promises = [];
+  for (const a of attendees) {
+    if (a.user_id) {
+      const uR = await query(`SELECT email, name FROM users WHERE id = $1`, [a.user_id]);
+      if (uR.rows[0]?.email) {
+        const isOrg = a.user_id === cur.organizer_id;
+        const own = tasks.filter(t => t.assignee_id === a.user_id);
+        promises.push(respond(uR.rows[0].email, own, isOrg));
+      }
+    } else if (a.guest_email) {
+      // Guest: nemá tasks (user_id NULL), pošleme všechny úkoly jako informaci
+      promises.push(respond(a.guest_email, [], false));
+    }
+  }
+  await Promise.all(promises);
+
+  await query(`UPDATE meetings SET followed_up_at = NOW() WHERE id = $1`, [id]);
+  res.json({ ok: true, sent, total: attendees.length });
+});
+
+function escapeMail(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Audit log editací — poslední 20 změn.
+router.get('/meetings/:id/edits', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const m = (await query(`
+    SELECT t.team_id, t.visibility, t.custom_users, t.organizer_id
+    FROM meetings mm JOIN meeting_types t ON t.id = mm.type_id WHERE mm.id = $1
+  `, [id])).rows[0];
+  if (!m) return res.status(404).json({ error: 'not_found' });
+  if (!await canAccessType(req.user.id, req.user.role, m)) return res.status(403).json({ error: 'forbidden' });
+
+  const r = await query(`
+    SELECT e.id, e.change_type, e.before_value, e.after_value, e.edited_at,
+           u.name AS editor_name
+    FROM meeting_edits e LEFT JOIN users u ON u.id = e.editor_id
+    WHERE e.meeting_id = $1
+    ORDER BY e.edited_at DESC
+    LIMIT 20
+  `, [id]);
+  res.json({ edits: r.rows });
 });
 
 // Smazat zápis.

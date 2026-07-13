@@ -10,6 +10,7 @@
 import { query } from './db.js';
 import { sendToUser, isPushConfigured } from './push.js';
 import { sendMail, isMailerConfigured, getNotificationPrefs } from './mailer.js';
+import { generateAgendaSuggestion } from './meetingsAi.js';
 
 const TZ = 'Europe/Prague';
 
@@ -175,9 +176,28 @@ async function dailyEmailSummary({ h, m, ymd, dayOfWeek } = {}) {
 
       if (tasksR.rows.length === 0) continue;
 
+      // Připomínka: nadcházející porada (do 48h), kde jsem organizer a
+      // agenda ještě není finalizovaná. Vloží se do denního mailu jako varování.
+      let meetingReminder = null;
+      try {
+        const mR = await query(`
+          SELECT m.id, m.title, m.meeting_date, m.meeting_time, t.name AS type_name
+          FROM meetings m JOIN meeting_types t ON t.id = m.type_id
+          WHERE t.organizer_id = $1
+            AND m.agenda_finalized_at IS NULL
+            AND m.meeting_date IS NOT NULL
+            AND m.meeting_date >= CURRENT_DATE
+            AND m.meeting_date <= (CURRENT_DATE + INTERVAL '2 days')::date
+          ORDER BY m.meeting_date ASC LIMIT 3
+        `, [u.id]);
+        if (mR.rows.length > 0) meetingReminder = mR.rows;
+      } catch (err) {
+        if (err.code !== '42P01') console.warn('[dailyEmailSummary] meetings check', err.message);
+      }
+
       // AI doporučení — jeden Claude call per user
       const ai = await summarizeUserTasks(u, tasksR.rows, apiKey);
-      const html = buildDailySummaryHtml(u, ai, tasksR.rows);
+      const html = buildDailySummaryHtml(u, ai, tasksR.rows, meetingReminder);
       const r = await sendMail({
         to: u.email,
         subject: `VITOM: Tvůj plán na dnes (${tasksR.rows.length} úkolů)`,
@@ -239,7 +259,7 @@ PRAVIDLA:
   }
 }
 
-function buildDailySummaryHtml(user, ai, tasks) {
+function buildDailySummaryHtml(user, ai, tasks, meetingReminder) {
   const base = (process.env.APP_BASE_URL?.trim() || 'https://it.realitniekosystem.cz').replace(/\/$/, '');
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const PRIO_LABEL = { urgent: '🔥 Urgent', high: '⬆ Vysoká', normal: 'Normální', low: '⬇ Nízká' };
@@ -286,6 +306,25 @@ function buildDailySummaryHtml(user, ai, tasks) {
       <div style="color:#365156;font-size:13px;line-height:1.5;">${esc(ai.recommendation)}</div>
     </div>
 
+    ${meetingReminder && meetingReminder.length > 0 ? `
+    <!-- Připomínka: nadcházející porada bez agendy -->
+    <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:14px 16px;border-radius:6px;margin-bottom:20px;">
+      <div style="font-weight:600;color:#78350f;font-size:14px;margin-bottom:4px;">⚠️ Nadcházející porada — chybí agenda</div>
+      <div style="color:#78350f;font-size:13px;line-height:1.5;">
+        ${meetingReminder.map(m => {
+          const d = new Date(m.meeting_date);
+          const today = new Date(); today.setHours(0,0,0,0);
+          const diff = Math.round((d - today) / 86400000);
+          const dayLabel = diff === 0 ? '<strong>dnes</strong>' : diff === 1 ? '<strong>zítra</strong>' : `za ${diff} dní`;
+          return `<div style="margin:6px 0;">
+            📅 ${esc(m.type_name)} — ${dayLabel}${m.meeting_time ? ` v ${m.meeting_time.slice(0, 5)}` : ''}.
+            Zadej agendu <a href="${base}/porady" style="color:#e72b78;font-weight:600;">v aplikaci</a>,
+            jinak ji AI vygeneruje sama a rozešle účastníkům.
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
     <!-- Seznam úkolů seřazený dle priority + termínu -->
     <div style="font-size:13px;color:#0c363e;font-weight:600;margin-bottom:6px;">📋 Tvé otevřené úkoly (${tasks.length})</div>
     <table style="width:100%;border-collapse:collapse;font-size:13px;color:#1f3a40;">
@@ -310,10 +349,100 @@ function buildDailySummaryHtml(user, ai, tasks) {
 </body></html>`;
 }
 
+// Meeting agenda deadline: pro nadcházející porady (meeting_date ≤ zítra),
+// kde organizer nefinalizoval agendu, AI vygeneruje kompletní návrh a rozešle
+// všem účastníkům e-mailem. Běží jednou za hodinu (9-18h), dedup per meeting_id.
+async function meetingAgendaCron({ ymd }) {
+  if (!isMailerConfigured()) return { sent: 0, skipped: 'no_mailer' };
+  if (!process.env.ANTHROPIC_API_KEY) return { sent: 0, skipped: 'no_ai' };
+
+  // Meetings s datem = zítra, agenda_finalized_at IS NULL.
+  // Dedup per meeting: jeden mail za život meetingu.
+  const r = await query(`
+    SELECT m.*, t.name AS type_name, t.agenda_template, t.organizer_id, t.team_id
+    FROM meetings m JOIN meeting_types t ON t.id = m.type_id
+    WHERE m.agenda_finalized_at IS NULL
+      AND m.meeting_date IS NOT NULL
+      AND m.meeting_date <= (CURRENT_DATE + INTERVAL '1 day')::date
+      AND m.meeting_date >= CURRENT_DATE
+  `);
+  let sent = 0;
+  for (const m of r.rows) {
+    const dedupKey = `meeting-agenda-${m.id}`;
+    if (lastRun.get(dedupKey)) continue;
+
+    // Generuj AI agendu (helper už spojí kostru + AI návrh)
+    const type = { id: m.type_id, name: m.type_name, agenda_template: m.agenda_template };
+    const out = await generateAgendaSuggestion(m, type);
+    if (out.error) { console.warn('[meeting-agenda] AI', m.id, out.error); continue; }
+
+    // Merge template + AI items
+    const template = Array.isArray(m.agenda_template) ? m.agenda_template.map(t => ({ text: t.text, checked: false, source: 'template' })) : [];
+    const aiItems = (out.items || []).map(i => ({ text: i.text, checked: false, source: 'ai' }));
+    const fullAgenda = [...template, ...aiItems];
+
+    // Ulož agendu + agenda_source, ale NEfinalizuj (organizer může ještě edit)
+    await query(`
+      UPDATE meetings SET agenda = $1::jsonb, agenda_finalized_at = NOW(), agenda_source = 'ai_auto'
+      WHERE id = $2
+    `, [JSON.stringify(fullAgenda), m.id]);
+
+    // Rozešli attendees + organizer
+    const attendees = Array.isArray(m.attendees) ? m.attendees : [];
+    const emails = new Set();
+    for (const a of attendees) {
+      if (a.user_id) {
+        const u = (await query(`SELECT email FROM users WHERE id = $1`, [a.user_id])).rows[0];
+        if (u?.email) emails.add(u.email);
+      } else if (a.guest_email) emails.add(a.guest_email);
+    }
+    if (m.organizer_id) {
+      const u = (await query(`SELECT email FROM users WHERE id = $1`, [m.organizer_id])).rows[0];
+      if (u?.email) emails.add(u.email);
+    }
+
+    const url = `${process.env.CLIENT_URL || ''}/porady`;
+    const agendaHtml = fullAgenda.map(a =>
+      `<li>${a.source === 'ai' ? '🤖 ' : ''}${escapeMailStr(a.text)}</li>`).join('') || '<li><em>Prázdno</em></li>';
+    const dateStr = new Date(m.meeting_date).toLocaleDateString('cs-CZ');
+    const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:20px;color:#1f3a40">
+      <div style="max-width:560px;margin:auto;background:white;border-radius:8px;padding:20px">
+        <div style="color:#e72b78;font-weight:bold;font-size:11px;letter-spacing:0.15em">VITOM PORADY</div>
+        <h2 style="margin:8px 0">Agenda porady ${escapeMailStr(m.type_name)}</h2>
+        <div style="color:#5b7177;font-size:13px">${dateStr}${m.meeting_time ? ` v ${m.meeting_time.slice(0, 5)}` : ''}</div>
+        <p style="font-size:13px;color:#e72b78">⚠️ Organizátor agendu nefinalizoval, AI ji vygenerovala automaticky.</p>
+        <h3 style="margin-top:16px">${escapeMailStr(m.title)}</h3>
+        <ul style="font-size:14px;line-height:1.6">${agendaHtml}</ul>
+        <div style="margin-top:20px;padding-top:12px;border-top:1px solid #e2dcd3;font-size:12px;color:#5b7177">
+          <a href="${url}" style="color:#e72b78">Upravit v aplikaci →</a>
+        </div>
+      </div></body></html>`;
+    for (const email of emails) {
+      try { await sendMail({ to: email, subject: `Agenda porady ${dateStr}`, html }); sent++; }
+      catch (err) { console.warn('[meeting-agenda] mail', email, err.message); }
+    }
+    lastRun.set(dedupKey, ymd);
+  }
+  return { sent };
+}
+
+function escapeMailStr(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 async function tick() {
   const { h, m, ymd } = nowPrague();
   // 5min toleranční okno: spustíme jakmile prošla cílová hodina, ne dřív.
   try {
+    // Porady: kontrola agendy 24h dopředu, každou celou hodinu 09-18.
+    if (m < 5 && h >= 9 && h <= 18) {
+      const rKey = `meeting-agenda-hour-${h}`;
+      if (lastRun.get(rKey) !== ymd) {
+        lastRun.set(rKey, ymd);
+        const r = await meetingAgendaCron({ ymd });
+        if (r.sent > 0) console.log(`[pushCron] meeting agenda mails sent=${r.sent}`);
+      }
+    }
     // Push deadlines + digest (vyžaduje push konfiguraci)
     if (isPushConfigured()) {
       if (h === 18 && m < 5 && lastRun.get('deadline') !== ymd) {

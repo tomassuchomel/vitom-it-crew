@@ -271,6 +271,19 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
     } finally { setAiBusy(false); }
   };
 
+  // Follow-up mail účastníkům
+  const sendFollowUp = async () => {
+    if (!confirm('Poslat follow-up mail všem přítomným účastníkům? Každý dostane své úkoly (organizátor dostane přehled všech).')) return;
+    setAiBusy(true);
+    try {
+      const d = await api.followUp(meeting.id);
+      alert(`✅ Odesláno ${d.sent} z ${d.total} účastníků.`);
+      onChanged?.();
+    } catch (e) {
+      alert(`Chyba: ${e.response?.data?.message || e.message}`);
+    } finally { setAiBusy(false); }
+  };
+
   // AI: navrhne body agendy — přidá je do agendy jako source='ai'.
   const genAgenda = async () => {
     setAiBusy(true);
@@ -337,7 +350,17 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
             className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
             🧠 Navrhnout agendu
           </button>
+          <button onClick={sendFollowUp} disabled={aiBusy}
+            title="Pošle e-mail všem účastníkům označeným jako 'přítomný'. Každý dostane jen SVÉ úkoly z porady (tasks propojené s tímto zápisem přes meeting_id). Organizátor dostane přehled všech úkolů."
+            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50">
+            📧 Poslat follow-up mail{meeting.followed_up_at ? ' znovu' : ''}
+          </button>
         </div>
+        {meeting.followed_up_at && (
+          <div className="mt-2 text-[11px] text-emerald-700">
+            ✅ Follow-up už byl odeslán: {new Date(meeting.followed_up_at).toLocaleString('cs-CZ')}
+          </div>
+        )}
         {summary && (
           <div className="mt-3 bg-cream-50 border border-cream-200 rounded p-3">
             {summary.loading ? (
@@ -478,6 +501,9 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
         </div>
       </section>
 
+      {/* Audit log editací */}
+      <EditsPanel meetingId={meeting.id} />
+
       {dirty && (
         <div className="sticky bottom-4 flex justify-end">
           <button onClick={save} disabled={saving}
@@ -489,6 +515,50 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
     </div>
   );
 }
+
+function EditsPanel({ meetingId }) {
+  const [open, setOpen] = useState(false);
+  const [edits, setEdits] = useState([]);
+  useEffect(() => {
+    if (!open) return;
+    api.edits(meetingId).then(d => setEdits(d.edits || [])).catch(() => setEdits([]));
+  }, [open, meetingId]);
+  return (
+    <section className="bg-white border border-cream-200 rounded-lg p-4">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between text-left">
+        <span className="text-xs font-semibold text-ink-500 uppercase tracking-wide">📜 Historie změn</span>
+        <span className="text-ink-400">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="mt-3">
+          {edits.length === 0 ? (
+            <div className="text-sm text-ink-400 italic">Zatím žádné editace nebo se ještě neuložily.</div>
+          ) : (
+            <ul className="space-y-1.5 text-xs">
+              {edits.map(e => (
+                <li key={e.id} className="flex gap-2 border-l-2 border-cream-300 pl-2">
+                  <span className="text-ink-500 shrink-0">{new Date(e.edited_at).toLocaleString('cs-CZ')}</span>
+                  <span className="font-semibold text-ink-700 shrink-0">{e.editor_name || '—'}</span>
+                  <span className="text-ink-500">upravil</span>
+                  <span className="font-medium">{CHANGE_LABEL[e.change_type] || e.change_type}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+const CHANGE_LABEL = {
+  title: 'název',
+  date: 'datum',
+  notes: 'zápis',
+  agenda: 'agendu',
+  attendees: 'prezenci',
+};
 
 // ==================== Modal: vytvořit typ porady ====================
 
