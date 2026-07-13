@@ -405,6 +405,15 @@ router.post('/', requireAuth, async (req, res) => {
     if (err.code !== '42703') throw err;
     console.warn('[tasks] created_by column not present; skipping');
   }
+  // Propojení s poradou (tasks.meeting_id) — defenzivně kdyby migrace neběžela.
+  if (req.body?.meeting_id) {
+    try {
+      await query(`UPDATE tasks SET meeting_id = $1 WHERE id = $2`, [Number(req.body.meeting_id), task.id]);
+      task.meeting_id = Number(req.body.meeting_id);
+    } catch (err) {
+      if (err.code !== '42703') throw err;
+    }
+  }
   // AI odhad na pozadí (neblokuje response)
   kickoffAIEstimate(task);
 

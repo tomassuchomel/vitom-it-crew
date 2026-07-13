@@ -9,7 +9,10 @@ import PageHeader from '../components/PageHeader.jsx';
 import Modal from '../components/Modal.jsx';
 import Avatar from '../components/Avatar.jsx';
 import RichTextEditor from '../components/RichTextEditor.jsx';
-import { meetings as api, users as usersApi, teams as teamsApi } from '../api.js';
+import SuggestedTasksModal from '../components/SuggestedTasksModal.jsx';
+import TaskDetailModal from '../components/TaskDetailModal.jsx';
+import { StatusBadge } from '../components/TaskStatus.jsx';
+import { meetings as api, users as usersApi, teams as teamsApi, tasks as tasksApi } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import { useTeams } from '../teams.jsx';
 
@@ -184,15 +187,23 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [teamUsers, setTeamUsers] = useState([]);
-  const [summary, setSummary] = useState(null);   // { text, loading }
+  const [summary, setSummary] = useState(null);   // { text, loading } — sumář předchozích
+  const [notesSummary, setNotesSummary] = useState(null); // shrnutí AKTUÁLNÍHO zápisu
   const [aiBusy, setAiBusy] = useState(false);
+  const [suggestion, setSuggestion] = useState(null); // AI navržené úkoly → SuggestedTasksModal
+  const [meetingTasks, setMeetingTasks] = useState([]);
+  const [detailTask, setDetailTask] = useState(null);
   const { user } = useAuth();
 
   useEffect(() => {
     setMeeting(null);
     setDirty(false);
+    setNotesSummary(null);
     api.getMeeting(meetingId).then(d => setMeeting(d.meeting));
+    api.listTasks(meetingId).then(d => setMeetingTasks(d.tasks || [])).catch(() => setMeetingTasks([]));
   }, [meetingId]);
+
+  const reloadMeetingTasks = () => api.listTasks(meetingId).then(d => setMeetingTasks(d.tasks || [])).catch(() => {});
 
   // Načti členy týmu (pro checkboxy prezence)
   useEffect(() => {
@@ -311,6 +322,32 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
     } finally { setAiBusy(false); }
   };
 
+  // AI: shrne aktuální zápis (obsah content_json).
+  const genNotesSummary = async () => {
+    setAiBusy(true); setNotesSummary({ loading: true });
+    try {
+      const d = await api.summarizeNotes(meeting.id);
+      setNotesSummary({ text: d.text });
+    } catch (e) {
+      setNotesSummary({ text: `❌ ${e.response?.data?.message || e.message}` });
+    } finally { setAiBusy(false); }
+  };
+
+  // AI: vygeneruj úkoly ze zápisu (jako u Poznámek).
+  const genTasksFromNotes = async () => {
+    setAiBusy(true);
+    try {
+      const d = await api.suggestTasks(meeting.id);
+      if (!d.tasks || d.tasks.length === 0) {
+        alert('AI z tohoto zápisu nevytáhla žádné úkoly. Zkus napsat konkrétněji „kdo co má udělat".');
+        return;
+      }
+      setSuggestion(d);
+    } catch (e) {
+      alert(`Chyba: ${e.response?.data?.message || e.message}`);
+    } finally { setAiBusy(false); }
+  };
+
   // AI: navrhne body agendy — přidá je do agendy jako source='ai'.
   const genAgenda = async () => {
     setAiBusy(true);
@@ -388,7 +425,28 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
             className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50">
             📧 Poslat follow-up mail{meeting.followed_up_at ? ' znovu' : ''}
           </button>
+          <button onClick={genNotesSummary} disabled={aiBusy}
+            title="AI shrne obsah TOHOTO zápisu do 3-5 vět. Zobrazí se pod tlačítkem, nezmění zápis. Vhodné před uzavřením porady."
+            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50">
+            📝 Shrnout tento zápis
+          </button>
+          <button onClick={genTasksFromNotes} disabled={aiBusy}
+            title="AI vytáhne ze zápisu konkrétní úkoly (kdo co má udělat, termín, priorita). Otevře se dialog pro potvrzení — úkoly pak založíš do projektu a propojí se s tímto zápisem."
+            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50">
+            🎯 Vygenerovat úkoly ze zápisu
+          </button>
         </div>
+        {notesSummary && (
+          <div className="mt-3 bg-slate-50 border border-slate-200 rounded p-3">
+            {notesSummary.loading ? (
+              <div className="text-sm text-ink-500">Generuji shrnutí…</div>
+            ) : (
+              <div className="text-sm text-ink-800 whitespace-pre-wrap leading-relaxed">{notesSummary.text}</div>
+            )}
+            <button onClick={() => setNotesSummary(null)}
+              className="mt-2 text-xs text-ink-500 hover:underline">Skrýt</button>
+          </div>
+        )}
         {meeting.followed_up_at && (
           <div className="mt-2 text-[11px] text-emerald-700">
             ✅ Follow-up už byl odeslán: {new Date(meeting.followed_up_at).toLocaleString('cs-CZ')}
@@ -537,8 +595,57 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
         </div>
       </section>
 
+      {/* Úkoly z porady */}
+      <section className="bg-white border border-cream-200 rounded-lg p-4">
+        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
+          🎯 Úkoly z porady ({meetingTasks.length})
+        </div>
+        {meetingTasks.length === 0 ? (
+          <div className="text-sm text-ink-400 italic">
+            Zatím žádné úkoly. Použij tlačítko „🎯 Vygenerovat úkoly ze zápisu" nahoře.
+          </div>
+        ) : (
+          <ul className="divide-y divide-cream-100">
+            {meetingTasks.map(t => (
+              <li key={t.id}
+                onClick={async () => {
+                  try {
+                    const d = await tasksApi.get(t.id);
+                    setDetailTask(d.task);
+                  } catch { /* ignore */ }
+                }}
+                className="py-2 flex items-center gap-3 cursor-pointer hover:bg-cream-50 rounded px-1">
+                <StatusBadge status={t.status} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-ink-800 truncate">{t.title}</div>
+                  <div className="text-[11px] text-ink-500 truncate">
+                    {t.project_name}
+                    {t.assignee_name && ` · 👤 ${t.assignee_name}`}
+                    {t.due_date && ` · 📅 ${new Date(t.due_date).toLocaleDateString('cs-CZ')}`}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       {/* Audit log editací */}
       <EditsPanel meetingId={meeting.id} />
+
+      {/* Modal pro potvrzení AI navržených úkolů */}
+      {suggestion && (
+        <SuggestedTasksModal
+          suggestion={suggestion}
+          sourceNote={{ id: meeting.id, title: meeting.title, meeting_id: meeting.id }}
+          sourceScope="meeting"
+          onClose={() => setSuggestion(null)}
+          onCreated={() => { setSuggestion(null); reloadMeetingTasks(); }}
+        />
+      )}
+      {detailTask && (
+        <TaskDetailModal task={detailTask} onClose={() => { setDetailTask(null); reloadMeetingTasks(); }} onUpdate={() => {}} />
+      )}
 
       {dirty && (
         <div className="sticky bottom-4 flex justify-end">

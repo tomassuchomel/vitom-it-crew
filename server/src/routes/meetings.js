@@ -14,6 +14,7 @@ import { requireAuth } from '../auth.js';
 import { query } from '../db.js';
 import { callAI, stripHtml, collectPrevContext, generateAgendaSuggestion } from '../meetingsAi.js';
 import { sendMail } from '../mailer.js';
+import { processNote } from '../ai.js';
 
 const router = Router();
 
@@ -457,6 +458,86 @@ router.post('/meetings/:id/followup', requireAuth, async (req, res) => {
 function escapeMail(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+// AI: shrne aktuální zápis (obsah content_json). Vrátí prostý text 3-5 vět.
+router.post('/meetings/:id/summarize-notes', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`
+    SELECT m.*, t.name AS type_name, t.team_id, t.visibility, t.custom_users, t.organizer_id
+    FROM meetings m JOIN meeting_types t ON t.id = m.type_id WHERE m.id = $1
+  `, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
+
+  const notesText = stripHtml(typeof cur.content_json === 'string' ? cur.content_json : JSON.stringify(cur.content_json));
+  if (!notesText.trim()) return res.status(400).json({ error: 'empty_notes', message: 'Zápis je prázdný — nemám co shrnout.' });
+
+  const system = `Jsi asistent, který shrne zápis z porady. Odpověz česky, věcně,
+maximálně 5 odrážek nebo 4 věty. Vytáhni hlavní body, rozhodnutí a závěry.
+Nevymýšlej nic, co v zápise není.`;
+  const userMsg = `Shrň tento zápis z porady "${cur.title}" (${cur.type_name}, ${cur.meeting_date || '(bez data)'}):\n\n${notesText.slice(0, 5000)}`;
+
+  const out = await callAI(system, userMsg, 1200);
+  if (out.error) return res.status(500).json(out);
+  res.json({ text: out.text });
+});
+
+// AI: vygeneruj úkoly z aktuálního zápisu. Reuse processNote z ai.js.
+router.post('/meetings/:id/suggest-tasks', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`
+    SELECT m.*, t.name AS type_name, t.team_id, t.visibility, t.custom_users, t.organizer_id
+    FROM meetings m JOIN meeting_types t ON t.id = m.type_id WHERE m.id = $1
+  `, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
+
+  const html = typeof cur.content_json === 'string' ? cur.content_json : '';
+  if (!stripHtml(html).trim()) {
+    return res.status(400).json({ error: 'empty_notes', message: 'Zápis je prázdný — napiš do něj něco, ať mám z čeho úkoly extrahovat.' });
+  }
+
+  // processNote očekává noteTitle + noteContent (HTML). teamId + userId pro
+  // cross-team projekty/uživatele.
+  const result = await processNote({
+    noteTitle: cur.title,
+    noteContent: html,
+    action: 'suggest_tasks',
+    teamId: cur.team_id,
+    userId: req.user.id,
+  });
+  if (result.error) return res.status(500).json(result);
+  res.json(result);
+});
+
+// Seznam úkolů propojených s tímto zápisem (tasks.meeting_id).
+router.get('/meetings/:id/tasks', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`
+    SELECT m.type_id, t.team_id, t.visibility, t.custom_users, t.organizer_id
+    FROM meetings m JOIN meeting_types t ON t.id = m.type_id WHERE m.id = $1
+  `, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
+
+  try {
+    const r = await query(`
+      SELECT t.id, t.title, t.status, t.priority, t.due_date, t.completed_at,
+             u.name AS assignee_name, p.name AS project_name
+      FROM tasks t
+      LEFT JOIN users u ON u.id = t.assignee_id
+      LEFT JOIN projects p ON p.id = t.project_id
+      WHERE t.meeting_id = $1
+      ORDER BY
+        CASE t.status WHEN 'todo' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'review' THEN 2 WHEN 'done' THEN 3 ELSE 4 END,
+        t.due_date NULLS LAST, t.id
+    `, [id]);
+    res.json({ tasks: r.rows });
+  } catch (err) {
+    if (err.code === '42703') return res.json({ tasks: [] }); // meeting_id sloupec ještě neexistuje
+    throw err;
+  }
+});
 
 // Audit log editací — poslední 20 změn.
 router.get('/meetings/:id/edits', requireAuth, async (req, res) => {

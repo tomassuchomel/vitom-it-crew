@@ -107,6 +107,12 @@ export const meetings = {
   summary:        (id) => api.post(`/meetings/meetings/${id}/summary`).then(r => r.data),
   // AI: návrh dalších bodů agendy (mimo kostru)
   suggestAgenda:  (id) => api.post(`/meetings/meetings/${id}/agenda-suggest`).then(r => r.data),
+  // AI: shrne obsah aktuálního zápisu (3-5 vět)
+  summarizeNotes: (id) => api.post(`/meetings/meetings/${id}/summarize-notes`).then(r => r.data),
+  // AI: navrhne úkoly ze zápisu (reuse processNote — vrací suggestion strukturu jako Poznámky)
+  suggestTasks:   (id) => api.post(`/meetings/meetings/${id}/suggest-tasks`).then(r => r.data),
+  // List úkolů propojených se zápisem (tasks.meeting_id)
+  listTasks:      (id) => api.get(`/meetings/meetings/${id}/tasks`).then(r => r.data),
   // Přechod stavu draft/in_progress/completed. reason povinný pro reopen.
   transition:     (id, to, reason) => api.post(`/meetings/meetings/${id}/transition`, { to, reason }).then(r => r.data),
   // Follow-up mail účastníkům po zápisu (šéf/admin only)
