@@ -230,8 +230,12 @@ export default function Layout({ children }) {
           >Odhlásit</button>
         </div>
       </aside>
-      {/* Mobil: pt = výška topbaru (3rem) + iOS safe area. lg+ žádný topbar → pt-0. */}
-      <main className="flex-1 overflow-auto bg-cream-100 pt-[calc(3rem+env(safe-area-inset-top))] lg:pt-0">
+      {/* Mobil: pt = výška topbaru (3rem) + iOS safe area. lg+ žádný topbar → pt-0.
+          pb dole zajišťuje, že poslední obsah stránky není překryt FAB tlačítky
+          (AIAdvisor + QuickCapture jsou fixed bottom-4 right-4 s ~60 px výškou)
+          ani PWA update toastem. Bez tohohle na dlouhých seznamech (Scoreboard
+          tabulka) poslední řádek mizí za tlačítky. */}
+      <main className="flex-1 overflow-auto bg-cream-100 pt-[calc(3rem+env(safe-area-inset-top))] lg:pt-0 pb-24 lg:pb-8">
         {children}
       </main>
       {/* Vždy viditelný AI poradce – jen pro admin/manager */}
