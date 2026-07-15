@@ -1051,13 +1051,15 @@ function MeetingNewTaskModal({ meetingId, teamId, currentUser, onClose, onCreate
 
 function TypeModal({ type, onClose, onSaved, onDeleted }) {
   const isEdit = !!type;
-  const { teams } = useTeams();
+  const { teams, currentTeam } = useTeams();
   const { user } = useAuth();
 
   const [name, setName] = useState(type?.name || '');
   const [description, setDescription] = useState(type?.description || '');
   const [visibility, setVisibility] = useState(type?.visibility || 'team');
-  const [teamId, setTeamId] = useState(type?.team_id || teams?.[0]?.id || '');
+  // Default = current team switcher (ne teams[0], které je jen abecední první).
+  // Bez tohoto se nový typ vytvořil v "Design", i když user seděl v "Technologický".
+  const [teamId, setTeamId] = useState(type?.team_id || currentTeam?.id || teams?.[0]?.id || '');
   const [customUsers, setCustomUsers] = useState(Array.isArray(type?.custom_users) ? type.custom_users.map(Number) : []);
   const [allUsers, setAllUsers] = useState([]);
   const [organizerId, setOrganizerId] = useState(type?.organizer_id || '');

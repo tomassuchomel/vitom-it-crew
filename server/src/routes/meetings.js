@@ -44,6 +44,10 @@ async function canAccessType(userId, userRole, type) {
 router.get('/types', requireAuth, async (req, res) => {
   const uid = req.user.id;
   const isAdmin = req.user.role === 'admin';
+  // Team scope: typy s visibility='team' filtrujeme na CURRENT tým (X-Team-Id).
+  // Custom typy (bez týmu) jsou cross-team — vidí je vždy členové v custom_users.
+  // Organizer vidí své typy vždy (aby je našel po přepnutí týmu).
+  const teamId = req.team_id || null;
   const r = await query(`
     SELECT t.*, tm.name AS team_name,
       u.name AS organizer_name,
@@ -53,10 +57,10 @@ router.get('/types', requireAuth, async (req, res) => {
     LEFT JOIN users u ON u.id = t.organizer_id
     WHERE $2::boolean = TRUE
        OR t.organizer_id = $1
-       OR (t.visibility = 'team' AND t.team_id IN (SELECT team_id FROM team_members WHERE user_id = $1))
+       OR (t.visibility = 'team' AND t.team_id = $3::int)
        OR (t.visibility = 'custom' AND t.custom_users @> to_jsonb($1::int))
     ORDER BY t.name ASC
-  `, [uid, isAdmin]);
+  `, [uid, isAdmin, teamId]);
   res.json({ types: r.rows });
 });
 
