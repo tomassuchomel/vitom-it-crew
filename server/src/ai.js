@@ -576,7 +576,8 @@ POZN. K TÝMŮM: úkol můžeš zařadit do JAKÉHOKOLI projektu z nabídky, i z
       res = await fetch(API_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': keyCheck.key, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: MODEL, max_tokens: 1500, system, messages: [{ role: 'user', content: userMsg }] }),
+        // 4000 tokens — zápisy porad dělají 5-10 úkolů po ~100 tokens JSON, 1500 tichém useknutí.
+        body: JSON.stringify({ model: MODEL, max_tokens: 4000, system, messages: [{ role: 'user', content: userMsg }] }),
         signal: controller.signal,
       });
     } catch (err) {
@@ -598,6 +599,15 @@ POZN. K TÝMŮM: úkol můžeš zařadit do JAKÉHOKOLI projektu z nabídky, i z
     }
     const data = await res.json();
     const raw = data.content?.[0]?.text || '';
+    // Když Claude narazí na max_tokens uprostřed JSON, response je useknutá
+    // a parse by stejně selhal. Vrátíme srozumitelnou hlášku.
+    if (data.stop_reason === 'max_tokens') {
+      console.warn('[ai/suggest_tasks] response truncated (max_tokens)');
+      return {
+        error: 'response_truncated',
+        message: 'AI odpověď byla useknutá (přesáhla token limit). Zkus zápis rozdělit na kratší, nebo zvyš max_tokens.',
+      };
+    }
     // Robustní extrakce: nejdřív zkus sundat ```json ... ``` fence,
     // pak fallback na první { … poslední } (přežije jakýkoli text okolo).
     let parsed;
