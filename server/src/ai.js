@@ -622,8 +622,19 @@ POZN. K TÝMŮM: úkol můžeš zařadit do JAKÉHOKOLI projektu z nabídky, i z
       }
       parsed = JSON.parse(jsonStr);
     } catch (err) {
-      console.warn('[ai/suggest_tasks] parse_error:', err.message, 'raw:', raw.slice(0, 300));
-      return { error: 'parse_error', message: `AI vrátila neplatný JSON: ${err.message}`, raw: raw.slice(0, 500) };
+      // Vytáhni pozici chyby a ukaž 200 znaků okolo — sami pak vidíme,
+      // co konkrétně Claude poslal špatně.
+      const posMatch = err.message.match(/position (\d+)/);
+      const pos = posMatch ? Number(posMatch[1]) : -1;
+      const around = pos >= 0 ? raw.slice(Math.max(0, pos - 100), pos + 100) : raw.slice(0, 500);
+      console.warn('[ai/suggest_tasks] parse_error:', err.message, 'around:', around);
+      return {
+        error: 'parse_error',
+        message: `AI vrátila neplatný JSON: ${err.message}`,
+        around,
+        raw_len: raw.length,
+        stop_reason: data.stop_reason,
+      };
     }
     // Mapování jmen → ID (case-insensitive, trim)
     const findMember = (name) => {
