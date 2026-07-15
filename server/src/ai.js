@@ -598,12 +598,22 @@ POZN. K TÝMŮM: úkol můžeš zařadit do JAKÉHOKOLI projektu z nabídky, i z
     }
     const data = await res.json();
     const raw = data.content?.[0]?.text || '';
+    // Robustní extrakce: nejdřív zkus sundat ```json ... ``` fence,
+    // pak fallback na první { … poslední } (přežije jakýkoli text okolo).
     let parsed;
     try {
-      parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim());
-    } catch {
-      console.warn('[ai/suggest_tasks] parse_error, raw:', raw.slice(0, 300));
-      return { error: 'parse_error', message: 'AI vrátila neplatný JSON.', raw };
+      const trimmed = raw.trim();
+      const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```\s*$/i);
+      let jsonStr = fenceMatch ? fenceMatch[1] : trimmed;
+      if (!jsonStr.trim().startsWith('{')) {
+        const first = jsonStr.indexOf('{');
+        const last = jsonStr.lastIndexOf('}');
+        if (first >= 0 && last > first) jsonStr = jsonStr.slice(first, last + 1);
+      }
+      parsed = JSON.parse(jsonStr);
+    } catch (err) {
+      console.warn('[ai/suggest_tasks] parse_error:', err.message, 'raw:', raw.slice(0, 300));
+      return { error: 'parse_error', message: `AI vrátila neplatný JSON: ${err.message}`, raw: raw.slice(0, 500) };
     }
     // Mapování jmen → ID (case-insensitive, trim)
     const findMember = (name) => {
