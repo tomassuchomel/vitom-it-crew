@@ -568,19 +568,42 @@ DOSTUPNÉ PROJEKTY (s týmem): ${JSON.stringify(projects.map(p => ({ project: p.
 POZN. K TÝMŮM: úkol můžeš zařadit do JAKÉHOKOLI projektu z nabídky, i z jiného týmu, pokud z poznámky vyplývá, že tam logicky patří (např. „dáme to designerům" → projekt v týmu Design). project_name posuď podle obsahu úkolu, ne podle origin team poznámky.`;
     const userMsg = `Poznámka „${noteTitle || ''}":\n\n${text}`;
 
-    const res = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': keyCheck.key, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: MODEL, max_tokens: 1500, system, messages: [{ role: 'user', content: userMsg }] }),
-    });
-    if (!res.ok) return { error: 'api_error', status: res.status, message: (await res.text()).slice(0, 500) };
+    // Timeout: Anthropic může trvat 10-30 s, ale nechceme viset věčně.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60_000);
+    let res;
+    try {
+      res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': keyCheck.key, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: MODEL, max_tokens: 1500, system, messages: [{ role: 'user', content: userMsg }] }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      const timedOut = err.name === 'AbortError';
+      console.warn('[ai/suggest_tasks] fetch error', { name: err.name, message: err.message });
+      return {
+        error: timedOut ? 'ai_timeout' : 'ai_fetch_failed',
+        message: timedOut
+          ? 'AI neodpověděla do 60 sekund. Zkus to znovu za chvíli.'
+          : `Nepodařilo se zavolat AI: ${err.message}`,
+      };
+    }
+    clearTimeout(timer);
+    if (!res.ok) {
+      const body = await res.text();
+      console.warn('[ai/suggest_tasks] api_error', res.status, body.slice(0, 300));
+      return { error: 'api_error', status: res.status, message: `Anthropic API ${res.status}: ${body.slice(0, 300)}` };
+    }
     const data = await res.json();
     const raw = data.content?.[0]?.text || '';
     let parsed;
     try {
       parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim());
     } catch {
-      return { error: 'parse_error', raw };
+      console.warn('[ai/suggest_tasks] parse_error, raw:', raw.slice(0, 300));
+      return { error: 'parse_error', message: 'AI vrátila neplatný JSON.', raw };
     }
     // Mapování jmen → ID (case-insensitive, trim)
     const findMember = (name) => {
