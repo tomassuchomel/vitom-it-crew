@@ -368,7 +368,16 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
       }
       setSuggestion(d);
     } catch (e) {
-      alert(`Chyba: ${e.response?.data?.message || e.message}`);
+      // Do konzole plný response, do alertu message + error kód + status.
+      console.error('[suggest-tasks] failed', { status: e.response?.status, data: e.response?.data, message: e.message });
+      const d = e.response?.data;
+      const parts = [
+        d?.message,
+        d?.error && !d?.message ? `kód: ${d.error}` : null,
+        d?.raw ? `AI odpověď: ${String(d.raw).slice(0, 300)}` : null,
+      ].filter(Boolean);
+      const detail = parts.length > 0 ? parts.join(' · ') : e.message;
+      alert(`Chyba (${e.response?.status || '?'}): ${detail}\n\nVíc detailů v Developer Tools → Console.`);
     } finally { setAiBusy(false); }
   };
 
