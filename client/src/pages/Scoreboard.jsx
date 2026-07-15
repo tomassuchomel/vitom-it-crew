@@ -8,9 +8,6 @@
 //   4) Karty per user: mini bar (objem + úspěšnost) + sparkline za N měsíců.
 //   5) Detailní tabulka žebříčku (jako dřív, řazená dle success_rate).
 //   6) Admin only: přehled per tým (počty a úspěšnost).
-//
-// Feature flag success_metrics gate-uje stránku pro current team; admin cross-team
-// vidí bez ohledu na flag.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -19,7 +16,7 @@ import Modal from '../components/Modal.jsx';
 import Avatar from '../components/Avatar.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import { useAuth } from '../auth.jsx';
-import { useTeams, useFeature } from '../teams.jsx';
+import { useTeams } from '../teams.jsx';
 import { scoreboard as scoreboardApi, tasks as tasksApi } from '../api.js';
 
 const MEDAL = ['🥇', '🥈', '🥉'];
@@ -35,7 +32,6 @@ function rateClass(rate) {
 export default function Scoreboard() {
   const { user } = useAuth();
   const { currentTeam, teams } = useTeams();
-  const featureOn = useFeature('success_metrics');
   const isAdmin = user?.role === 'admin';
 
   // Filter: default = current team; admin může přepnout na jiný tým nebo 0 (celkem).
@@ -66,8 +62,6 @@ export default function Scoreboard() {
   const isAllTeams = teamId === 0;
 
   useEffect(() => {
-    // Non-admin bez success_metrics stránku ani neskládá.
-    if (!isAdmin && !featureOn) { setLoading(false); return; }
     setLoading(true);
     const load = async () => {
       const [snap, hist] = await Promise.all([
@@ -79,32 +73,13 @@ export default function Scoreboard() {
       setHistory(hist);
     };
     load().finally(() => setLoading(false));
-  }, [effectiveTeamId, months, featureOn, isAdmin, currentTeam?.id]);
+  }, [effectiveTeamId, months, isAdmin, currentTeam?.id]);
 
   // Admin: přehled per tým — jen když je zvolen "Všechny týmy".
   useEffect(() => {
     if (!isAdmin || !isAllTeams) { setTeamsOverview(null); return; }
     scoreboardApi.teamsOverview().then(setTeamsOverview).catch(() => setTeamsOverview(null));
   }, [isAdmin, isAllTeams]);
-
-  // Feature gate zprávy pro ne-admin bez flagu na current teamu.
-  if (!isAdmin && !featureOn) {
-    return (
-      <div>
-        <PageHeader title="Skóre" subtitle="Úspěšnost dokončování úkolů v termínu" />
-        <div className="p-6">
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 text-center">
-            <div className="text-2xl mb-2">🔒</div>
-            <div className="text-amber-800 font-medium">Skóre není pro tento tým zapnuté.</div>
-            <div className="text-sm text-amber-700 mt-1">
-              Admin může v <a href="/admin" className="underline">Admin → Týmy</a> zaškrtnout feature
-              flag <code>success_metrics</code>.
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   // Souhrn (KPI) přes všechny users v snapshot
   const totals = useMemo(() => {

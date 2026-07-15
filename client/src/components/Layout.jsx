@@ -31,7 +31,7 @@ const NAV = [
   { to: '/reports',   label: 'Reporty',            icon: '📊', requireSeeAll: true },
   { to: '/ai',        label: 'AI Coach',           icon: '🤖', requireSeeAll: true },
   { to: '/team',      label: 'Tým',                icon: '👥' },
-  { to: '/scoreboard',label: 'Skóre',              icon: '🏆', requireFeature: 'success_metrics' },
+  { to: '/scoreboard',label: 'Skóre',              icon: '🏆' },
   { to: '/admin',     label: 'Admin',              icon: '⚙️', requireAdmin: true },
 ];
 
