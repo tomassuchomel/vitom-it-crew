@@ -175,7 +175,12 @@ export default function Meetings() {
             meetingId={selectedMeetingId}
             type={selectedType}
             onChanged={() => api.listMeetings(selectedTypeId).then(d => setMeetingsList(d.meetings || []))}
-            onDeleted={() => { setSelectedMeetingId(null); load(); }}
+            onDeleted={(deletedId) => {
+              // Optimistic remove — bez čekání na network, ať zápis z listu zmizí hned.
+              setMeetingsList(prev => prev.filter(m => m.id !== deletedId));
+              setSelectedMeetingId(null);
+              load();
+            }}
           />
         ) : (
           <div className="p-8 text-center text-ink-400">
@@ -261,8 +266,9 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
 
   const remove = async () => {
     if (!confirm('Opravdu smazat tento zápis?')) return;
-    await api.removeMeeting(meeting.id);
-    onDeleted?.();
+    const id = meeting.id;
+    await api.removeMeeting(id);
+    onDeleted?.(id);
   };
 
   if (!meeting) return <div className="p-8 text-ink-400">Načítám…</div>;
