@@ -17,8 +17,83 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { query } from '../db.js';
+import { sendMail } from '../mailer.js';
+import { sendToUser } from '../push.js';
 
 const router = Router();
+
+const APP_BASE = () => (process.env.APP_BASE_URL?.trim() || 'https://it.realitniekosystem.cz').replace(/\/$/, '');
+const escHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+const fmtDateCs = (iso) => iso ? new Date(iso).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric' }) : '—';
+
+// Notifikace jsou fire-and-forget — chyby jen logujeme, nikdy neblokujeme request.
+async function notifyReviewerOfNewRequest({ reviewerId, requesterName, taskTitle, originalDue, requestedDue, note, requestId }) {
+  try {
+    const uR = await query(`SELECT email, name FROM users WHERE id = $1 AND active = TRUE`, [reviewerId]);
+    const email = uR.rows[0]?.email;
+    if (!email) return;
+    const base = APP_BASE();
+    const url = `${base}/due-requests`;
+    const html = `<!DOCTYPE html>
+<html><body style="font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; background: #eee9e4; padding: 24px; color: #1f3a40;">
+  <div style="max-width: 560px; margin: 0 auto; background: white; border-radius: 12px; padding: 24px;">
+    <div style="font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #e72b78; font-weight: bold;">VITOM IT Crew</div>
+    <h2 style="margin: 12px 0 8px; color: #0c363e; font-size: 20px;">📅 Žádost o změnu termínu</h2>
+    <p style="font-size: 14px;"><strong>${escHtml(requesterName || 'Kolega')}</strong> tě žádá o posun termínu:</p>
+    <p style="background:#f9f6f1;padding:12px;border-radius:6px;font-size:14px;color:#365156;border-left:3px solid #e72b78;">
+      <strong>${escHtml(taskTitle)}</strong><br>
+      Původní termín: <strong>${escHtml(fmtDateCs(originalDue))}</strong> → Navržený: <strong>${escHtml(fmtDateCs(requestedDue))}</strong>
+    </p>
+    ${note ? `<p style="font-size:13px;color:#5b7177;"><em>„${escHtml(note)}"</em></p>` : ''}
+    <a href="${url}" style="display: inline-block; background: #0c363e; color: white; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px;">Rozhodnout →</a>
+    <div style="margin-top: 24px; padding-top: 12px; border-top: 1px solid #e2dcd3; font-size: 11px; color: #8a9b9f;">
+      V aplikaci to najdeš v menu <strong>📅 Žádosti o zm. termínu</strong>.
+    </div>
+  </div>
+</body></html>`;
+    await sendMail({ to: email, subject: `VITOM: ${requesterName || 'Kolega'} žádá o změnu termínu`, html });
+  } catch (err) { console.warn('[mail/due-request]', err.message); }
+
+  sendToUser(reviewerId, {
+    title: '📅 Žádost o změnu termínu',
+    body: `${requesterName || 'Kolega'}: ${taskTitle} → ${fmtDateCs(requestedDue)}`,
+    url: `/due-requests`,
+    tag: `due-request-${requestId}`,
+  }).catch(err => console.warn('[push/due-request]', err.message));
+}
+
+async function notifyRequesterOfDecision({ requesterId, reviewerName, taskTitle, decision, finalDue, note, requestId }) {
+  try {
+    const uR = await query(`SELECT email, name FROM users WHERE id = $1 AND active = TRUE`, [requesterId]);
+    const email = uR.rows[0]?.email;
+    if (!email) return;
+    const base = APP_BASE();
+    const url = `${base}/due-requests`;
+    const approved = decision === 'approved';
+    const html = `<!DOCTYPE html>
+<html><body style="font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; background: #eee9e4; padding: 24px; color: #1f3a40;">
+  <div style="max-width: 560px; margin: 0 auto; background: white; border-radius: 12px; padding: 24px;">
+    <div style="font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #e72b78; font-weight: bold;">VITOM IT Crew</div>
+    <h2 style="margin: 12px 0 8px; color: #0c363e; font-size: 20px;">${approved ? '✅ Termín schválen' : '❌ Termín zamítnut'}</h2>
+    <p style="font-size: 14px;"><strong>${escHtml(reviewerName || 'Zadavatel')}</strong> ${approved ? 'schválil' : 'zamítl'} tvou žádost o změnu termínu úkolu:</p>
+    <p style="background:#f9f6f1;padding:12px;border-radius:6px;font-size:14px;color:#365156;border-left:3px solid ${approved ? '#10b981' : '#dc2626'};">
+      <strong>${escHtml(taskTitle)}</strong>
+      ${approved ? `<br>Nový termín: <strong>${escHtml(fmtDateCs(finalDue))}</strong>` : ''}
+    </p>
+    ${note ? `<p style="font-size:13px;color:#5b7177;"><em>„${escHtml(note)}"</em></p>` : ''}
+    <a href="${url}" style="display: inline-block; background: #0c363e; color: white; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px;">Detail →</a>
+  </div>
+</body></html>`;
+    await sendMail({ to: email, subject: `VITOM: Žádost o termín — ${approved ? 'schválena' : 'zamítnuta'}`, html });
+  } catch (err) { console.warn('[mail/due-decision]', err.message); }
+
+  sendToUser(requesterId, {
+    title: decision === 'approved' ? '✅ Termín schválen' : '❌ Termín zamítnut',
+    body: `${taskTitle}${decision === 'approved' && finalDue ? ` → ${fmtDateCs(finalDue)}` : ''}`,
+    url: `/due-requests?box=sent`,
+    tag: `due-decision-${requestId}`,
+  }).catch(err => console.warn('[push/due-decision]', err.message));
+}
 
 const SELECT_FULL = `
   SELECT r.*,
@@ -106,7 +181,23 @@ router.post('/', requireAuth, async (req, res) => {
     VALUES ($1, $2, $3, $4, $5::date, $6)
     RETURNING id
   `, [taskId, req.user.id, reviewerId, task.due_date, requestedDue, note]);
-  res.status(201).json({ ok: true, id: ins.rows[0].id });
+  const requestId = ins.rows[0].id;
+
+  // Fire-and-forget: pošli response klientovi, pak spusť notifikace na pozadí.
+  res.status(201).json({ ok: true, id: requestId });
+
+  // Načteme title úkolu jednou — reviewer potřebuje kontext v mailu/pushi.
+  query(`SELECT title FROM tasks WHERE id = $1`, [taskId])
+    .then(r => notifyReviewerOfNewRequest({
+      reviewerId,
+      requesterName: req.user.name,
+      taskTitle: r.rows[0]?.title || `#${taskId}`,
+      originalDue: task.due_date,
+      requestedDue,
+      note,
+      requestId,
+    }))
+    .catch(err => console.warn('[notify/due-request/create]', err.message));
 });
 
 // Approve — case: user's termín NEBO counter_due (reviewer navrhne vlastní).
@@ -134,6 +225,19 @@ router.post('/:id/approve', requireAuth, async (req, res) => {
   await query(`UPDATE tasks SET due_date = $1::date WHERE id = $2`, [finalDue, req_.task_id]);
 
   res.json({ ok: true, final_due: finalDue });
+
+  // Notifikuj žadatele — fire-and-forget.
+  query(`SELECT title FROM tasks WHERE id = $1`, [req_.task_id])
+    .then(r => notifyRequesterOfDecision({
+      requesterId: req_.requester_id,
+      reviewerName: req.user.name,
+      taskTitle: r.rows[0]?.title || `#${req_.task_id}`,
+      decision: 'approved',
+      finalDue,
+      note,
+      requestId: req_.id,
+    }))
+    .catch(err => console.warn('[notify/due-request/approve]', err.message));
 });
 
 router.post('/:id/reject', requireAuth, async (req, res) => {
@@ -153,6 +257,19 @@ router.post('/:id/reject', requireAuth, async (req, res) => {
     WHERE id = $2
   `, [note, id]);
   res.json({ ok: true });
+
+  // Notifikuj žadatele — fire-and-forget.
+  query(`SELECT title FROM tasks WHERE id = $1`, [req_.task_id])
+    .then(r => notifyRequesterOfDecision({
+      requesterId: req_.requester_id,
+      reviewerName: req.user.name,
+      taskTitle: r.rows[0]?.title || `#${req_.task_id}`,
+      decision: 'rejected',
+      finalDue: null,
+      note,
+      requestId: req_.id,
+    }))
+    .catch(err => console.warn('[notify/due-request/reject]', err.message));
 });
 
 // Označí všechny mé vyřešené (schválené/zamítnuté) žádosti jako přečtené.
