@@ -76,12 +76,18 @@ router.post('/types', requireAuth, async (req, res) => {
   const agendaTemplate = Array.isArray(b.agenda_template)
     ? b.agenda_template.filter(x => x && typeof x.text === 'string').map(x => ({ text: String(x.text).slice(0, 500) }))
     : [];
+  const isRecurring = !!b.is_recurring;
+  const recurrenceWeekday = Number.isInteger(b.recurrence_weekday) && b.recurrence_weekday >= 0 && b.recurrence_weekday <= 6
+    ? b.recurrence_weekday : null;
+  const recurrenceTime = /^\d{2}:\d{2}(:\d{2})?$/.test(b.recurrence_time || '') ? b.recurrence_time.slice(0, 5) : null;
 
   const r = await query(`
-    INSERT INTO meeting_types (team_id, name, description, agenda_template, visibility, custom_users, organizer_id, created_by)
-    VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8)
+    INSERT INTO meeting_types (team_id, name, description, agenda_template, visibility, custom_users, organizer_id, created_by,
+                               is_recurring, recurrence_weekday, recurrence_time)
+    VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10, $11)
     RETURNING *
-  `, [teamId, name, b.description || null, JSON.stringify(agendaTemplate), visibility, JSON.stringify(customUsers), organizerId, req.user.id]);
+  `, [teamId, name, b.description || null, JSON.stringify(agendaTemplate), visibility, JSON.stringify(customUsers), organizerId, req.user.id,
+      isRecurring, recurrenceWeekday, recurrenceTime]);
   res.status(201).json({ type: r.rows[0] });
 });
 
@@ -120,6 +126,15 @@ router.patch('/types/:id', requireAuth, async (req, res) => {
   if ('team_id' in b)          push('team_id', b.team_id ? Number(b.team_id) : null);
   if ('custom_users' in b)     push('custom_users', JSON.stringify(Array.isArray(b.custom_users) ? b.custom_users.map(Number) : []), '::jsonb');
   if ('organizer_id' in b)     push('organizer_id', b.organizer_id ? Number(b.organizer_id) : null);
+  if ('is_recurring' in b)     push('is_recurring', !!b.is_recurring);
+  if ('recurrence_weekday' in b) {
+    const w = Number.isInteger(b.recurrence_weekday) && b.recurrence_weekday >= 0 && b.recurrence_weekday <= 6 ? b.recurrence_weekday : null;
+    push('recurrence_weekday', w);
+  }
+  if ('recurrence_time' in b) {
+    const t = /^\d{2}:\d{2}(:\d{2})?$/.test(b.recurrence_time || '') ? b.recurrence_time.slice(0, 5) : null;
+    push('recurrence_time', t);
+  }
   if (sets.length === 0) return res.status(400).json({ error: 'no_fields' });
   sets.push('updated_at = NOW()');
   params.push(id);
@@ -671,8 +686,52 @@ router.post('/meetings/:id/transition', requireAuth, async (req, res) => {
     VALUES ($1, $2, 'status', $3::jsonb, $4::jsonb)
   `, [id, req.user.id, JSON.stringify(from), JSON.stringify({ status: to, reason })]).catch(err => console.warn('[transition/audit]', err.message));
 
+  // Recurrence: po completed vytvoř další draft na příští weekday, pokud typ
+  // je opakovaný a ještě neexistuje draft/in_progress pro tento typ v budoucnu.
+  let nextMeetingId = null;
+  if (to === 'completed') {
+    try {
+      const typeR = await query(
+        `SELECT id, name, is_recurring, recurrence_weekday, recurrence_time, agenda_template
+         FROM meeting_types WHERE id = $1`,
+        [cur.type_id]
+      );
+      const type = typeR.rows[0];
+      if (type?.is_recurring && Number.isInteger(type.recurrence_weekday)) {
+        // Není už další draft/in_progress pro tento typ v budoucnu? Nevytvářej duplikát.
+        const dup = await query(
+          `SELECT id FROM meetings
+           WHERE type_id = $1 AND status IN ('draft', 'in_progress')
+             AND meeting_date > CURRENT_DATE
+           LIMIT 1`,
+          [type.id]
+        );
+        if (dup.rows.length === 0) {
+          const now = new Date();
+          const targetDow = type.recurrence_weekday; // 0=neděle .. 6=sobota (JS Date.getDay)
+          const daysAhead = ((targetDow - now.getDay() + 7) % 7) || 7; // vždy alespoň další týden
+          const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + daysAhead);
+          const y = next.getFullYear(), m = String(next.getMonth() + 1).padStart(2, '0'), d = String(next.getDate()).padStart(2, '0');
+          const nextDate = `${y}-${m}-${d}`;
+          const template = Array.isArray(type.agenda_template) ? type.agenda_template : [];
+          const agenda = template.map(t => ({ text: t.text || '', checked: false, source: 'template' }));
+          const title = `${type.name} — ${nextDate}`;
+          const insR = await query(
+            `INSERT INTO meetings (type_id, title, meeting_date, meeting_time, agenda, created_by)
+             VALUES ($1, $2, $3::date, $4::time, $5::jsonb, $6)
+             RETURNING id`,
+            [type.id, title, nextDate, type.recurrence_time, JSON.stringify(agenda), req.user.id]
+          );
+          nextMeetingId = insR.rows[0].id;
+        }
+      }
+    } catch (err) {
+      console.warn('[transition/recurrence]', err.code, err.message);
+    }
+  }
+
   const r = await query(`SELECT * FROM meetings WHERE id = $1`, [id]);
-  res.json({ meeting: r.rows[0] });
+  res.json({ meeting: r.rows[0], next_meeting_id: nextMeetingId });
 });
 
 // Smazat zápis.

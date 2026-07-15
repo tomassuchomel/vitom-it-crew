@@ -117,12 +117,19 @@ export default function Meetings() {
               title="Upravit typ porady (název, kostru agendy, organizátora, viditelnost)"
               className="text-xs px-2 py-0.5 border border-ink-300 rounded hover:bg-cream-50 shrink-0">⚙</button>
             <button onClick={async () => {
+                // Datum konání porady (ne dnešek automaticky — user má vědomě zadat).
                 const today = new Date().toISOString().slice(0, 10);
-                const d = await api.createMeeting(selectedType.id, { meeting_date: today });
+                const dateStr = prompt('Datum konání porady (YYYY-MM-DD):', today);
+                if (!dateStr) return;
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr.trim())) {
+                  alert('Neplatný formát datumu. Použij YYYY-MM-DD (např. 2026-07-22).');
+                  return;
+                }
+                const d = await api.createMeeting(selectedType.id, { meeting_date: dateStr.trim() });
                 setSelectedMeetingId(d.meeting.id);
                 setMeetingsList(prev => [d.meeting, ...prev]);
               }}
-              title="Vytvořit nový zápis (agenda se předvyplní z kostry typu)"
+              title="Vytvořit nový zápis. Zeptá se na datum, kdy se porada koná."
               className="text-xs px-2 py-0.5 bg-brand-500 text-white rounded hover:bg-brand-600 shrink-0">+ Zápis</button>
           </div>
           <div className="flex-1 overflow-y-auto py-2">
@@ -333,9 +340,10 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
     } finally { setAiBusy(false); }
   };
 
-  // Follow-up mail účastníkům
-  const sendFollowUp = async () => {
-    if (!confirm('Poslat follow-up mail všem přítomným účastníkům? Každý dostane své úkoly (organizátor dostane přehled všech).')) return;
+  // Follow-up mail účastníkům. Volá se: (a) automaticky po Uzavřít z StatusBaru,
+  // (b) manuálně z tlačítka „Poslat follow-up" v AI panelu (pro opakované poslání).
+  const sendFollowUp = async ({ skipConfirm = false } = {}) => {
+    if (!skipConfirm && !confirm('Poslat follow-up mail všem přítomným účastníkům? Každý dostane své úkoly (organizátor dostane přehled všech).')) return;
     setAiBusy(true);
     try {
       const d = await api.followUp(meeting.id);
@@ -344,6 +352,15 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
     } catch (e) {
       alert(`Chyba: ${e.response?.data?.message || e.message}`);
     } finally { setAiBusy(false); }
+  };
+
+  // Handler po Uzavřít poradu: rovnou se zeptáme na follow-up (žádný zbytečný
+  // krok „najdi tlačítko"). Pokud recurrence vygenerovala další zápis, zmíníme.
+  const onMeetingCompleted = async ({ nextMeetingId }) => {
+    const nextMsg = nextMeetingId ? '\n\n🔁 Další porada byla naplánována podle nastavení opakování.' : '';
+    if (confirm(`Porada uzavřena. Poslat follow-up mail všem přítomným?${nextMsg}`)) {
+      await sendFollowUp({ skipConfirm: true });
+    }
   };
 
   // AI: shrne aktuální zápis (obsah content_json).
@@ -401,7 +418,7 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
     <div className="max-w-4xl mx-auto p-6 space-y-4">
       {/* Header */}
       <div className="bg-white border border-cream-200 rounded-lg p-4">
-        <StatusBar meeting={meeting} type={type} user={user} onChanged={async () => {
+        <StatusBar meeting={meeting} type={type} user={user} onCompleted={onMeetingCompleted} onChanged={async () => {
           const d = await api.getMeeting(meeting.id);
           setMeeting(d.meeting);
           onChanged?.();
@@ -605,10 +622,23 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
         </button>
       </section>
 
-      {/* Zápis (rich text). content_json je JSONB, ale ukládáme HTML string. */}
+      {/* Zápis (rich text). Zamčený dokud porada není zahájena — příprava vs. zápis
+          se nemíchá. Uzavřená porada je taky zamčená (musí se otevřít reopenem). */}
       <section className="bg-white border border-cream-200 rounded-lg p-4">
-        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">✍ Zápis</div>
-        <div className="min-h-[300px]">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide">✍ Zápis</div>
+          {meeting.status === 'draft' && (
+            <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">
+              🔒 Zápis se odemkne po „Zahájit poradu"
+            </span>
+          )}
+          {meeting.status === 'completed' && (
+            <span className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5">
+              🔒 Uzavřeno — otevři přes „Otevřít k opravě"
+            </span>
+          )}
+        </div>
+        <div className={`min-h-[300px] ${meeting.status !== 'in_progress' ? 'opacity-60 pointer-events-none' : ''}`}>
           <RichTextEditor
             value={typeof meeting.content_json === 'string' ? meeting.content_json : ''}
             onChange={(html) => patch({ content_json: html })}
@@ -787,7 +817,7 @@ const STATUS_META = {
   completed:   { label: '✅ Uzavřeno',  cls: 'bg-brand-50 text-brand-700 border-brand-300' },
 };
 
-function StatusBar({ meeting, type, user, onChanged }) {
+function StatusBar({ meeting, type, user, onChanged, onCompleted }) {
   const [busy, setBusy] = useState(false);
   const status = meeting.status || 'draft';
   const isOrgOrAdmin = meeting.organizer_id === user?.id || user?.role === 'admin';
@@ -812,8 +842,13 @@ function StatusBar({ meeting, type, user, onChanged }) {
     }
     setBusy(true);
     try {
-      await api.transition(meeting.id, to, reason, start);
+      const d = await api.transition(meeting.id, to, reason, start);
       await onChanged();
+      // Po uzavření porady se rovnou zeptáme na follow-up mail (žádné hledání
+      // tlačítka). Také zmíníme, pokud recurrence vygenerovala další zápis.
+      if (to === 'completed') {
+        onCompleted?.({ nextMeetingId: d?.next_meeting_id || null });
+      }
     } catch (e) {
       alert(e.response?.data?.message || 'Přechod selhal');
     } finally { setBusy(false); }
@@ -1068,6 +1103,13 @@ function TypeModal({ type, onClose, onSaved, onDeleted }) {
       ? type.agenda_template.map(t => t.text || '')
       : ['', '', '']
   );
+  const [isRecurring, setIsRecurring] = useState(!!type?.is_recurring);
+  const [recurrenceWeekday, setRecurrenceWeekday] = useState(
+    Number.isInteger(type?.recurrence_weekday) ? String(type.recurrence_weekday) : '3' // středa default
+  );
+  const [recurrenceTime, setRecurrenceTime] = useState(
+    type?.recurrence_time ? String(type.recurrence_time).slice(0, 5) : '10:00'
+  );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -1086,6 +1128,9 @@ function TypeModal({ type, onClose, onSaved, onDeleted }) {
         custom_users: visibility === 'custom' ? customUsers : [],
         organizer_id: Number(organizerId) || null,
         agenda_template: agendaTemplate.filter(t => t.trim()).map(t => ({ text: t.trim() })),
+        is_recurring: isRecurring,
+        recurrence_weekday: isRecurring ? Number(recurrenceWeekday) : null,
+        recurrence_time: isRecurring ? recurrenceTime : null,
       };
       if (isEdit) await api.updateType(type.id, payload);
       else       await api.createType(payload);
@@ -1205,6 +1250,38 @@ function TypeModal({ type, onClose, onSaved, onDeleted }) {
             <button onClick={() => setAgendaTemplate(prev => [...prev, ''])}
               className="text-xs text-brand-500 hover:underline">+ Přidat bod</button>
           </div>
+        </div>
+
+        {/* Pravidelná porada */}
+        <div className="border-t border-cream-200 pt-3">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={isRecurring} onChange={e => setIsRecurring(e.target.checked)} />
+            <span className="text-xs font-medium text-ink-600">
+              🔁 Pravidelná porada — po každém uzavření se automaticky vytvoří další zápis
+            </span>
+          </label>
+          {isRecurring && (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="text-[11px] text-ink-500">Den v týdnu</span>
+                <select value={recurrenceWeekday} onChange={e => setRecurrenceWeekday(e.target.value)}
+                  className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-sm">
+                  <option value="1">pondělí</option>
+                  <option value="2">úterý</option>
+                  <option value="3">středa</option>
+                  <option value="4">čtvrtek</option>
+                  <option value="5">pátek</option>
+                  <option value="6">sobota</option>
+                  <option value="0">neděle</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-[11px] text-ink-500">Čas</span>
+                <input type="time" value={recurrenceTime} onChange={e => setRecurrenceTime(e.target.value)}
+                  className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-sm" />
+              </label>
+            </div>
+          )}
         </div>
 
         {err && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{err}</div>}
