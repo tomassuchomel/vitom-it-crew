@@ -336,33 +336,44 @@ priority a rozhodnutí. Nevymýšlej nic, co v zápise není.`;
 
 // AI: navrhne úkoly ze zápisu — hlavně z Priorit a „co zlepšit". Reuse processNote.
 router.post('/meetings/:id/suggest-tasks', requireAuth, async (req, res) => {
-  const id = Number(req.params.id);
-  const cur = (await query(`SELECT * FROM mzv_meetings WHERE id = $1`, [id])).rows[0];
-  if (!cur) return res.status(404).json({ error: 'not_found' });
-  if (!await canManage(req.user.id, req.user.role, cur.subordinate_id)) {
-    return res.status(403).json({ error: 'forbidden' });
-  }
+  try {
+    const id = Number(req.params.id);
+    const cur = (await query(`SELECT * FROM mzv_meetings WHERE id = $1`, [id])).rows[0];
+    if (!cur) return res.status(404).json({ error: 'not_found' });
+    if (!await canManage(req.user.id, req.user.role, cur.subordinate_id)) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
 
-  // Zdroj pro AI: hlavně Priority + Co zlepšit (akční části). Rozhovor je diskuse,
-  // to_continue je pochvala — z těch úkoly nedělat.
-  const html = [
-    cur.priorities ? `<h3>Priority</h3>${cur.priorities}` : '',
-    cur.to_improve ? `<h3>Co zlepšit</h3>${cur.to_improve}` : '',
-  ].join('');
-  if (!stripHtml(html).trim()) {
-    return res.status(400).json({ error: 'empty_notes', message: 'V zápise není nic akčního (Priority ani „Co zlepšit" nejsou vyplněné).' });
-  }
+    // Zdroj pro AI: hlavně Priority + Co zlepšit (akční části). Rozhovor je diskuse,
+    // to_continue je pochvala — z těch úkoly nedělat.
+    const html = [
+      cur.priorities ? `<h3>Priority</h3>${cur.priorities}` : '',
+      cur.to_improve ? `<h3>Co zlepšit</h3>${cur.to_improve}` : '',
+    ].join('');
+    if (!stripHtml(html).trim()) {
+      return res.status(400).json({ error: 'empty_notes', message: 'V zápise není nic akčního (Priority ani „Co zlepšit" nejsou vyplněné).' });
+    }
 
-  const subordinate = (await query(`SELECT name FROM users WHERE id = $1`, [cur.subordinate_id])).rows[0];
-  const result = await processNote({
-    noteTitle: `MZV s ${subordinate?.name || 'pracovníkem'} — ${cur.meeting_date}`,
-    noteContent: html,
-    action: 'suggest_tasks',
-    teamId: null,       // cross-team fallback (admin/manager může vidět všechny týmy)
-    userId: req.user.id,
-  });
-  if (result.error) return res.status(500).json(result);
-  res.json(result);
+    const subordinate = (await query(`SELECT name FROM users WHERE id = $1`, [cur.subordinate_id])).rows[0];
+    const result = await processNote({
+      noteTitle: `MZV s ${subordinate?.name || 'pracovníkem'} — ${cur.meeting_date}`,
+      noteContent: html,
+      action: 'suggest_tasks',
+      teamId: null,       // cross-team fallback (admin/manager může vidět všechny týmy)
+      userId: req.user.id,
+    });
+    if (result.error) {
+      console.warn('[mzv/suggest-tasks] processNote error:', result);
+      return res.status(500).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    console.error('[mzv/suggest-tasks] unexpected error:', err.code, err.message, err.stack);
+    res.status(500).json({
+      error: 'internal_error',
+      message: `Vygenerování úkolů selhalo: ${err.code ? `[${err.code}] ` : ''}${err.message}`,
+    });
+  }
 });
 
 // AI shrnutí historie MZV se subordinate + doporučení co dnes řešit.

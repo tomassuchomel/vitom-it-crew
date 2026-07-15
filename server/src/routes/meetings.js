@@ -516,30 +516,45 @@ Nevymýšlej nic, co v zápise není.`;
 
 // AI: vygeneruj úkoly z aktuálního zápisu. Reuse processNote z ai.js.
 router.post('/meetings/:id/suggest-tasks', requireAuth, async (req, res) => {
-  const id = Number(req.params.id);
-  const cur = (await query(`
-    SELECT m.*, t.name AS type_name, t.team_id, t.visibility, t.custom_users, t.organizer_id
-    FROM meetings m JOIN meeting_types t ON t.id = m.type_id WHERE m.id = $1
-  `, [id])).rows[0];
-  if (!cur) return res.status(404).json({ error: 'not_found' });
-  if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    const id = Number(req.params.id);
+    const cur = (await query(`
+      SELECT m.*, t.name AS type_name, t.team_id, t.visibility, t.custom_users, t.organizer_id
+      FROM meetings m JOIN meeting_types t ON t.id = m.type_id WHERE m.id = $1
+    `, [id])).rows[0];
+    if (!cur) return res.status(404).json({ error: 'not_found' });
+    if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
 
-  const html = typeof cur.content_json === 'string' ? cur.content_json : '';
-  if (!stripHtml(html).trim()) {
-    return res.status(400).json({ error: 'empty_notes', message: 'Zápis je prázdný — napiš do něj něco, ať mám z čeho úkoly extrahovat.' });
+    // content_json je JSONB — pg driver deserializuje. Zápis se ukládá jako JSON string,
+    // takže typicky vyjde string. Pokud vyjde object (staré řádky), převedeme na text.
+    const html = typeof cur.content_json === 'string'
+      ? cur.content_json
+      : (cur.content_json ? JSON.stringify(cur.content_json) : '');
+    if (!stripHtml(html).trim()) {
+      return res.status(400).json({ error: 'empty_notes', message: 'Zápis je prázdný — napiš do něj něco, ať mám z čeho úkoly extrahovat.' });
+    }
+
+    // processNote očekává noteTitle + noteContent (HTML). teamId + userId pro
+    // cross-team projekty/uživatele.
+    const result = await processNote({
+      noteTitle: cur.title,
+      noteContent: html,
+      action: 'suggest_tasks',
+      teamId: cur.team_id,
+      userId: req.user.id,
+    });
+    if (result.error) {
+      console.warn('[meetings/suggest-tasks] processNote error:', result);
+      return res.status(500).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    console.error('[meetings/suggest-tasks] unexpected error:', err.code, err.message, err.stack);
+    res.status(500).json({
+      error: 'internal_error',
+      message: `Vygenerování úkolů selhalo: ${err.code ? `[${err.code}] ` : ''}${err.message}`,
+    });
   }
-
-  // processNote očekává noteTitle + noteContent (HTML). teamId + userId pro
-  // cross-team projekty/uživatele.
-  const result = await processNote({
-    noteTitle: cur.title,
-    noteContent: html,
-    action: 'suggest_tasks',
-    teamId: cur.team_id,
-    userId: req.user.id,
-  });
-  if (result.error) return res.status(500).json(result);
-  res.json(result);
 });
 
 // Seznam úkolů propojených s tímto zápisem (tasks.meeting_id).
