@@ -45,9 +45,8 @@ router.get('/types', requireAuth, async (req, res) => {
   const uid = req.user.id;
   const isAdmin = req.user.role === 'admin';
   // Striktně team-scoped: v každém týmu vidím JEN porady toho týmu.
-  // Custom typy (bez team_id) zůstávají cross-team — jsou záměrně napříč.
-  // Organizer už NENÍ výjimka — jinak by v cizím týmu viděl svoje porady a
-  // dělaly by chaos v seznamu.
+  // Custom typy (bez team_id) jsou schované — user explicitně řekl,
+  // že chce jen porady aktuálního týmu bez ohledu na roli. Admin vidí vše.
   const teamId = req.team_id || null;
   const r = await query(`
     SELECT t.*, tm.name AS team_name,
@@ -58,7 +57,6 @@ router.get('/types', requireAuth, async (req, res) => {
     LEFT JOIN users u ON u.id = t.organizer_id
     WHERE $2::boolean = TRUE
        OR (t.visibility = 'team' AND t.team_id = $3::int)
-       OR (t.visibility = 'custom' AND t.custom_users @> to_jsonb($1::int))
     ORDER BY t.name ASC
   `, [uid, isAdmin, teamId]);
   res.json({ types: r.rows });

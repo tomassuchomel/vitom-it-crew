@@ -462,18 +462,27 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
         </div>
       </div>
 
-      {/* AI panel — před poradou (příprava) */}
+      {/* AI panel — před poradou (příprava). Dostupné jen v draft/in_progress.
+          Když je porada uzavřená, žádné AI akce nedávají smysl (nemá cenu
+          navrhovat agendu pro zamčenou poradu). */}
       <section className="bg-white border border-cream-200 rounded-lg p-4">
-        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">🤖 AI — příprava porady</div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide">🤖 AI — příprava porady</div>
+          {meeting.status === 'completed' && (
+            <span className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5">
+              🔒 Porada uzavřená — AI zamčená
+            </span>
+          )}
+        </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={genSummary} disabled={aiBusy}
+          <button onClick={genSummary} disabled={aiBusy || meeting.status === 'completed'}
             title="AI vygeneruje textové shrnutí předchozích porad tohoto typu: co se řešilo, které úkoly jsou hotové/pozdě/po termínu, a doporučí 3-5 věcí, na které se dnes zaměřit. Zobrazí se pod tlačítkem — nezmění zápis."
-            className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+            className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
             📊 Sumář předchozích porad
           </button>
-          <button onClick={genAgenda} disabled={aiBusy}
+          <button onClick={genAgenda} disabled={aiBusy || meeting.status === 'completed'}
             title="AI navrhne 3-7 dalších bodů agendy nad rámec kostry — vezme v úvahu nedokončené úkoly z minulých porad a otevřené otázky. Body se PŘIDAJÍ do sekce Agenda níže (můžeš je smazat / upravit)."
-            className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+            className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
             🧠 Navrhnout agendu
           </button>
         </div>
@@ -652,23 +661,36 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
         </div>
       </section>
 
-      {/* AI panel — po poradě (uzavření + follow-up) */}
+      {/* AI panel — po poradě (uzavření + follow-up). Zápis-lokální akce
+          (Shrnout zápis, Vygenerovat úkoly) potřebují mít co číst, takže se
+          povolují jen když se dá do zápisu psát (in_progress) nebo když je
+          zápis uzavřen a chceme reopen? Ne — když je uzavřený, celá AI se
+          uzavře. V draftu jsou taky zamčené (není z čeho vytáhnout úkoly).
+          Follow-up mail se posílá po uzavření automaticky ze StatusBaru,
+          tady je jen na opakované poslání a taky bezpředmětný v draftu. */}
       <section className="bg-white border border-cream-200 rounded-lg p-4">
-        <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">🤖 AI — po poradě</div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide">🤖 AI — po poradě</div>
+          {meeting.status !== 'in_progress' && (
+            <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">
+              🔒 Dostupné jen když porada „Probíhá"
+            </span>
+          )}
+        </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={genNotesSummary} disabled={aiBusy}
+          <button onClick={genNotesSummary} disabled={aiBusy || meeting.status !== 'in_progress'}
             title="AI shrne obsah TOHOTO zápisu do 3-5 vět. Zobrazí se pod tlačítkem, nezmění zápis. Vhodné před uzavřením porady."
-            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50">
+            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed">
             📝 Shrnout tento zápis
           </button>
-          <button onClick={genTasksFromNotes} disabled={aiBusy}
+          <button onClick={genTasksFromNotes} disabled={aiBusy || meeting.status !== 'in_progress'}
             title="AI vytáhne ze zápisu konkrétní úkoly (kdo co má udělat, termín, priorita). Otevře se dialog pro potvrzení — úkoly pak založíš do projektu a propojí se s tímto zápisem."
-            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50">
+            className="px-3 py-1.5 text-sm bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed">
             🎯 Vygenerovat úkoly ze zápisu
           </button>
-          <button onClick={sendFollowUp} disabled={aiBusy}
-            title="Pošle e-mail všem účastníkům označeným jako 'přítomný'. Každý dostane jen SVÉ úkoly z porady (tasks propojené s tímto zápisem přes meeting_id). Organizátor dostane přehled všech úkolů."
-            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50">
+          <button onClick={sendFollowUp} disabled={aiBusy || meeting.status === 'draft'}
+            title="Pošle e-mail všem účastníkům označeným jako 'přítomný'. Každý dostane jen SVÉ úkoly z porady (tasks propojené s tímto zápisem přes meeting_id). Organizátor dostane přehled všech úkolů. V přípravě zakázáno."
+            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed">
             📧 Poslat follow-up mail{meeting.followed_up_at ? ' znovu' : ''}
           </button>
         </div>
