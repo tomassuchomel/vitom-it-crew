@@ -17,6 +17,28 @@ import { StatusBadge } from '../components/TaskStatus.jsx';
 import { mzv as api, tasks as tasksApi } from '../api.js';
 
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('cs-CZ') : '—';
+
+// 16 socionics typů — kód (Ausra) + populární MBTI-like label + krátký přezdev.
+// Vlastnosti jsou orientační; AI insights generuje detail.
+const SOCIONICS_OPTIONS = [
+  { code: 'ILE', label: 'ILE (ENTp) — Nováček / Vynálezce' },
+  { code: 'SEI', label: 'SEI (ISFp) — Prostředník' },
+  { code: 'ESE', label: 'ESE (ESFj) — Nadšenec' },
+  { code: 'LII', label: 'LII (INTj) — Analytik' },
+  { code: 'SLE', label: 'SLE (ESTp) — Iniciátor' },
+  { code: 'IEI', label: 'IEI (INFp) — Lyrik / Snílek' },
+  { code: 'EIE', label: 'EIE (ENFj) — Mentor' },
+  { code: 'LSI', label: 'LSI (ISTj) — Inspektor' },
+  { code: 'SEE', label: 'SEE (ESFp) — Politik' },
+  { code: 'ILI', label: 'ILI (INTp) — Kritik' },
+  { code: 'LIE', label: 'LIE (ENTj) — Podnikatel' },
+  { code: 'ESI', label: 'ESI (ISFj) — Strážce' },
+  { code: 'IEE', label: 'IEE (ENFp) — Psycholog' },
+  { code: 'SLI', label: 'SLI (ISTp) — Řemeslník' },
+  { code: 'LSE', label: 'LSE (ESTj) — Administrátor' },
+  { code: 'EII', label: 'EII (INFj) — Humanista' },
+];
+const SOCIONICS_LABEL = Object.fromEntries(SOCIONICS_OPTIONS.map(o => [o.code, o.label]));
 const daysAgo = (iso) => {
   if (!iso) return null;
   const ms = Date.now() - new Date(iso).getTime();
@@ -170,7 +192,7 @@ function SubordinateDetail({ user, onProfileSaved }) {
             {profile ? 'Upravit profil' : '+ Vyplnit profil'}
           </button>
         </div>
-        {profile ? <ProfileView profile={profile} /> : (
+        {profile ? <ProfileView profile={profile} userId={user.id} /> : (
           <div className="text-sm text-ink-400 italic">
             Profil zatím nemá vyplněný. Přidej datum nástupu, motivaci, kariérní směr a 5 KPI sekcí.
           </div>
@@ -658,7 +680,7 @@ function KpiRow({ index, section, rating, comment, disabled, onSet }) {
 }
 
 // Read-only pohled na profil — kompaktní kartička s kolonkami.
-function ProfileView({ profile }) {
+function ProfileView({ profile, userId }) {
   const kpi = Array.isArray(profile.kpi_sections) ? profile.kpi_sections : [];
   const children = Array.isArray(profile.children) ? profile.children : [];
   return (
@@ -673,6 +695,9 @@ function ProfileView({ profile }) {
         <Field label="Děti" value={children.length > 0
           ? children.map(c => `${c.name}${c.birth_date ? ` (${fmtDate(c.birth_date)})` : ''}`).join(', ')
           : null} />
+      </div>
+      <div className="md:col-span-2">
+        <SocionicsSection socionicsType={profile.socionics_type} userId={userId} />
       </div>
       <Field long label="Proč pracuje / co peníze řeší" value={profile.work_motivation} />
       <Field long label="Životní cíle"                    value={profile.life_goals} />
@@ -701,6 +726,55 @@ function ProfileView({ profile }) {
   );
 }
 
+// Socionický typ + tlačítko na AI insights (silné/slabé, komunikace, motivace).
+// AI se negeneruje automaticky — jen na klik, ať neplýtváme tokeny při každém
+// otevření profilu. Insights se ale nekešují, dat je málo.
+function SocionicsSection({ socionicsType, userId }) {
+  const [insights, setInsights] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    setBusy(true); setInsights({ loading: true });
+    try {
+      const d = await api.socionicsInsights(userId);
+      setInsights({ text: d.text });
+    } catch (e) {
+      setInsights({ text: `❌ ${e.response?.data?.message || e.message}` });
+    } finally { setBusy(false); }
+  };
+
+  if (!socionicsType) {
+    return (
+      <div>
+        <div className="text-[11px] uppercase tracking-wide text-ink-500">🧠 Socionický typ</div>
+        <div className="text-sm text-ink-400 italic">—</div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] uppercase tracking-wide text-ink-500">🧠 Socionický typ</div>
+        <button onClick={load} disabled={busy}
+          title="AI popíše silné/slabé stránky, komunikaci a motivaci pro tento typ."
+          className="text-xs px-2 py-0.5 bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+          {busy ? 'Načítám…' : (insights ? 'Načíst znovu' : '🧠 AI insights')}
+        </button>
+      </div>
+      <div className="text-sm text-ink-800 font-medium">{SOCIONICS_LABEL[socionicsType] || socionicsType}</div>
+      {insights && (
+        <div className="mt-2 bg-cream-50 border border-cream-200 rounded p-3">
+          {insights.loading
+            ? <div className="text-xs text-ink-500">AI generuje popis typu {socionicsType}…</div>
+            : <div className="text-sm text-ink-800 whitespace-pre-wrap leading-relaxed">{insights.text}</div>}
+          <button onClick={() => setInsights(null)}
+            className="mt-2 text-xs text-ink-500 hover:underline">Skrýt</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Field({ label, value, long }) {
   return (
     <div>
@@ -724,6 +798,7 @@ function ProfileModal({ user, profile, onClose, onSaved }) {
     life_goals: profile?.life_goals || '',
     career_direction: profile?.career_direction || '',
     ambition_type: profile?.ambition_type || '',
+    socionics_type: profile?.socionics_type || '',
     strengths: profile?.strengths || '',
     development_areas: profile?.development_areas || '',
     feedback_style: profile?.feedback_style || '',
@@ -807,6 +882,20 @@ function ProfileModal({ user, profile, onClose, onSaved }) {
         <TextArea label="Proč pracuje / co mu peníze v životě řeší" value={form.work_motivation} onChange={v => set({ work_motivation: v })} />
         <TextArea label="Životní cíle"                              value={form.life_goals}       onChange={v => set({ life_goals: v })} />
         <TextArea label="Kariérní směřování — kam chce postoupit, co vyzkoušet" value={form.career_direction} onChange={v => set({ career_direction: v })} />
+
+        <label className="block">
+          <span className="text-xs font-medium text-ink-600">
+            🧠 Socionický typ (16 typů dle Augustinavičiūtė) — po uložení najdeš v profilu
+            tlačítko „AI insights" na silné/slabé stránky, komunikaci a motivaci
+          </span>
+          <select value={form.socionics_type} onChange={e => set({ socionics_type: e.target.value })}
+            className="mt-1 w-full border border-ink-300 rounded px-2 py-1.5">
+            <option value="">— nezvoleno —</option>
+            {SOCIONICS_OPTIONS.map(o => (
+              <option key={o.code} value={o.code}>{o.label}</option>
+            ))}
+          </select>
+        </label>
 
         <label className="block">
           <span className="text-xs font-medium text-ink-600">

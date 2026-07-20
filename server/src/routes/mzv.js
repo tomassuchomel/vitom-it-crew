@@ -13,6 +13,13 @@ import { processNote } from '../ai.js';
 
 const router = Router();
 
+// 16 socionics typů (kódy podle Ausra Augustinavičiūtė). Whitelist pro
+// validaci na BE + zamezí SQL injection.
+const SOCIONICS_TYPES = [
+  'ILE', 'SEI', 'ESE', 'LII', 'SLE', 'IEI', 'EIE', 'LSI',
+  'SEE', 'ILI', 'LIE', 'ESI', 'IEE', 'SLI', 'LSE', 'EII',
+];
+
 // Vrátí ID týmů, ve kterých je uživatel manager.
 async function managerTeams(userId) {
   const r = await query(
@@ -114,55 +121,103 @@ router.put('/profile/:userId', requireAuth, async (req, res) => {
     : [];
   const AMBITION = ['growth', 'stability'];
   const ambition = AMBITION.includes(b.ambition_type) ? b.ambition_type : null;
+  // 16 socionics typů. Whitelist zabrání SQL injection v případě že by někdo poslal
+  // custom text. Pro AI insights pak posíláme jen validovaný kód.
+  const socionics = SOCIONICS_TYPES.includes(b.socionics_type) ? b.socionics_type : null;
 
-  await query(`
-    INSERT INTO mzv_profiles (
-      user_id, birth_date, hire_date, children,
-      work_motivation, life_goals, career_direction, ambition_type,
-      strengths, development_areas, feedback_style, energy_sources,
-      personal_context, feedback_history, kpi_sections,
-      created_by, created_at, updated_at
-    ) VALUES (
-      $1, $2, $3, $4::jsonb,
-      $5, $6, $7, $8,
-      $9, $10, $11, $12,
-      $13, $14, $15::jsonb,
-      $16, NOW(), NOW()
-    )
-    ON CONFLICT (user_id) DO UPDATE SET
-      birth_date = EXCLUDED.birth_date,
-      hire_date = EXCLUDED.hire_date,
-      children = EXCLUDED.children,
-      work_motivation = EXCLUDED.work_motivation,
-      life_goals = EXCLUDED.life_goals,
-      career_direction = EXCLUDED.career_direction,
-      ambition_type = EXCLUDED.ambition_type,
-      strengths = EXCLUDED.strengths,
-      development_areas = EXCLUDED.development_areas,
-      feedback_style = EXCLUDED.feedback_style,
-      energy_sources = EXCLUDED.energy_sources,
-      personal_context = EXCLUDED.personal_context,
-      feedback_history = EXCLUDED.feedback_history,
-      kpi_sections = EXCLUDED.kpi_sections,
-      updated_at = NOW()
-  `, [
-    userId,
-    /^\d{4}-\d{2}-\d{2}$/.test(b.birth_date || '') ? b.birth_date : null,
-    /^\d{4}-\d{2}-\d{2}$/.test(b.hire_date || '') ? b.hire_date : null,
-    JSON.stringify(children),
-    b.work_motivation || null,
-    b.life_goals || null,
-    b.career_direction || null,
-    ambition,
-    b.strengths || null,
-    b.development_areas || null,
-    b.feedback_style || null,
-    b.energy_sources || null,
-    b.personal_context || null,
-    b.feedback_history || null,
-    JSON.stringify(kpi),
-    req.user.id,
-  ]);
+  // Defenzivně: nový sloupec socionics_type přišel v migraci 2026-07-19. Kdyby
+  // ještě neběžela, UPDATE s ním by spadl 42703; zkusíme insert bez něj.
+  try {
+    await query(`
+      INSERT INTO mzv_profiles (
+        user_id, birth_date, hire_date, children,
+        work_motivation, life_goals, career_direction, ambition_type,
+        strengths, development_areas, feedback_style, energy_sources,
+        personal_context, feedback_history, kpi_sections, socionics_type,
+        created_by, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4::jsonb,
+        $5, $6, $7, $8,
+        $9, $10, $11, $12,
+        $13, $14, $15::jsonb, $16,
+        $17, NOW(), NOW()
+      )
+      ON CONFLICT (user_id) DO UPDATE SET
+        birth_date = EXCLUDED.birth_date,
+        hire_date = EXCLUDED.hire_date,
+        children = EXCLUDED.children,
+        work_motivation = EXCLUDED.work_motivation,
+        life_goals = EXCLUDED.life_goals,
+        career_direction = EXCLUDED.career_direction,
+        ambition_type = EXCLUDED.ambition_type,
+        strengths = EXCLUDED.strengths,
+        development_areas = EXCLUDED.development_areas,
+        feedback_style = EXCLUDED.feedback_style,
+        energy_sources = EXCLUDED.energy_sources,
+        personal_context = EXCLUDED.personal_context,
+        feedback_history = EXCLUDED.feedback_history,
+        kpi_sections = EXCLUDED.kpi_sections,
+        socionics_type = EXCLUDED.socionics_type,
+        updated_at = NOW()
+    `, [
+      userId,
+      /^\d{4}-\d{2}-\d{2}$/.test(b.birth_date || '') ? b.birth_date : null,
+      /^\d{4}-\d{2}-\d{2}$/.test(b.hire_date || '') ? b.hire_date : null,
+      JSON.stringify(children),
+      b.work_motivation || null,
+      b.life_goals || null,
+      b.career_direction || null,
+      ambition,
+      b.strengths || null,
+      b.development_areas || null,
+      b.feedback_style || null,
+      b.energy_sources || null,
+      b.personal_context || null,
+      b.feedback_history || null,
+      JSON.stringify(kpi),
+      socionics,
+      req.user.id,
+    ]);
+  } catch (err) {
+    if (err.code !== '42703') throw err;
+    // Fallback: sloupec socionics_type ještě neexistuje → ulož bez něj.
+    console.warn('[mzv/profile] socionics_type column missing, saving without it');
+    await query(`
+      INSERT INTO mzv_profiles (
+        user_id, birth_date, hire_date, children,
+        work_motivation, life_goals, career_direction, ambition_type,
+        strengths, development_areas, feedback_style, energy_sources,
+        personal_context, feedback_history, kpi_sections,
+        created_by, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4::jsonb,
+        $5, $6, $7, $8,
+        $9, $10, $11, $12,
+        $13, $14, $15::jsonb,
+        $16, NOW(), NOW()
+      )
+      ON CONFLICT (user_id) DO UPDATE SET
+        birth_date = EXCLUDED.birth_date, hire_date = EXCLUDED.hire_date,
+        children = EXCLUDED.children, work_motivation = EXCLUDED.work_motivation,
+        life_goals = EXCLUDED.life_goals, career_direction = EXCLUDED.career_direction,
+        ambition_type = EXCLUDED.ambition_type, strengths = EXCLUDED.strengths,
+        development_areas = EXCLUDED.development_areas, feedback_style = EXCLUDED.feedback_style,
+        energy_sources = EXCLUDED.energy_sources, personal_context = EXCLUDED.personal_context,
+        feedback_history = EXCLUDED.feedback_history, kpi_sections = EXCLUDED.kpi_sections,
+        updated_at = NOW()
+    `, [
+      userId,
+      /^\d{4}-\d{2}-\d{2}$/.test(b.birth_date || '') ? b.birth_date : null,
+      /^\d{4}-\d{2}-\d{2}$/.test(b.hire_date || '') ? b.hire_date : null,
+      JSON.stringify(children),
+      b.work_motivation || null, b.life_goals || null,
+      b.career_direction || null, ambition,
+      b.strengths || null, b.development_areas || null,
+      b.feedback_style || null, b.energy_sources || null,
+      b.personal_context || null, b.feedback_history || null,
+      JSON.stringify(kpi), req.user.id,
+    ]);
+  }
 
   const r = await query(`SELECT * FROM mzv_profiles WHERE user_id = $1`, [userId]);
   res.json({ profile: r.rows[0] });
@@ -372,6 +427,58 @@ router.post('/meetings/:id/suggest-tasks', requireAuth, async (req, res) => {
     res.status(500).json({
       error: 'internal_error',
       message: `Vygenerování úkolů selhalo: ${err.code ? `[${err.code}] ` : ''}${err.message}`,
+    });
+  }
+});
+
+// AI insights k socionics typu podřízeného — silné/slabé stránky v práci,
+// komunikace, motivace. Manager nebo admin. Bez cache — dat je málo, volání
+// zřídka (manager si otevře profil).
+router.post('/profile/:userId/socionics-insights', requireAuth, async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!await canManage(req.user.id, req.user.role, userId)) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    const p = (await query(`SELECT socionics_type FROM mzv_profiles WHERE user_id = $1`, [userId])).rows[0];
+    const type = p?.socionics_type;
+    if (!SOCIONICS_TYPES.includes(type)) {
+      return res.status(400).json({ error: 'no_type', message: 'Profil nemá vyplněný socionický typ.' });
+    }
+    const u = (await query(`SELECT name FROM users WHERE id = $1`, [userId])).rows[0];
+
+    const system = `Jsi kouč specializovaný na socioniku (Ausra Augustinavičiūtė). Píšeš česky,
+věcně, konkrétně. Cílem je pomoci manažerovi lépe pochopit podřízeného na základě jeho
+socionického typu — co od něj čekat, jak s ním komunikovat, co ho motivuje.
+Buď pragmatický, žádná ezoterika. Píšeš pro manažera IT firmy, ne pro socionika-teoretika.`;
+
+    const userMsg = `Podřízený "${u?.name || ''}" má socionický typ **${type}**.
+
+Napiš stručně (Markdown, česky):
+
+## 💪 Silné stránky v práci
+(3-5 bulletů — co mu jde přirozeně, kde exceluje)
+
+## ⚠️ Slabé stránky / rizika
+(3-5 bulletů — kde se zaseká, co ho brzdí, na co pozor)
+
+## 🗣 Jak s ním komunikovat
+(3-5 bulletů — styl feedbacku, jak zadávat úkoly, čemu se vyhnout)
+
+## 🎯 Co ho motivuje
+(3-5 bulletů — co ho nabíjí, jaké úkoly ho baví, jak ho ocenit)`;
+
+    const out = await callAI(system, userMsg, 1500);
+    if (out.error) {
+      console.warn('[mzv/socionics-insights] AI error:', out);
+      return res.status(500).json(out);
+    }
+    res.json({ type, text: out.text });
+  } catch (err) {
+    console.error('[mzv/socionics-insights] unexpected error:', err.code, err.message);
+    res.status(500).json({
+      error: 'internal_error',
+      message: `Generování insights selhalo: ${err.code ? `[${err.code}] ` : ''}${err.message}`,
     });
   }
 });
