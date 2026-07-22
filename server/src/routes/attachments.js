@@ -31,11 +31,27 @@ const __dirname = path.dirname(__filename);
 const uploadsDir = path.join(__dirname, '..', '..', 'data', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-// Povolené přípony/mime: obrázky, videa + text (.md, .txt). Kontrolujeme
-// mime i extension — .md prohlížeč často posílá jako application/octet-stream
-// nebo text/plain, extension je spolehlivější signál.
-const ALLOWED_MIME = /^(image|video)\/|^text\/(plain|markdown|x-markdown)$|^application\/octet-stream$/;
-const ALLOWED_EXT  = new Set(['.md', '.txt', '.markdown']);
+// Povolené typy: obrázky, videa, text, PDF, MS Office (Word/Excel/PowerPoint),
+// CSV, JSON, ZIP. Kontrolujeme mime i extension — prohlížeč občas posílá
+// application/octet-stream u .md/.docx/.pptx, extension je spolehlivější.
+const ALLOWED_MIME = new RegExp([
+  '^(image|video)/',
+  '^text/(plain|markdown|x-markdown|csv)$',
+  '^application/(pdf|zip|x-zip-compressed|json|octet-stream',
+    // MS Office (starší)
+    '|msword|vnd\\.ms-excel|vnd\\.ms-powerpoint',
+    // MS Office 2007+ (OOXML)
+    '|vnd\\.openxmlformats-officedocument\\.wordprocessingml\\.document',
+    '|vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.sheet',
+    '|vnd\\.openxmlformats-officedocument\\.presentationml\\.presentation',
+    ')$',
+].join(''));
+const ALLOWED_EXT = new Set([
+  '.md', '.markdown', '.txt', '.csv', '.json',
+  '.pdf',
+  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.zip',
+]);
 const MAX_SIZE = 25 * 1024 * 1024; // 25 MB
 
 const upload = multer({
@@ -44,7 +60,9 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname || '').toLowerCase();
     const mimeOk = ALLOWED_MIME.test(file.mimetype);
-    const extOk  = /^(image|video)\//.test(file.mimetype) || ALLOWED_EXT.has(ext);
+    // Extension whitelist: image/video se řídí mime (u obrázků nemá smysl vypisovat všechny),
+    // ostatní musí mít explicit extension v ALLOWED_EXT.
+    const extOk = /^(image|video)\//.test(file.mimetype) || ALLOWED_EXT.has(ext);
     if (!(mimeOk && extOk)) return cb(new Error('unsupported_type'));
     cb(null, true);
   },
@@ -77,9 +95,14 @@ router.post('/by-task/:taskId', requireAuth, upload.array('files', 10), async (r
   const created = [];
   for (const f of req.files) {
     const ext = path.extname(f.originalname || '').toLowerCase();
+    // Používá se v UI pro ikonu / náhled. 'document' zahrnuje kancelářské
+    // formáty (pdf/office/csv/json) — všechny je klient renderuje jako
+    // download link se štítkem.
+    const DOC_EXTS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.csv', '.json', '.zip']);
     const kind = f.mimetype.startsWith('image/') ? 'image'
                : f.mimetype.startsWith('video/') ? 'video'
                : (ext === '.md' || ext === '.markdown' || ext === '.txt') ? 'text'
+               : DOC_EXTS.has(ext) ? 'document'
                : 'other';
     // Pseudo-filename pro DB (kompatibilita s legacy schématem)
     const synthFilename = `${crypto.randomBytes(12).toString('hex')}${ext.slice(0, 10)}`;

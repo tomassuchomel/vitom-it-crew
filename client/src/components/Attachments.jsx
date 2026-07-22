@@ -2,6 +2,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { attachments as attApi } from '../api.js';
 
+// Ikona podle přípony — jen pro non-image/video seznam (obrázky mají thumbnail).
+const fileIcon = (filename) => {
+  const ext = String(filename || '').toLowerCase().match(/\.[^.]+$/)?.[0] || '';
+  if (ext === '.pdf') return '📕';
+  if (ext === '.doc' || ext === '.docx') return '📘';
+  if (ext === '.xls' || ext === '.xlsx' || ext === '.csv') return '📗';
+  if (ext === '.ppt' || ext === '.pptx') return '📙';
+  if (ext === '.zip') return '📦';
+  if (ext === '.md' || ext === '.markdown' || ext === '.txt') return '📝';
+  if (ext === '.json') return '{}';
+  return '📄';
+};
+
 export default function Attachments({ taskId, canEdit = true, compact = false }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -45,7 +58,8 @@ export default function Attachments({ taskId, canEdit = true, compact = false })
   const galleryItems = items;
   const images = galleryItems.filter(a => a.kind === 'image');
   const videos = galleryItems.filter(a => a.kind === 'video');
-  const others = galleryItems.filter(a => a.kind === 'other');
+  // Všechno, co není obrázek/video → dokumenty, texty i legacy 'other'.
+  const others = galleryItems.filter(a => a.kind !== 'image' && a.kind !== 'video');
 
   return (
     <div>
@@ -61,16 +75,18 @@ export default function Attachments({ taskId, canEdit = true, compact = false })
           <input
             ref={fileRef}
             type="file"
-            accept="image/*,video/*,.md,.markdown,.txt,text/plain,text/markdown"
+            accept="image/*,video/*,.md,.markdown,.txt,text/plain,text/markdown,.csv,.json,application/pdf,.pdf,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.ms-excel,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,application/vnd.ms-powerpoint,.ppt,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx,application/zip,.zip"
             multiple
             className="hidden"
             onChange={onPick}
           />
           <div className="text-2xl">{uploading ? '⏳' : '📎'}</div>
           <div className="text-xs text-ink-600 mt-1">
-            {uploading ? 'Nahrávám…' : compact ? 'Přidat foto/video' : 'Přetáhni sem nebo klikni'}
+            {uploading ? 'Nahrávám…' : compact ? 'Přidat přílohu' : 'Přetáhni sem nebo klikni'}
           </div>
-          <div className="text-[10px] text-ink-400 mt-0.5">JPG, PNG, MP4, WEBM (max 25 MB)</div>
+          <div className="text-[10px] text-ink-400 mt-0.5">
+            obrázky, video, PDF, Word, Excel, PowerPoint, CSV, ZIP, TXT/MD (max 25 MB)
+          </div>
         </div>
       )}
       {err && <div className="text-xs text-red-600 mt-2">{err}</div>}
@@ -107,11 +123,12 @@ export default function Attachments({ taskId, canEdit = true, compact = false })
           )}
           {/* Ostatní – linky. Endpoint /api/attachments/:id/file streamuje data z DB. */}
           {others.length > 0 && (
-            <ul className="text-xs text-ink-600">
+            <ul className="text-xs text-ink-600 space-y-0.5">
               {others.map(a => (
                 <li key={a.id} className="flex items-center gap-2">
-                  <a href={attApi.url(a)} target="_blank" rel="noopener noreferrer" className="underline">{a.original_name}</a>
-                  {canEdit && <button onClick={() => handleDelete(a)} className="text-ink-400 hover:text-red-600">🗑</button>}
+                  <span className="shrink-0">{fileIcon(a.original_name)}</span>
+                  <a href={attApi.url(a)} target="_blank" rel="noopener noreferrer" className="underline truncate">{a.original_name}</a>
+                  {canEdit && <button onClick={() => handleDelete(a)} className="text-ink-400 hover:text-red-600 shrink-0">🗑</button>}
                 </li>
               ))}
             </ul>
