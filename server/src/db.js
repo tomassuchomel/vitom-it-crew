@@ -17,11 +17,16 @@ const { Pool } = pg;
 
 // Konfigurace poolu – Neon vyžaduje SSL, lokální Postgres typicky ne.
 // V Renderu má proměnná SSL=true; v Neonu URL obsahuje ?sslmode=require.
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
+const rawConnectionString = process.env.DATABASE_URL;
+if (!rawConnectionString) {
   console.error('[db] CHYBA: DATABASE_URL není nastaveno. Přidej ho do server/.env');
   console.error('[db] Příklad: DATABASE_URL=postgres://user:pass@host/db?sslmode=require');
 }
+
+// Novější pg parser interpretuje ?sslmode=require jako verify-full (přísný TLS)
+// a vypisuje SECURITY WARNING, i když my SSL řešíme explicitně přes `ssl: {…}`.
+// Sundáme sslmode z URL, aby si parser nechal ruce od TLS a použil se náš objekt.
+const connectionString = rawConnectionString?.replace(/([?&])sslmode=[^&]*(&?)/, (_, pre, post) => post ? pre : '');
 
 export const pool = new Pool({
   connectionString,
@@ -233,7 +238,12 @@ export async function migrate() {
         ALTER TABLE users ADD COLUMN can_see_all_teams BOOLEAN NOT NULL DEFAULT FALSE;
       END IF;
       -- Failsafe pro source_note_id (přidáno 2026-06): propojení tasks → notes.
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+      -- Guard na existenci notes: tabulka vzniká až souborovou migrací (běží
+      -- PO inline schématu), takže na čisté DB tu ještě není. Bez guardu by
+      -- REFERENCES notes(id) shodilo cold start; sloupec pak stejně doplní
+      -- migrace 2026-06-24-tasks-source-note.sql.
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='notes')
+         AND NOT EXISTS (SELECT 1 FROM information_schema.columns
                      WHERE table_name='tasks' AND column_name='source_note_id') THEN
         ALTER TABLE tasks ADD COLUMN source_note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL;
         CREATE INDEX IF NOT EXISTS idx_tasks_source_note ON tasks(source_note_id) WHERE source_note_id IS NOT NULL;
@@ -250,7 +260,12 @@ export async function migrate() {
         ALTER TABLE attachments ADD COLUMN idea_id BIGINT;
       END IF;
       -- Failsafe pro per-user schedule denního shrnutí (přidáno 2026-07):
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+      -- Guard na existenci tabulky: user_notification_prefs se v tomto bloku
+      -- CREATE-uje až níž, takže na čisté DB tu ještě není. Bez guardu by ALTER
+      -- shodil cold start; sloupce pak stejně doplní migrace
+      -- 2026-07-02-daily-summary-schedule.sql.
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='user_notification_prefs')
+         AND NOT EXISTS (SELECT 1 FROM information_schema.columns
                      WHERE table_name='user_notification_prefs' AND column_name='daily_summary_days') THEN
         ALTER TABLE user_notification_prefs
           ADD COLUMN daily_summary_days JSONB NOT NULL DEFAULT '[1,2,3,4,5]'::jsonb,
