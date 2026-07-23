@@ -124,11 +124,17 @@ router.get('/health', async (req, res) => {
 });
 
 // GET /env — whitelist klíčů s masked hodnotou (secret nikdy plain do response!)
+//
+// Zdroj pravdy je process.env (skutečný runtime), soubor .env jen jako fallback
+// pro lokální dev. Na Renderu / systemd je .env často prázdné a klíče přicházejí
+// z prostředí — proto by čtení jen ze souboru lživě hlásilo „nenastaveno".
 router.get('/env', (req, res) => {
-  const current = readEnv();
+  const fileEnv = readEnv();
   const result = KNOWN_ENV_KEYS.map(spec => {
-    const raw = current[spec.key];
-    const set = raw !== undefined && raw !== '';
+    const runtime = process.env[spec.key];
+    const file    = fileEnv[spec.key];
+    const raw     = (runtime !== undefined && runtime !== '') ? runtime : file;
+    const set     = raw !== undefined && raw !== '';
     return {
       key: spec.key,
       group: spec.group,

@@ -63,10 +63,25 @@ const upload = multer({
     // Extension whitelist: image/video se řídí mime (u obrázků nemá smysl vypisovat všechny),
     // ostatní musí mít explicit extension v ALLOWED_EXT.
     const extOk = /^(image|video)\//.test(file.mimetype) || ALLOWED_EXT.has(ext);
-    if (!(mimeOk && extOk)) return cb(new Error('unsupported_type'));
+    // SVG obsahuje JS a jde vyrenderovat inline → stored XSS. I když download
+    // route nutí attachment, obrana do hloubky: neber ho vůbec.
+    const isSvg = file.mimetype === 'image/svg+xml' || ext === '.svg' || ext === '.svgz';
+    if (!(mimeOk && extOk) || isSvg) return cb(new Error('unsupported_type'));
     cb(null, true);
   },
 });
+
+// Content-Disposition hlavička: ASCII fallback (RFC 2616) + UTF-8 filename*
+// (RFC 5987) pro diakritiku. Escape " a \ v ASCII větvi.
+function formatContentDisposition(name) {
+  const raw = String(name || 'soubor');
+  const ascii = raw
+    .normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^\x20-\x7e]/g, '_')
+    .replace(/["\\]/g, '_') || 'soubor';
+  const utf8 = encodeURIComponent(raw).replace(/['()]/g, escape).replace(/\*/g, '%2A');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${utf8}`;
+}
 
 const router = Router();
 
@@ -116,28 +131,61 @@ router.post('/by-task/:taskId', requireAuth, upload.array('files', 10), async (r
   res.json({ attachments: created });
 });
 
-// Stream binárních dat. Cache 1 den (data se nemění).
+// Stream binárních dat.
+//
+// Autorizace: příloha se servíruje jen tomu, kdo má právo vidět nadřazený úkol —
+// admin, člen týmu projektu, assignee úkolu, nebo manager projektu. Jinak 404
+// (ne 403), aby uhádnuté id nezveřejnilo existenci cizí přílohy.
+//
+// Vynucený download: Content-Disposition attachment + nosniff, i pro obrázky.
+// UI si obrázky renderuje z `<img src=…>` — attachment header render v <img>
+// nezakazuje, jen brání otevření souboru inline v novém tabu (kde by SVG
+// mohl spustit stored XSS). SVG je navíc odmítnutý už při uploadu.
 router.get('/:id/file', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).end();
-  const r = await query(
-    `SELECT data, mime_type, original_name, filename FROM attachments WHERE id = $1`,
-    [id]
-  );
+  const r = await query(`
+    SELECT a.data, a.mime_type, a.original_name, a.filename,
+           t.assignee_id, p.team_id AS project_team_id, p.manager_id AS project_manager_id
+    FROM attachments a
+    JOIN tasks t    ON t.id = a.task_id
+    JOIN projects p ON p.id = t.project_id
+    WHERE a.id = $1
+  `, [id]);
   const a = r.rows[0];
   if (!a) return res.status(404).end();
 
+  const isAdmin       = req.user.role === 'admin';
+  const isAssignee    = a.assignee_id === req.user.id;
+  const isProjectMgr  = a.project_manager_id === req.user.id;
+  let isTeamMember    = false;
+  if (!isAdmin && !isAssignee && !isProjectMgr) {
+    const m = await query(
+      `SELECT 1 FROM team_members WHERE user_id = $1 AND team_id = $2 LIMIT 1`,
+      [req.user.id, a.project_team_id]
+    );
+    isTeamMember = m.rows.length > 0;
+  }
+  if (!isAdmin && !isAssignee && !isProjectMgr && !isTeamMember) {
+    return res.status(404).end();
+  }
+
+  const setDownloadHeaders = () => {
+    res.setHeader('Content-Type', a.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', formatContentDisposition(a.original_name || a.filename));
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+  };
+
   // Primárně data z DB. Pokud chybí (legacy záznam), fallback na disk.
   if (a.data) {
-    res.setHeader('Content-Type', a.mime_type || 'application/octet-stream');
-    res.setHeader('Cache-Control', 'private, max-age=86400');
+    setDownloadHeaders();
     return res.end(a.data);
   }
   // Legacy fallback
   const filePath = path.join(uploadsDir, a.filename || '');
   if (a.filename && fs.existsSync(filePath)) {
-    res.setHeader('Content-Type', a.mime_type || 'application/octet-stream');
-    res.setHeader('Cache-Control', 'private, max-age=86400');
+    setDownloadHeaders();
     return fs.createReadStream(filePath).pipe(res);
   }
   // Soubor je definitivně pryč (ephemerálnímu disk Renderu padly za oběť)

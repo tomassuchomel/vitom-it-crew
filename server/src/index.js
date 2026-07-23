@@ -128,12 +128,25 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'server_error', message: err.message });
 });
 
-// Zachyt uncaught errors (např. v setInterval / cron) → do bufferu, ať se
-// aspoň zobrazí v Admin panelu, i když normálně padnou tiše do stderr.
+// uncaughtException: proces je v nedefinovaném stavu (chybí handler → nikdo neví,
+// co selhalo mezi řádky). Zaznamenej + zaloguj a UMRI. systemd/Render nás
+// restartují — čistší než tiše běžet dál se zombie stavem.
+let isShuttingDown = false;
 process.on('uncaughtException', (err) => {
   console.error('[uncaught]', err);
   recordError({ source: 'uncaught', message: err.message, stack: err.stack });
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  // Krátký odklad, ať se stihne flush stderr + async recordError (in-memory,
+  // ale ať i tak proběhne event loop tick).
+  setTimeout(() => process.exit(1), 100).unref();
 });
+
+// unhandledRejection: záměrně BEZ exitu. Ve větvi appky jsou fire-and-forget
+// promises (mailer, push cron) — občasný rejection z Graph 5xx nebo dočasného
+// síťového blipu je zotavitelný a neshazuje request path. Zaznamenáme do bufferu,
+// aby to admin viděl, a jedeme dál. Pokud rejection reflektuje reálnou vadu, projeví
+// se opakovaně a admin to uvidí v Errors kartě.
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   console.error('[unhandledRejection]', err);
