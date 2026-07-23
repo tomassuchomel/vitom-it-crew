@@ -9,7 +9,7 @@
     "start": "node src/index.js",
     "seed": "node src/seed.js",
     "ai-worker": "node src/aiAgent/cli.js",
-    "test": "node --test src/**/__tests__/*.test.js"
+    "test": "node --test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.97.0",

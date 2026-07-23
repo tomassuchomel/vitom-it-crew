@@ -191,7 +191,8 @@ export default function Scoreboard() {
               <Kpi label="Včas" value={totals.on_time} color="text-emerald-700" />
               <Kpi label="Pozdě" value={totals.late} color="text-red-600" />
               <Kpi label="Po termínu (nedokončené)" value={totals.overdue} color="text-amber-700" />
-              <Kpi label="Úspěšnost" value={totals.success_rate == null ? '—' : `${totals.success_rate}%`} color="text-brand-600" />
+              <Kpi label="Úspěšnost" value={totals.success_rate == null ? '—' : `${totals.success_rate}%`} color="text-brand-600"
+                   help="Podíl úkolů dokončených v termínu z těch, které měly termín (nebo jsou propadlé). Úkoly BEZ termínu ani úkoly bez deadlinu se do skóre nepočítají — mít 2 hotové úkoly z 8 tedy ještě neznamená 25 %, pokud oba byly dokončeny po termínu." />
             </div>
 
             {/* Měsíční trend */}
@@ -365,11 +366,14 @@ export default function Scoreboard() {
   );
 }
 
-function Kpi({ label, value, color }) {
+function Kpi({ label, value, color, help }) {
   return (
-    <div className="bg-white border border-cream-200 rounded-lg p-3">
+    <div className="bg-white border border-cream-200 rounded-lg p-3" title={help || undefined}>
       <div className={`text-2xl font-bold ${color}`}>{value}</div>
-      <div className="text-xs text-ink-500">{label}</div>
+      <div className="text-xs text-ink-500 flex items-center gap-1">
+        {label}
+        {help && <span className="text-ink-400 cursor-help" aria-label="Vysvětlení">ℹ</span>}
+      </div>
     </div>
   );
 }
@@ -411,13 +415,16 @@ function UserCard({ u, isMe, isSelected, onSelect, onKpiClick, seriesMonths, axi
             Klikni pro trend →
           </div>
         </div>
-        <div className={`text-lg font-bold ${
-          u.success_rate == null ? 'text-ink-400'
-            : u.success_rate >= 90 ? 'text-emerald-600'
-            : u.success_rate >= 70 ? 'text-brand-600'
-            : u.success_rate >= 50 ? 'text-amber-700'
-            : 'text-red-600'
-        }`}>
+        <div
+          title={`Úspěšnost = v termínu / (v termínu + pozdě + po termínu nedokončené).\nPro ${u.name}: ${u.done_on_time || 0} / (${u.done_on_time || 0} + ${u.done_late || 0} + ${u.overdue || 0}).\nÚkoly bez termínu se do skóre nepočítají.`}
+          className={`text-lg font-bold cursor-help ${
+            u.success_rate == null ? 'text-ink-400'
+              : u.success_rate >= 90 ? 'text-emerald-600'
+              : u.success_rate >= 70 ? 'text-brand-600'
+              : u.success_rate >= 50 ? 'text-amber-700'
+              : 'text-red-600'
+          }`}
+        >
           {u.success_rate == null ? '—' : `${u.success_rate}%`}
         </div>
       </div>
