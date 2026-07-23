@@ -42,7 +42,6 @@ async function canAccessType(userId, userRole, type) {
 
 // Seznam typů porad, kam user má přístup.
 router.get('/types', requireAuth, async (req, res) => {
-  const uid = req.user.id;
   const isAdmin = req.user.role === 'admin';
   // Striktně team-scoped: v každém týmu vidím JEN porady toho týmu.
   // Custom typy (bez team_id) jsou schované — user explicitně řekl,
@@ -55,10 +54,10 @@ router.get('/types', requireAuth, async (req, res) => {
     FROM meeting_types t
     LEFT JOIN teams tm ON tm.id = t.team_id
     LEFT JOIN users u ON u.id = t.organizer_id
-    WHERE $2::boolean = TRUE
-       OR (t.visibility = 'team' AND t.team_id = $3::int)
+    WHERE $1::boolean = TRUE
+       OR (t.visibility = 'team' AND t.team_id = $2::int)
     ORDER BY t.name ASC
-  `, [uid, isAdmin, teamId]);
+  `, [isAdmin, teamId]);
   res.json({ types: r.rows });
 });
 
