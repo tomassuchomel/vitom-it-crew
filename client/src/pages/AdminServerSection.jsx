@@ -44,6 +44,17 @@ export default function AdminServerSection() {
     return () => clearInterval(t);
   }, []);
 
+  const restart = async () => {
+    if (!confirm('Restartovat aplikaci?\n\nBude ~5 s nedostupná. Použij po změně .env klíče.')) return;
+    try {
+      await adminServer.restart();
+      alert('Restart odeslán. Za 8 s obnovím stav…');
+      setTimeout(() => setRefreshTick(x => x + 1), 8000);
+    } catch (e) {
+      alert('Restart selhal: ' + (e.response?.data?.message || e.message));
+    }
+  };
+
   return (
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-center gap-2">
@@ -52,11 +63,16 @@ export default function AdminServerSection() {
           className="text-xs px-2 py-1 border border-ink-300 rounded hover:bg-cream-50">
           🔄 Aktualizovat
         </button>
-        <span className="text-[11px] text-ink-400">automaticky každých 30 s</span>
+        <span className="text-[11px] text-ink-400 flex-1">automaticky každých 30 s</span>
+        <button onClick={restart}
+          title="process.exit(0) → systemd okamžitě nastartuje. Použij po změně env klíče."
+          className="text-xs px-3 py-1 bg-amber-500 text-white rounded hover:bg-amber-600">
+          🔄 Restart aplikace
+        </button>
       </div>
 
       <HealthCard health={health} />
-      <EnvCard env={env} />
+      <EnvCard env={env} onSaved={() => setRefreshTick(x => x + 1)} />
       <ErrorsCard errors={errors} onClear={async () => {
         if (!confirm('Vyčistit seznam chyb?')) return;
         await adminServer.clearErrors();
@@ -104,7 +120,11 @@ function HealthCard({ health }) {
 
 // ─── Environment ────────────────────────────────────────────────────────
 
-function EnvCard({ env }) {
+function EnvCard({ env, onSaved }) {
+  const [editKey, setEditKey] = useState(null); // klíč, který editujeme
+  const [editValue, setEditValue] = useState('');
+  const [saving, setSaving] = useState(false);
+
   if (!env) return (
     <section className="bg-white border border-cream-200 rounded-lg p-4">
       <div className="text-sm text-ink-400">Načítám .env…</div>
@@ -119,6 +139,24 @@ function EnvCard({ env }) {
   }
 
   const missingRequired = env.values.filter(v => v.required && !v.set);
+
+  const startEdit = (item) => {
+    setEditKey(item.key);
+    // Do editu vždy prázdné (nechceme userovi ukázat masku ve formu ani plain secret)
+    setEditValue('');
+  };
+  const cancelEdit = () => { setEditKey(null); setEditValue(''); };
+  const save = async () => {
+    if (!editKey) return;
+    setSaving(true);
+    try {
+      await adminServer.setEnv(editKey, editValue);
+      cancelEdit();
+      onSaved?.();
+    } catch (e) {
+      alert('Chyba: ' + (e.response?.data?.message || e.message));
+    } finally { setSaving(false); }
+  };
 
   return (
     <section className="bg-white border border-cream-200 rounded-lg p-4">
@@ -142,31 +180,59 @@ function EnvCard({ env }) {
           <div key={group}>
             <div className="text-[11px] uppercase tracking-wide text-ink-500 mb-1">{group}</div>
             <div className="space-y-1">
-              {items.map(item => (
-                <div key={item.key} className="flex items-center gap-2 text-sm">
-                  <span className={item.set ? 'text-emerald-600' : (item.required ? 'text-red-600' : 'text-ink-400')}>
-                    {item.set ? '✅' : (item.required ? '❌' : '➖')}
-                  </span>
-                  <code className="text-xs bg-cream-50 border border-cream-200 rounded px-1.5 py-0.5 min-w-[220px]">
-                    {item.key}
-                  </code>
-                  {item.set ? (
-                    <span className={`text-xs ${item.secret ? 'text-ink-500 font-mono' : 'text-ink-800'}`}>
-                      {item.value}
+              {items.map(item => {
+                const editing = editKey === item.key;
+                return (
+                  <div key={item.key} className="flex items-center gap-2 text-sm">
+                    <span className={item.set ? 'text-emerald-600' : (item.required ? 'text-red-600' : 'text-ink-400')}>
+                      {item.set ? '✅' : (item.required ? '❌' : '➖')}
                     </span>
-                  ) : (
-                    <span className="text-xs text-ink-400 italic">
-                      {item.required ? 'chybí (povinné)' : 'nenastaveno'}
-                    </span>
-                  )}
-                </div>
-              ))}
+                    <code className="text-xs bg-cream-50 border border-cream-200 rounded px-1.5 py-0.5 min-w-[220px]">
+                      {item.key}
+                    </code>
+                    {editing ? (
+                      <>
+                        <input
+                          type={item.secret ? 'password' : 'text'}
+                          autoFocus
+                          value={editValue}
+                          onChange={e => setEditValue(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancelEdit(); }}
+                          placeholder={item.set ? '(nová hodnota nahradí)' : 'zadej hodnotu'}
+                          className="flex-1 text-xs border border-ink-300 rounded px-2 py-0.5 font-mono"
+                        />
+                        <button onClick={save} disabled={saving}
+                          className="text-xs px-2 py-0.5 bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+                          {saving ? '…' : 'Uložit'}
+                        </button>
+                        <button onClick={cancelEdit} className="text-xs text-ink-500 hover:underline">Zrušit</button>
+                      </>
+                    ) : (
+                      <>
+                        {item.set ? (
+                          <span className={`text-xs flex-1 ${item.secret ? 'text-ink-500 font-mono' : 'text-ink-800'}`}>
+                            {item.value}
+                          </span>
+                        ) : (
+                          <span className="text-xs flex-1 text-ink-400 italic">
+                            {item.required ? 'chybí (povinné)' : 'nenastaveno'}
+                          </span>
+                        )}
+                        <button onClick={() => startEdit(item)}
+                          className="text-xs text-brand-500 hover:underline">
+                          {item.set ? 'změnit' : 'nastavit'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))}
       </div>
       <div className="mt-4 text-[11px] text-ink-500 italic">
-        Editaci hodnot přidá F2 (příští krok). Zatím musí .env upravovat SSH.
+        💡 Po uložení klíče stiskni <strong>🔄 Restart aplikace</strong> nahoře, aby se změna projevila.
       </div>
     </section>
   );

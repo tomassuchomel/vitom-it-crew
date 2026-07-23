@@ -125,8 +125,10 @@ export const meetings = {
 export const adminServer = {
   health:      () => api.get('/admin/server/health').then(r => r.data),
   env:         () => api.get('/admin/server/env').then(r => r.data),
+  setEnv:      (key, value) => api.put('/admin/server/env', { key, value }).then(r => r.data),
   errors:      (limit = 50) => api.get('/admin/server/errors', { params: { limit } }).then(r => r.data),
   clearErrors: () => api.post('/admin/server/errors/clear').then(r => r.data),
+  restart:     () => api.post('/admin/server/restart').then(r => r.data),
 };
 
 // MZV (Měsíční Zpětná Vazba). F1: subordinates, profile CRUD, meetings CRUD.

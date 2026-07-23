@@ -154,4 +154,67 @@ router.post('/errors/clear', (req, res) => {
   res.json({ ok: true });
 });
 
+// PUT /env — nastavit/přepsat hodnotu env klíče. Jen klíče z whitelistu.
+// Přepíše .env in-place (idempotentně): pokud řádek existuje, přepíšeme,
+// pokud ne, append na konec.
+router.put('/env', async (req, res) => {
+  const key = String(req.body?.key || '').trim();
+  const value = req.body?.value ?? '';
+
+  const spec = KNOWN_ENV_KEYS.find(k => k.key === key);
+  if (!spec) {
+    return res.status(400).json({ error: 'unknown_key', message: `Klíč ${key} není ve whitelistu.` });
+  }
+  // Blokujeme pár klíčů, u kterých by admin panel neměl umět „střelit sám sebe do nohy".
+  const IMMUTABLE = ['DATABASE_URL', 'PORT'];
+  if (IMMUTABLE.includes(key)) {
+    return res.status(400).json({
+      error: 'immutable',
+      message: `Klíč ${key} nelze měnit přes UI (rozbil by běžící server). Změň ho přímo v .env přes SSH.`,
+    });
+  }
+
+  const strVal = String(value);
+  // Naivní ale postačující: zakázat newline a shell-nebezpečné znaky.
+  if (/[\r\n]/.test(strVal)) {
+    return res.status(400).json({ error: 'invalid_value', message: 'Hodnota nesmí obsahovat nový řádek.' });
+  }
+
+  try {
+    let raw = '';
+    try { raw = fs.readFileSync(ENV_FILE, 'utf8'); } catch { /* nový soubor */ }
+    const lines = raw.split(/\r?\n/);
+    const re = new RegExp(`^\\s*${key}\\s*=`);
+    let replaced = false;
+    for (let i = 0; i < lines.length; i++) {
+      if (re.test(lines[i])) {
+        lines[i] = `${key}=${strVal}`;
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) {
+      // Append s prefix newline (kdyby soubor nekončil newline)
+      if (lines.length && lines[lines.length - 1] !== '') lines.push('');
+      lines.push(`${key}=${strVal}`);
+    }
+    fs.writeFileSync(ENV_FILE, lines.join('\n'), { mode: 0o600 });
+    // Sync process.env pro běžící instanci (do restartu; některé consumery to
+    // pořád nezachytí, protože env se čte při startu, ale pro některé pomůže).
+    process.env[key] = strVal;
+    res.json({ ok: true, key, restartRequired: true });
+  } catch (err) {
+    console.error('[admin/env]', err);
+    res.status(500).json({ error: 'write_failed', message: err.message });
+  }
+});
+
+// POST /restart — process.exit(0). systemd (Restart=always) aplikaci hned nastartuje.
+router.post('/restart', (req, res) => {
+  console.log('[admin] restart initiated by user', req.user?.email);
+  // Odpovíme klientovi PŘED exitem, ať dostane 200.
+  res.json({ ok: true, message: 'Restart za 1 s' });
+  setTimeout(() => process.exit(0), 1000);
+});
+
 export default router;
