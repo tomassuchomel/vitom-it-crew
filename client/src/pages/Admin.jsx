@@ -23,10 +23,12 @@ import Avatar from '../components/Avatar.jsx';
 import { useAuth, ROLE_LABELS } from '../auth.jsx';
 import { useTeams } from '../teams.jsx';
 import { teams as teamsApi, users as usersApi } from '../api.js';
+import AdminServerSection from './AdminServerSection.jsx';
 
 const TABS = [
-  { value: 'teams', label: '🏢 Teamy' },
-  { value: 'users', label: '👥 Uživatelé' },
+  { value: 'teams',  label: '🏢 Teamy' },
+  { value: 'users',  label: '👥 Uživatelé' },
+  { value: 'server', label: '🖥 Server' },
 ];
 
 export default function Admin() {
@@ -60,7 +62,9 @@ export default function Admin() {
         </div>
       </div>
       <div className="p-6">
-        {tab === 'teams' ? <TeamsAdminSection /> : <UsersAdminSection />}
+        {tab === 'teams'  && <TeamsAdminSection />}
+        {tab === 'users'  && <UsersAdminSection />}
+        {tab === 'server' && <AdminServerSection />}
       </div>
     </div>
   );

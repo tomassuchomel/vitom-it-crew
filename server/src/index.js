@@ -35,6 +35,8 @@ import dueChangeRequestsRoutes from './routes/due-change-requests.js';
 import mcpTokensRoutes from './routes/mcp-tokens.js';
 import meetingsRoutes from './routes/meetings.js';
 import mzvRoutes from './routes/mzv.js';
+import adminServerRoutes from './routes/admin-server.js';
+import { recordError } from './errorBuffer.js';
 import { requireMcpAuth, handleMcpRequest } from './mcp/index.js';
 import { startPushCron } from './pushCron.js';
 import { agentConfig, describeAgentConfig, validateAgentConfig } from './aiAgent/config.js';
@@ -83,6 +85,7 @@ app.use('/api/due-change-requests', dueChangeRequestsRoutes);
 app.use('/api/mcp-tokens', mcpTokensRoutes);
 app.use('/api/meetings', meetingsRoutes);
 app.use('/api/mzv', mzvRoutes);
+app.use('/api/admin/server', adminServerRoutes);
 
 // MCP server — /mcp přes Streamable HTTP + Bearer auth (MCP_AUTH_TOKEN).
 // Není pod /api aby externí Claude klient dostal čistou URL. Používá jiný
@@ -111,10 +114,30 @@ if (IS_PROD) {
   }
 }
 
-// Globální error handler
+// Globální error handler — logujeme + zaznamenáme do error bufferu pro Admin UI.
 app.use((err, req, res, next) => {
   console.error('[api error]', err);
+  recordError({
+    source: 'api',
+    message: err.message,
+    stack: err.stack,
+    path: req.originalUrl,
+    status: 500,
+    userId: req.user?.id,
+  });
   res.status(500).json({ error: 'server_error', message: err.message });
+});
+
+// Zachyt uncaught errors (např. v setInterval / cron) → do bufferu, ať se
+// aspoň zobrazí v Admin panelu, i když normálně padnou tiše do stderr.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaught]', err);
+  recordError({ source: 'uncaught', message: err.message, stack: err.stack });
+});
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  console.error('[unhandledRejection]', err);
+  recordError({ source: 'unhandledRejection', message: err.message, stack: err.stack });
 });
 
 // Spuštění – nejdřív migrace, pak listen

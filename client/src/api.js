@@ -121,6 +121,14 @@ export const meetings = {
   edits:          (id) => api.get(`/meetings/meetings/${id}/edits`).then(r => r.data),
 };
 
+// Admin Server panel — správa provozu bez SSH (jen admin role).
+export const adminServer = {
+  health:      () => api.get('/admin/server/health').then(r => r.data),
+  env:         () => api.get('/admin/server/env').then(r => r.data),
+  errors:      (limit = 50) => api.get('/admin/server/errors', { params: { limit } }).then(r => r.data),
+  clearErrors: () => api.post('/admin/server/errors/clear').then(r => r.data),
+};
+
 // MZV (Měsíční Zpětná Vazba). F1: subordinates, profile CRUD, meetings CRUD.
 // F2: PATCH, complete, reopen, delete, AI summarize + suggest tasks, list tasks.
 export const mzv = {
