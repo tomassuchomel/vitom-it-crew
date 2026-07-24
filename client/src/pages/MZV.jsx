@@ -680,13 +680,108 @@ function KpiRow({ index, section, rating, comment, disabled, onSet }) {
 }
 
 // Read-only pohled na profil — kompaktní kartička s kolonkami.
-function ProfileView({ profile, userId }) {
-  const kpi = Array.isArray(profile.kpi_sections) ? profile.kpi_sections : [];
-  const children = Array.isArray(profile.children) ? profile.children : [];
+// ── Odvozené připomínky z profilu (výročí, narozeniny, děti) ───────────────
+// Počítá se z už uložených dat (nástup, narození, děti) — žádný nový sběr.
+// Okno: události v příštích 60 dnech; u dětí dárková připomínka do 30 dní.
+function daysUntilNext(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  let next = new Date(today.getFullYear(), d.getMonth(), d.getDate());
+  if (next < today) next = new Date(today.getFullYear() + 1, d.getMonth(), d.getDate());
+  return { days: Math.round((next - today) / 86400000), turningYears: next.getFullYear() - d.getFullYear() };
+}
+
+// Celé roky + měsíce mezi datem a dneškem (pro věk / „ve firmě 6 let 3 měsíce").
+function yearsMonthsSince(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  const now = new Date();
+  let months = (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+  if (now.getDate() < d.getDate()) months -= 1;
+  if (months < 0) months = 0;
+  return { years: Math.floor(months / 12), months: months % 12 };
+}
+
+function tenureLabel(dateStr) {
+  const t = yearsMonthsSince(dateStr);
+  if (!t) return null;
+  const yl = t.years > 0 ? `${t.years} ${t.years === 1 ? 'rok' : t.years < 5 ? 'roky' : 'let'}` : '';
+  const ml = t.months > 0 ? `${t.months} ${t.months === 1 ? 'měsíc' : t.months < 5 ? 'měsíce' : 'měsíců'}` : '';
+  return [yl, ml].filter(Boolean).join(' ') || 'méně než měsíc';
+}
+
+function daysLabel(n) {
+  if (n === 0) return 'dnes';
+  if (n === 1) return 'zítra';
+  return `za ${n} ${n < 5 ? 'dny' : 'dní'}`;
+}
+
+function buildReminders(profile, windowDays = 60) {
+  const out = [];
+  const anniv = daysUntilNext(profile.hire_date);
+  if (anniv && anniv.days <= windowDays) {
+    out.push({ icon: '🎉', title: `${anniv.turningYears}. výročí ve firmě`, days: anniv.days });
+  }
+  const bday = daysUntilNext(profile.birth_date);
+  if (bday && bday.days <= windowDays) {
+    out.push({ icon: '🎂', title: `Narozeniny (bude ${bday.turningYears})`, days: bday.days });
+  }
+  for (const c of (Array.isArray(profile.children) ? profile.children : [])) {
+    const cb = daysUntilNext(c.birth_date);
+    if (cb && cb.days <= windowDays) {
+      out.push({
+        icon: '🎁',
+        title: `${c.name || 'Dítě'} — ${cb.turningYears}. narozeniny`,
+        hint: cb.days <= 30 ? 'kup dárek' : null,
+        days: cb.days,
+      });
+    }
+  }
+  return out.sort((a, b) => a.days - b.days);
+}
+
+function ProfileReminders({ profile }) {
+  const items = buildReminders(profile);
+  if (items.length === 0) {
+    return (
+      <div className="text-xs text-ink-400 italic mb-3">
+        Žádné blížící se výročí ani narozeniny (příštích 60 dní).
+      </div>
+    );
+  }
   return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+      {items.map((r, i) => (
+        <div key={i}
+          className={`flex items-center gap-2 rounded-lg px-3 py-2 border ${
+            r.days <= 7 ? 'bg-accent-50 border-accent-200' : 'bg-cream-50 border-ink-300'
+          }`}>
+          <span className="text-lg leading-none">{r.icon}</span>
+          <div className="min-w-0">
+            <div className="font-medium text-ink-800 truncate text-sm">{r.title}</div>
+            <div className="text-xs text-ink-500">{daysLabel(r.days)}{r.hint ? ` · ${r.hint}` : ''}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProfileView({ profile, userId }) {
+  // Skryj prázdné KPI sloty (uložené bez názvu i popisu).
+  const kpi = (Array.isArray(profile.kpi_sections) ? profile.kpi_sections : []).filter(s => s?.name || s?.description);
+  const children = Array.isArray(profile.children) ? profile.children : [];
+  const age = yearsMonthsSince(profile.birth_date)?.years;
+  const tenure = tenureLabel(profile.hire_date);
+  return (
+    <>
+    <ProfileReminders profile={profile} />
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-      <Field label="Narození" value={profile.birth_date && fmtDate(profile.birth_date)} />
-      <Field label="Ve firmě od" value={profile.hire_date && fmtDate(profile.hire_date)} />
+      <Field label="Narození" value={profile.birth_date && `${fmtDate(profile.birth_date)}${age != null ? ` · ${age} let` : ''}`} />
+      <Field label="Ve firmě od" value={profile.hire_date && `${fmtDate(profile.hire_date)}${tenure ? ` · ${tenure}` : ''}`} />
       <Field label="Ambice"
         value={profile.ambition_type === 'growth' ? 'Růst (superstar)'
               : profile.ambition_type === 'stability' ? 'Stabilita (rockstar)' : null} />
@@ -723,6 +818,7 @@ function ProfileView({ profile, userId }) {
         )}
       </div>
     </div>
+    </>
   );
 }
 
