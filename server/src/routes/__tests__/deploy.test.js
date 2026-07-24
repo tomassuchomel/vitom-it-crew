@@ -6,6 +6,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import crypto from 'node:crypto';
+import { getRecentErrors, clearErrors } from '../../errorBuffer.js';
 
 let server, port;
 
@@ -41,12 +42,14 @@ test('bez GITHUB_WEBHOOK_SECRET vrací 503', async () => {
   assert.equal(r.status, 503);
 });
 
-test('špatný HMAC podpis → 401', async () => {
+test('špatný HMAC podpis → 401 a NEplní error buffer (šum od botů)', async () => {
+  clearErrors();
   const r = await post('{"ref":"refs/heads/main"}', {
     'X-Hub-Signature-256': 'sha256=deadbeef',
     'X-GitHub-Event': 'push',
   });
   assert.equal(r.status, 401);
+  assert.equal(getRecentErrors(10).length, 0, 'bad signature nesmí zaplavit ring buffer');
 });
 
 test('ping event → pong', async () => {

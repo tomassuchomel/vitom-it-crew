@@ -80,12 +80,9 @@ router.post('/github-webhook',
 
     const signature = req.header('X-Hub-Signature-256') || '';
     if (!verifySignature(req.body, signature, secret)) {
-      recordError({
-        source: 'webhook-deploy',
-        message: 'bad HMAC signature',
-        path: '/api/deploy/github-webhook',
-        status: 401,
-      });
+      // Internetový šum (boti skenují URL) — recordError bychom zaplavili
+      // 100-slotový ring buffer a vytlačili reálné chyby. Jen do stderr.
+      console.warn('[deploy] bad HMAC signature from', req.ip);
       return res.status(401).json({ error: 'bad_signature' });
     }
 
