@@ -136,7 +136,7 @@ export default function Layout({ children }) {
             <TeamSwitcher />
           </div>
         </div>
-        <nav className="flex-1 py-4">
+        <nav className="flex-1 min-h-0 overflow-y-auto py-4">
           {NAV.filter(n =>
             (!n.requireSeeAll || can.seeAllHours(user)) &&
             (!n.requireManager || can.manageProjects(user)) &&
