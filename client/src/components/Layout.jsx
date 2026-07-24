@@ -210,6 +210,18 @@ export default function Layout({ children }) {
                         </NavLink>
                       );
                     })}
+                    {/* Cross-team úkoly (hidden subtask assignee apod.) — jen info řádek,
+                        součet za nečlenské týmy. Bez odkazu, filtrovací klik na 'Vše'
+                        je stejně ukáže. */}
+                    {(cat?.other || 0) > 0 && (
+                      <div
+                        className="flex items-center pl-14 pr-6 py-1.5 text-[13px] text-cream-100/60 italic"
+                        title="Úkoly/dotazy mimo tvé týmy (např. cross-team subtask). Klikni na 'Vše' pro zobrazení."
+                      >
+                        <span className="flex-1">· Ostatní</span>
+                        <span className="text-[11px] text-cream-100/50 ml-2">{cat.other}</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

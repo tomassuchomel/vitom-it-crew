@@ -21,19 +21,25 @@ import { query } from '../db.js';
 
 const router = Router();
 
-// Sečti řádky { team_id, n } do { total, byTeam }. Řádky bez team_id
-// (legacy úkoly / dotazy bez projektu) přeskočíme úplně, aby platilo
-// total = suma byTeam — jinak by badge ukazoval jiné číslo než submenu.
-function bucket(rows) {
+// Sečti řádky { team_id, n } do { total, byTeam, other }.
+// Řádky bez team_id (legacy úkoly / dotazy bez projektu) přeskočíme.
+// Řádky z týmu, kde user NENÍ členem (cross-team subtask assignee, cizí manager)
+// jdou do `other` — v UI se ukážou jako „Ostatní" a součet byTeam + other = total.
+// Admin (adminAll=true) vidí všechno v byTeam a `other` je vždy 0.
+function bucket(rows, memberTeams, adminAll) {
   const byTeam = {};
-  let total = 0;
+  let total = 0, other = 0;
   for (const r of rows) {
     if (r.team_id == null) continue;
     const n = Number(r.n) || 0;
     total += n;
-    byTeam[r.team_id] = (byTeam[r.team_id] || 0) + n;
+    if (adminAll || memberTeams.has(r.team_id)) {
+      byTeam[r.team_id] = (byTeam[r.team_id] || 0) + n;
+    } else {
+      other += n;
+    }
   }
-  return { total, byTeam };
+  return { total, byTeam, other };
 }
 
 router.get('/', requireAuth, async (req, res) => {
@@ -120,17 +126,22 @@ router.get('/', requireAuth, async (req, res) => {
     throw err;
   });
 
-  const [rq, nf, inbox, answ, mine, dueReq] = await Promise.all([
-    reviewQ, needsFixQ, inboxQ, answersQ, myTasksQ, dueRequestsQ,
+  // Load member teams — jen týmy, kde je user reálně členem. Admin vidí
+  // vše v byTeam (adminAll=true), pro ně memberTeams roli nehraje.
+  const memberQ = query(`SELECT team_id FROM team_members WHERE user_id = $1`, [uid]);
+
+  const [rq, nf, inbox, answ, mine, dueReq, mem] = await Promise.all([
+    reviewQ, needsFixQ, inboxQ, answersQ, myTasksQ, dueRequestsQ, memberQ,
   ]);
+  const memberTeams = new Set(mem.rows.map(r => r.team_id));
 
   res.json({
-    reviewQueue:   bucket(rq.rows),
-    needsFix:      bucket(nf.rows),
-    inboxPending:  bucket(inbox.rows),
-    answersUnread: bucket(answ.rows),
-    myTasks:       bucket(mine.rows),
-    dueRequests:   bucket(dueReq.rows),
+    reviewQueue:   bucket(rq.rows,    memberTeams, isAdmin),
+    needsFix:      bucket(nf.rows,    memberTeams, isAdmin),
+    inboxPending:  bucket(inbox.rows, memberTeams, isAdmin),
+    answersUnread: bucket(answ.rows,  memberTeams, isAdmin),
+    myTasks:       bucket(mine.rows,  memberTeams, isAdmin),
+    dueRequests:   bucket(dueReq.rows, memberTeams, isAdmin),
   });
 });
 
