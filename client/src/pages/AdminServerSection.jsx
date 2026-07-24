@@ -231,8 +231,15 @@ function EnvCard({ env, onSaved }) {
           </div>
         ))}
       </div>
-      <div className="mt-4 text-[11px] text-ink-500 italic">
-        💡 Po uložení klíče stiskni <strong>🔄 Restart aplikace</strong> nahoře, aby se změna projevila.
+      <div className="mt-4 space-y-1 text-[11px] italic">
+        <div className="text-ink-500">
+          💡 Po uložení klíče stiskni <strong>🔄 Restart aplikace</strong> nahoře, aby se změna projevila.
+        </div>
+        <div className="text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 not-italic">
+          ⚠ Změny platí od nejbližšího restartu. Na hostingu <strong>bez perzistentního filesystému</strong>
+          (Render, Heroku…) se při dalším redeployi ztratí — tam nastav env v dashboardu poskytovatele.
+          Na vlastním VPS se změny zachovávají.
+        </div>
       </div>
     </section>
   );

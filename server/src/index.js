@@ -36,6 +36,7 @@ import mcpTokensRoutes from './routes/mcp-tokens.js';
 import meetingsRoutes from './routes/meetings.js';
 import mzvRoutes from './routes/mzv.js';
 import adminServerRoutes from './routes/admin-server.js';
+import deployRoutes from './routes/deploy.js';
 import { recordError } from './errorBuffer.js';
 import { requireMcpAuth, handleMcpRequest } from './mcp/index.js';
 import { startPushCron } from './pushCron.js';
@@ -50,6 +51,8 @@ const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 const IS_PROD = process.env.NODE_ENV === 'production';
 
 app.use(cors({ origin: CLIENT_URL, credentials: true }));
+// deploy webhook MUSÍ být před express.json() — potřebuje raw bajty pro HMAC.
+app.use('/api/deploy', deployRoutes);
 app.use(express.json());
 app.use(cookieParser());
 if (HAS_GOOGLE) app.use(passport.initialize());

@@ -56,10 +56,24 @@ export const KNOWN_ENV_KEYS = [
   { key: 'VAPID_PUBLIC_KEY',          group: 'Push',      required: false, secret: false },
   { key: 'VAPID_PRIVATE_KEY',         group: 'Push',      required: false, secret: true  },
 
-  // MCP + GitHub (AI Agent)
+  // MCP + GitHub (AI Agent + webhook)
   { key: 'MCP_AUTH_TOKEN',            group: 'MCP',       required: false, secret: true  },
   { key: 'GITHUB_TOKEN',              group: 'GitHub',    required: false, secret: true  },
+  { key: 'GITHUB_WEBHOOK_SECRET',     group: 'GitHub',    required: false, secret: true  },
 ];
+
+// Bezpečně naformátuje hodnotu pro zápis do .env. Když má whitespace, # (jinak
+// komentář), uvozovku, = nebo začíná ' / ", zaobalíme do double-quotes a
+// eskejpneme \ a " uvnitř — dotenv double-quoted syntax to round-tripne.
+// Jinak zapíšeme bez uvozovek (dnešní chování pro běžné klíče).
+export function formatEnvValue(val) {
+  const s = String(val ?? '');
+  if (s === '') return '';
+  const needsQuoting = /[\s"#=]/.test(s) || /^["']/.test(s);
+  if (!needsQuoting) return s;
+  const escaped = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return `"${escaped}"`;
+}
 
 // Zamlžuje hodnotu — z 'sk-ant-abc…xyz' udělá 'sk-ant-abc…***' (posledních N znaků).
 function maskValue(value) {
@@ -191,10 +205,11 @@ router.put('/env', async (req, res) => {
     try { raw = fs.readFileSync(ENV_FILE, 'utf8'); } catch { /* nový soubor */ }
     const lines = raw.split(/\r?\n/);
     const re = new RegExp(`^\\s*${key}\\s*=`);
+    const formatted = formatEnvValue(strVal);
     let replaced = false;
     for (let i = 0; i < lines.length; i++) {
       if (re.test(lines[i])) {
-        lines[i] = `${key}=${strVal}`;
+        lines[i] = `${key}=${formatted}`;
         replaced = true;
         break;
       }
@@ -202,7 +217,7 @@ router.put('/env', async (req, res) => {
     if (!replaced) {
       // Append s prefix newline (kdyby soubor nekončil newline)
       if (lines.length && lines[lines.length - 1] !== '') lines.push('');
-      lines.push(`${key}=${strVal}`);
+      lines.push(`${key}=${formatted}`);
     }
     fs.writeFileSync(ENV_FILE, lines.join('\n'), { mode: 0o600 });
     // Sync process.env pro běžící instanci (do restartu; některé consumery to
@@ -215,7 +230,8 @@ router.put('/env', async (req, res) => {
   }
 });
 
-// POST /restart — process.exit(0). systemd (Restart=always) aplikaci hned nastartuje.
+// POST /restart — process.exit(0). Process manager (systemd Restart=always,
+// Render/Heroku, atd.) aplikaci hned nastartuje.
 router.post('/restart', (req, res) => {
   console.log('[admin] restart initiated by user', req.user?.email);
   // Odpovíme klientovi PŘED exitem, ať dostane 200.
