@@ -136,6 +136,8 @@ export const adminServer = {
 export const mzv = {
   subordinates: () => api.get('/mzv/subordinates').then(r => r.data),
   getProfile:   (userId) => api.get(`/mzv/profile/${userId}`).then(r => r.data),
+  // Skóre plnění úkolů podřízeného + měsíční trend (pro profil).
+  score:        (userId, months = 6) => api.get(`/mzv/score/${userId}`, { params: { months } }).then(r => r.data),
   putProfile:   (userId, data) => api.put(`/mzv/profile/${userId}`, data).then(r => r.data),
   listMeetings: (subordinateId) => api.get('/mzv/meetings', { params: { subordinate_id: subordinateId } }).then(r => r.data),
   createMeeting: (subordinateId, meetingDate) => api.post('/mzv/meetings', { subordinate_id: subordinateId, meeting_date: meetingDate }).then(r => r.data),
