@@ -1,9 +1,11 @@
-// Skóre plnění úkolů jednoho uživatele + měsíční trend — pro MZV profil.
+// Skóre plnění úkolů jednoho uživatele + měsíční trend + seznamy úkolů per
+// kategorie (pro drill-down v MZV profilu). Pro MZV profil.
 //
 // Definice jako Scoreboard (drž konzistenci):
 //   done_on_time: status='done' AND completed_at <= due_date + 1 den
 //   done_late:    status='done' AND completed_at >  due_date + 1 den
 //   overdue:      status<>'done' AND due_date < dnes
+//   active:       status<>'done' AND (due_date IS NULL OR due_date >= dnes)  ← rozpracované
 //   success_rate: done_on_time / (done_on_time + done_late + overdue) v %
 //
 // Samostatný modul (importuje jen db.js), aby šel testovat bez HTTP/auth vrstvy.
@@ -17,7 +19,8 @@ export async function userScore(userId, months = 6) {
       COUNT(*) FILTER (WHERE status='done' AND due_date IS NOT NULL AND completed_at::date <= due_date + 1) AS done_on_time,
       COUNT(*) FILTER (WHERE status='done' AND due_date IS NOT NULL AND completed_at::date >  due_date + 1) AS done_late,
       COUNT(*) FILTER (WHERE status='done' AND due_date IS NULL)                                            AS done_no_deadline,
-      COUNT(*) FILTER (WHERE status<>'done' AND due_date IS NOT NULL AND due_date < CURRENT_DATE)           AS overdue
+      COUNT(*) FILTER (WHERE status<>'done' AND due_date IS NOT NULL AND due_date < CURRENT_DATE)           AS overdue,
+      COUNT(*) FILTER (WHERE status<>'done' AND (due_date IS NULL OR due_date >= CURRENT_DATE))             AS active
     FROM tasks WHERE assignee_id = $1
   `, [userId]);
   const s = snapR.rows[0];
@@ -39,7 +42,6 @@ export async function userScore(userId, months = 6) {
     GROUP BY 1
   `, [userId, win]);
 
-  // Doplň chybějící měsíce nulami → souvislá řada `win` měsíců (nejstarší → nejnovější).
   const map = new Map(trendR.rows.map(r => [r.ym, { on_time: Number(r.on_time), late: Number(r.late) }]));
   const now = new Date();
   const series = [];
@@ -48,11 +50,31 @@ export async function userScore(userId, months = 6) {
     const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     const v = map.get(ym) || { on_time: 0, late: 0 };
     const done = v.on_time + v.late;
-    series.push({
-      ym,
-      on_time: v.on_time,
-      late: v.late,
-      rate: done > 0 ? Math.round((v.on_time / done) * 100) : null,
+    series.push({ ym, on_time: v.on_time, late: v.late, rate: done > 0 ? Math.round((v.on_time / done) * 100) : null });
+  }
+
+  // Seznamy úkolů per kategorie (drill-down). Kap na 100 na kategorii.
+  const listR = await query(`
+    SELECT t.id, t.title, t.status, t.due_date, t.completed_at, p.name AS project_name,
+      CASE
+        WHEN t.status='done' AND t.due_date IS NOT NULL AND t.completed_at::date <= t.due_date + 1 THEN 'on_time'
+        WHEN t.status='done' AND t.due_date IS NOT NULL AND t.completed_at::date >  t.due_date + 1 THEN 'late'
+        WHEN t.status<>'done' AND t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE           THEN 'overdue'
+        WHEN t.status<>'done'                                                                     THEN 'active'
+      END AS category
+    FROM tasks t
+    JOIN projects p ON p.id = t.project_id
+    WHERE t.assignee_id = $1
+      AND (t.status <> 'done' OR (t.status = 'done' AND t.due_date IS NOT NULL))
+    ORDER BY t.due_date ASC NULLS LAST, t.id
+  `, [userId]);
+
+  const tasks = { on_time: [], late: [], overdue: [], active: [] };
+  for (const r of listR.rows) {
+    if (!tasks[r.category] || tasks[r.category].length >= 100) continue;
+    tasks[r.category].push({
+      id: r.id, title: r.title, status: r.status,
+      due_date: r.due_date, completed_at: r.completed_at, project_name: r.project_name,
     });
   }
 
@@ -62,6 +84,8 @@ export async function userScore(userId, months = 6) {
     done_late: late,
     done_no_deadline: Number(s.done_no_deadline),
     overdue,
+    active: Number(s.active),
     months: series,
+    tasks,
   };
 }

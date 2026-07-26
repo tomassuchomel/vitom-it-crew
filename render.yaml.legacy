@@ -1,3 +1,6 @@
+# LEGACY — produkce dnes běží na vlastním VPS (viz DEPLOY.md).
+# Tento soubor je jen historický artefakt původního Render + Neon deploymentu.
+# Aktivně se nepoužívá.
 services:
   - type: web
     name: vitom-it-crew

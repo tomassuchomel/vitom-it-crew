@@ -58,6 +58,10 @@ async function seed() {
       due_date = (date_trunc('month', CURRENT_DATE) - INTERVAL '15 days')::date
     WHERE title='T4 minulý'
   `);
+
+  // Rozpracovaný s budoucím termínem → active.
+  await ins('T5 aktivní', 'in_progress', null, null);
+  await q(`UPDATE tasks SET due_date = CURRENT_DATE + 5 WHERE title='T5 aktivní'`);
 }
 
 test('snapshot: success_rate + počty sedí', async () => {
@@ -74,6 +78,17 @@ test('trend: řada 6 měsíců, aktuální 50 %, jeden měsíc 100 %', async () 
   const current = d.months[d.months.length - 1];
   assert.equal(current.rate, 50, 'aktuální měsíc: 1 včas / 2 = 50 %');
   assert.ok(d.months.some(m => m.rate === 100), 'minulý měsíc má 100 %');
+});
+
+test('drill-down: seznamy úkolů per kategorie', async () => {
+  const d = await userScore(userId, 6);
+  assert.equal(d.active, 1, 'active count (T5)');
+  assert.equal(d.tasks.on_time.length, 2, 'on_time list');
+  assert.equal(d.tasks.late.length, 1, 'late list');
+  assert.equal(d.tasks.overdue.length, 1, 'overdue list');
+  assert.equal(d.tasks.active.length, 1, 'active list');
+  assert.ok(d.tasks.overdue.some(t => t.title === 'T3 overdue'), 'overdue obsahuje T3');
+  assert.ok(d.tasks.active.some(t => t.title === 'T5 aktivní'), 'active obsahuje T5');
 });
 
 test('cizí uživatel bez úkolů → success_rate null', async () => {
