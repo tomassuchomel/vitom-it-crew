@@ -147,8 +147,9 @@ npm run dev
 # → MCP endpoint dostupný na http://localhost:4000/mcp
 ```
 
-Na Renderu přidej `MCP_AUTH_TOKEN` v **Environment** sekci → automatický restart.
-**Nikdy** token nedávej do gitu. Bez tohoto env var vrací `/mcp` `503 mcp_not_configured`.
+V produkci ho nastav v Admin panelu (🖥 Server → Environment → `MCP_AUTH_TOKEN`)
+a klikni 🔄 Restart aplikace. **Nikdy** token nedávej do gitu. Bez tohoto env
+var vrací `/mcp` `503 mcp_not_configured`.
 
 ### URL a autentizace
 

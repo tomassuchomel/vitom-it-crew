@@ -124,9 +124,9 @@ export default function Reports() {
             )}
           </div>
 
-          <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <div className="bg-white rounded-xl border border-slate-200 p-5 overflow-x-auto">
             <h3 className="font-semibold text-slate-800 mb-4">Detail tabulka</h3>
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[420px] text-sm">
               <thead className="text-xs uppercase text-slate-500 tracking-wide border-b border-slate-200">
                 <tr>
                   <th className="text-left py-2">Skupina</th>
@@ -148,9 +148,9 @@ export default function Reports() {
         </div>
 
         {/* Náklady projektů – vždy celkové */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5">
+        <div className="bg-white rounded-xl border border-slate-200 p-5 overflow-x-auto">
           <h3 className="font-semibold text-slate-800 mb-4">Celkové náklady na projekty</h3>
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[560px] text-sm">
             <thead className="text-xs uppercase text-slate-500 tracking-wide border-b border-slate-200">
               <tr>
                 <th className="text-left py-2">Projekt</th>

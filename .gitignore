@@ -28,3 +28,6 @@ yarn-error.log*
 .idea/
 .vscode/
 *.swp
+
+# Zálohy .env (mohou obsahovat secrety) – nikdy do gitu
+*.env.backup

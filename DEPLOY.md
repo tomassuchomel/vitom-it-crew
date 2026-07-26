@@ -1,169 +1,160 @@
-# Nasazení VITOM IT Crew na Render + Neon
+# Nasazení VITOM IT Crew (vlastní VPS)
 
-Tento průvodce tě provede nasazením aplikace **bez terminálu** – jen klikáním v prohlížeči. Po dokončení poběží aplikace na `https://it.realitniekosystem.cz`.
+Produkce běží na vlastním VPS pod `https://it.realitniekosystem.cz`.
+Aplikace je Node.js proces spravovaný systemd, staticky reverzně proxy-ovaný
+přes nginx s Let's Encrypt certifikátem. Auto-deploy jede přes GitHub push
+webhook, který na serveru spustí deploy skript.
 
-**Časový odhad:** 20–30 minut.
+> Konkrétní adresář, jméno DB uživatele a další VPS detaily doplní Tom
+> (jsou popsány placeholdery `<…>`).
 
----
+## Architektura provozu
 
-## Co budeme dělat
-
-1. **Neon** – založíme zdarma PostgreSQL databázi
-2. **GitHub** – kód aplikace tam pushnu já (přes GitHub MCP)
-3. **Render** – připojí se na GitHub a postaví aplikaci
-4. **DNS** – nasměrujeme tvoji subdoménu na Render
-
----
-
-## Krok 1: Neon (databáze) – 5 minut
-
-1. Otevři **https://neon.tech**
-2. Klikni **„Sign up"** → vyber **„Continue with Google"** → přihlas se tvým Google účtem
-3. Po přihlášení tě Neon provede vytvořením prvního projektu:
-   - **Project name:** `vitom-it-crew`
-   - **Postgres version:** ponech default (16)
-   - **Region:** **Europe (Frankfurt)** ← důležité, ať je rychlejší
-   - Klikni **Create project**
-4. Po vytvoření uvidíš obrazovku s **Connection string**. Vypadá takto:
-   ```
-   postgres://neondb_owner:abc123XYZ@ep-cool-mouse-12345.eu-central-1.aws.neon.tech/neondb?sslmode=require
-   ```
-5. **Zkopíruj si ho** (ikonka kopírování vedle stringu) – budeme ho potřebovat v Renderu
-
-> **Free tier:** 0.5 GB storage, auto-suspend při neaktivitě (~5 minut), neomezeně dotazů. Pro malý tým zdarma stačí.
-
----
-
-## Krok 2: GitHub repo (já udělám)
-
-Až mě v chatu pustíš, **autorizuji se v GitHubu** (jednou klikneš „Authorize") a:
-- vytvořím nový repo `vitom-it-crew`
-- pushnu tam kompletní kód
-- pošlu ti URL repa
-
-Z tvé strany to bude jen **jedno tlačítko** v autorizačním dialogu.
-
----
-
-## Krok 3: Render – 10 minut
-
-1. Otevři **https://render.com**
-2. Klikni **„Get Started"** → **„Sign up with GitHub"** → autorizuj (vidí jen veřejná data, deploy si zvlášť povolíme)
-3. Po přihlášení v levém horním rohu klikni **„+ New"** → **„Web Service"**
-4. Připoj repo:
-   - Klikni **„Build and deploy from a Git repository"** → **„Next"**
-   - Vyber repo **`vitom-it-crew`** (možná budeš muset kliknout „Configure account" a povolit Render přístup k tomu repu)
-5. Vyplň formulář:
-   - **Name:** `vitom-it-crew`
-   - **Region:** **Frankfurt (EU Central)** ← stejně jako Neon
-   - **Branch:** `main`
-   - **Root Directory:** prázdné (necháme root repa)
-   - **Runtime:** `Node`
-   - **Build Command:** `npm run build:render`
-   - **Start Command:** `npm run start:render`
-   - **Instance Type:** **Free**
-6. Sekci **„Environment Variables"** rozbal a přidej **DATABASE_URL**:
-   - **Key:** `DATABASE_URL`
-   - **Value:** *vlož ten connection string z Neonu*
-7. (Volitelné) Pokud chceš AI Coach hned funkční, přidej i:
-   - **Key:** `ANTHROPIC_API_KEY`
-   - **Value:** *tvůj klíč z https://console.anthropic.com/settings/keys*
-8. Klikni **„Create Web Service"** úplně dole
-9. Render zahájí build. Sleduj log – **trvá 3–5 minut**. Měl bys vidět:
-   ```
-   ==> Build successful 🎉
-   ==> Deploying...
-   🚀 VITOM IT Crew server běží na portu 10000
-   ==> Your service is live 🎉
-   ```
-10. **První spuštění naplň databázi**. V Render dashboardu klikni v levém menu **„Shell"** a do něj zadej:
-    ```
-    npm run seed:render
-    ```
-    Po pár sekundách uvidíš `✅ Seed hotový`. (To je jediný „terminálový" krok – jen jedno tlačítko a jeden command, **tohle stačí jednou.**)
-
-V tuhle chvíli aplikace běží na `https://vitom-it-crew.onrender.com` (URL si zkopíruj z horního pravého rohu).
-
----
-
-## Krok 4: DNS – nastavení `it.realitniekosystem.cz` – 5 minut
-
-1. V Render dashboardu klikni vlevo na **„Settings"** → scrolluj na **„Custom Domains"** → **„Add Custom Domain"**
-2. Zadej: **`it.realitniekosystem.cz`** → **„Save"**
-3. Render zobrazí **DNS instrukce** – ukáže ti, jaký záznam přidat. Bude to buď:
-   - **CNAME** záznam `it` → `vitom-it-crew.onrender.com`
-   - nebo **A** záznam `it` → některá z Render IP
-
-4. Otevři **admin panel registrátora**, kde máš `realitniekosystem.cz`. Najdi sekci **DNS** nebo **DNS záznamy** a klikni **Přidat záznam**:
-
-   | Typ | Název | Hodnota | TTL |
-   |---|---|---|---|
-   | `CNAME` | `it` | `vitom-it-crew.onrender.com` | 3600 |
-
-   Pole **Název** vyplň jen `it` (ne `it.realitniekosystem.cz` ani `it.`). Některé panely zobrazí celou doménu automaticky.
-
-5. **Ulož**. Vrať se do Renderu a klikni **„Verify"**. Render musí potvrdit, že DNS sedí (může chvíli trvat).
-
-6. Render automaticky vyřídí **HTTPS certifikát** přes Let's Encrypt do ~5 minut.
-
-7. Po úspěšném ověření otevři **https://it.realitniekosystem.cz** – aplikace běží!
-
-### Pokud registrátor nepovolí CNAME
-
-Některé registrátory neumí CNAME pro subdomény, použij **A záznam**:
-- Render ti ukáže IP adresy (obvykle 3–4)
-- Přidej pro každou jeden záznam typu **A**, název `it`, hodnota = IP
-
----
-
-## Krok 5: Workflow do budoucna – jak fungujeme dál
-
-Od teď:
-1. **Já v Cowork režimu napíšu/upravím kód** (jako doteď)
-2. **Já udělám git commit + push na GitHub** (přes GitHub MCP)
-3. **Render to automaticky detekuje**, postaví novou verzi (~2 minuty) a nasadí
-4. **Ty refreshneš `it.realitniekosystem.cz`** v prohlížeči a vidíš změny
-
-Ve své app sleduj **„Logs"** v Render dashboardu, kdyby něco padlo – tam uvidíš případné chyby.
-
----
-
-## Důležité poznámky
-
-### Cold start (free tier)
-Render free tier **uspí aplikaci po 15 minutách neaktivity**. První otevření pak trvá ~30 sekund (probouzí se). Pro denní práci týmu je to zanedbatelné – po prvním načtení dne to už běží svižně.
-
-**Řešení:** Pokud chceš permanentně běžící bez cold startů, upgrade na Render **Starter $7/měsíc**. Klik v Render dashboard → Settings → Instance Type.
-
-### Persistent disk (free tier)
-Free tier **nemá persistentní disk** – nahrané fotky/videa se při deployi smažou. Pro produkční přílohy budeme potřebovat:
-- buď upgrade na Render Starter ($7) s diskem
-- nebo přesun na S3/Cloudflare R2 (zdarma 10GB, velmi snadné)
-
-Pro start to nevadí – databáze (projekty, úkoly, hodiny, dotazy) je na Neonu a ta je perzistentní.
-
-### Aktualizace seedu
-Pokud chceš znovu naplnit databázi ukázkovými daty (smaže existující!), v Render Shell zadej:
 ```
-npm run seed:render
+GitHub main push
+   │
+   ▼
+POST https://it.realitniekosystem.cz/api/deploy/github-webhook
+   │  (HMAC-SHA256 přes GITHUB_WEBHOOK_SECRET)
+   ▼
+Node handler → spawn `sudo /home/vitom/deploy.sh`
+   │
+   ▼
+deploy skript: git pull → npm install → client build → systemctl restart vitom
+   │
+   ▼
+systemd (Restart=always) znovu nastartuje `vitom.service`
 ```
 
-### Google OAuth
-Pokud chceš zapnout Google login:
-1. V https://console.cloud.google.com/ uprav OAuth credentials
-2. Authorized redirect URI: `https://it.realitniekosystem.cz/api/auth/google/callback`
-3. V Render env variables nastav `GOOGLE_CLIENT_ID` a `GOOGLE_CLIENT_SECRET`
-4. Render se sám restartuje
+## Komponenty na VPS
 
----
+| Komponenta | Kde je / jak jmenuje | Poznámka |
+|---|---|---|
+| OS | Debian 13 (trixie) | |
+| Node runtime | Node 22 (LTS+) | `node --version` |
+| App user | `vitom` | non-root, čte/píše jen do `/home/vitom/app` |
+| App path | `/home/vitom/app` | git working tree |
+| Systemd unit (web) | `vitom.service` | `npm start` → port 4000 |
+| Systemd unit (AI worker) | `vitom-ai-worker.service` | `npm run ai-worker` (samostatný proces) |
+| Nginx | `/etc/nginx/sites-available/vitom` | reverse proxy `:4000` → `443` |
+| TLS | Let's Encrypt přes certbot | auto-renew via systemd timer |
+| Deploy skript | `/home/vitom/deploy.sh` | ⚠ TODO: přesunout do `/usr/local/sbin/vitom-deploy.sh` (root-owned, viz Bezpečnost níže) |
+| Databáze | PostgreSQL 17, běžící lokálně na tomto VPS | dřív Neon; datové schéma se aplikuje samo při startu (idempotentní migrace) |
 
-## Když něco nefunguje
+## Start / stop / logy
 
-- **Build padá v Render Logs** → zkopíruj mi posledních 20 řádků logu, opravím
-- **DNS se nepropaguje** → na https://dnschecker.org zadej `it.realitniekosystem.cz` a podívej se, zda už záznam vidí všechny servery (může trvat až 2 hodiny)
-- **Aplikace běží, ale prázdná stránka** → v Console (F12 v Chrome) podívej se na chyby a pošli mi screenshot
-- **Cokoliv jiného** → screenshot stránky + posledních 20 řádků z Render Logs → já to vyřeším
+```bash
+# Stav
+sudo systemctl status vitom vitom-ai-worker
 
----
+# Restart (např. po ruční změně .env)
+sudo systemctl restart vitom
 
-*Konec průvodce. Pojďme na to!*
+# Logy
+sudo journalctl -u vitom -f
+sudo journalctl -u vitom-ai-worker -f
+```
+
+Aplikace jde restartovat i z Admin panelu (🖥 Server → 🔄 Restart aplikace) —
+Node udělá `process.exit(0)` a systemd (`Restart=always`) proces hned nastartuje.
+
+## Environment (`.env`)
+
+Cesta: `/home/vitom/app/server/.env` (mode 0600, uživatel `vitom`).
+`.env` je gitignored — deploy ho nepřepíše.
+
+Klíče se dají číst i editovat z Admin panelu (🖥 Server → Environment):
+- Whitelist v `server/src/routes/admin-server.js` (`KNOWN_ENV_KEYS`).
+- `DATABASE_URL` a `PORT` jsou označené jako immutable v UI (jejich
+  editace přes UI je zablokovaná).
+- Změny přes UI se zapíšou přímo do `.env` a projeví se po restartu.
+- Na VPS jsou přetrvávající — přežijí redeploy. (Na Renderu/Heroku by se
+  ztratily s ephemerálním FS — proto varování v UI.)
+
+Povinné klíče: `NODE_ENV=production`, `PORT=4000`, `DATABASE_URL`,
+`DATABASE_SSL=false` (lokální DB nemá TLS), `JWT_SECRET`, `CLIENT_URL`,
+`APP_BASE_URL`, `ANTHROPIC_API_KEY`.
+
+Volitelné: `MICROSOFT_*` (M365 mail), `VAPID_*` (Web Push),
+`TURNSTILE_*` (Cloudflare antispam), `MCP_AUTH_TOKEN` (MCP server),
+`GITHUB_TOKEN` (AI agent), `GITHUB_WEBHOOK_SECRET` (auto-deploy webhook).
+
+## Auto-deploy: GitHub webhook
+
+### Nastavení (jednorázově)
+
+1) **Sudoers rule** na VPS, aby node mohl spustit deploy skript bez hesla:
+   ```bash
+   echo 'vitom ALL=(root) NOPASSWD: /home/vitom/deploy.sh' \
+     | sudo tee /etc/sudoers.d/vitom-deploy
+   sudo chmod 440 /etc/sudoers.d/vitom-deploy
+   ```
+
+2) **Secret** (silný random hex):
+   ```bash
+   openssl rand -hex 32
+   ```
+
+3) **`GITHUB_WEBHOOK_SECRET`** v Admin panelu → 🖥 Server → Environment →
+   „nastavit" → paste secret → Enter → 🔄 Restart aplikace.
+
+4) **GitHub repo** → *Settings → Webhooks → Add webhook*:
+   - Payload URL: `https://it.realitniekosystem.cz/api/deploy/github-webhook`
+   - Content type: `application/json`
+   - Secret: (stejný hex jako v Admin panelu)
+   - Which events: **Just the push event**
+   - Active: ✅
+
+Po **Add webhook** GitHub pošle *ping* — v tabu *Recent Deliveries* má být
+zeleně ✓ s response `{"ok":true,"pong":true}`.
+
+### Jak to jede
+
+- `POST /api/deploy/github-webhook` ověří HMAC-SHA256 přes
+  `X-Hub-Signature-256`. Špatný podpis → 401, jen `console.warn` (ne do error bufferu — internetový šum od botů by ho jinak zaplavil).
+- Bez `GITHUB_WEBHOOK_SECRET` → 503 (fail-closed).
+- `event=ping` → `{ok, pong: true}`. Ostatní eventy se ignorují.
+- Jen `ref=refs/heads/main` → `res.json({deploying:true, commit})` a **fire-and-forget** spawn `sudo /home/vitom/deploy.sh` (odpověď hned, deploy poté — jinak by nás `systemctl restart` odstřihl před 200).
+- Souběžný request (dva rychlé pushe za sebou) druhý ignoruje.
+
+### Bezpečnost deploy skriptu (TODO doporučení)
+
+Skript teď leží v `/home/vitom/deploy.sh` — což znamená, že user `vitom` (pod kterým běží aplikace) může do skriptu **zapisovat**. Kdyby útočník získal RCE v Node procesu, může skript přepsat a přes existující sudoers rule spustit **cokoli jako root**.
+
+Doporučené utužení:
+1) Přesunout skript do `/usr/local/sbin/vitom-deploy.sh` s ownership `root:root` a modem `0755` (čitelný pro vitom, ne zapisovatelný).
+2) Aktualizovat sudoers rule na novou cestu.
+3) V handleru `server/src/routes/deploy.js` opravit spawn path.
+
+Zatím to jede se známým rizikem — konsolidovat pak v samostatném commitu.
+
+## Ruční nasazení (bez webhooku)
+
+Pokud webhook selže nebo chceš deploy vynutit z terminálu:
+
+```bash
+# jako root nebo uživatel s právem spustit skript
+sudo /home/vitom/deploy.sh
+```
+
+Skript dělá: `git pull origin main` → `npm run install:all` → `client && npm run build` → `systemctl restart vitom` → tichý restart AI workeru.
+
+## Databáze
+
+Lokální PostgreSQL 17 na tomto VPS. Připojení přes `DATABASE_URL` v `.env`.
+Backup/restore doplní Tom (`<postup>`). Migrace se aplikují **automaticky při
+startu** aplikace — inline schéma (`server/src/db.js`) + souborové migrace
+(`server/src/migrations/*.sql`), obě idempotentní.
+
+## DNS a TLS
+
+- Doména `it.realitniekosystem.cz` má A záznam mířící na VPS.
+- TLS: Let's Encrypt přes certbot; auto-renew přes systemd timer
+  (`sudo systemctl status certbot.timer`).
+
+## Historie: dřívější nasazení na Renderu
+
+Aplikace původně běžela na Rentder Free tier + Neon PostgreSQL. Migrace
+proběhla na vlastní VPS (viz commit history a CHANGELOG). Konfigurační
+soubor `render.yaml.legacy` v repu je jen historický artefakt — aktivně
+se nepoužívá.

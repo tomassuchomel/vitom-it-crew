@@ -770,6 +770,56 @@ function ProfileReminders({ profile }) {
   );
 }
 
+// Skóre plnění úkolů podřízeného (v termínu) + měsíční trend jako sparkline.
+// Data z /api/mzv/score/:userId (stejná definice jako Scoreboard).
+function ProfileScore({ userId }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    let ok = true;
+    api.score(userId, 6).then(d => { if (ok) setData(d); }).catch(() => { if (ok) setErr(true); });
+    return () => { ok = false; };
+  }, [userId]);
+
+  if (err) return null;
+  if (!data) return <div className="text-xs text-ink-400 mb-4">Načítám skóre…</div>;
+  if (data.success_rate == null) {
+    return <div className="text-xs text-ink-400 italic mb-4">Zatím není dost dokončených úkolů s termínem pro skóre.</div>;
+  }
+
+  const months = Array.isArray(data.months) ? data.months : [];
+  const rated = months.filter(m => m.rate != null);
+  const last = rated[rated.length - 1]?.rate;
+  const prev = rated[rated.length - 2]?.rate;
+  const delta = (last != null && prev != null) ? last - prev : null;
+
+  return (
+    <div className="rounded-lg border border-ink-300 bg-cream-50 px-3 py-2 mb-4">
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-[11px] uppercase tracking-wide text-ink-500">📈 Skóre plnění (v termínu)</div>
+        {delta != null && (
+          <span className={`text-xs font-medium ${delta > 0 ? 'text-green-600' : delta < 0 ? 'text-accent-600' : 'text-ink-500'}`}>
+            {delta > 0 ? '▲' : delta < 0 ? '▼' : '■'} {Math.abs(delta)} b. vs minulý měsíc
+          </span>
+        )}
+      </div>
+      <div className="flex items-end gap-3 flex-wrap">
+        <div className="text-2xl font-bold text-ink-800 leading-none">{data.success_rate}%</div>
+        <div className="text-xs text-ink-500 pb-0.5">
+          {data.done_on_time} včas · {data.done_late} pozdě · {data.overdue} po termínu
+        </div>
+        <div className="flex items-end gap-0.5 ml-auto h-8" title="Posledních 6 měsíců (% v termínu)">
+          {months.map((m, i) => (
+            <div key={i} title={`${m.ym}: ${m.rate == null ? '—' : m.rate + '%'}`}
+              className="w-2 rounded-t bg-brand-300"
+              style={{ height: `${m.rate == null ? 2 : Math.max(4, (m.rate / 100) * 32)}px` }} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProfileView({ profile, userId }) {
   // Skryj prázdné KPI sloty (uložené bez názvu i popisu).
   const kpi = (Array.isArray(profile.kpi_sections) ? profile.kpi_sections : []).filter(s => s?.name || s?.description);
@@ -779,6 +829,7 @@ function ProfileView({ profile, userId }) {
   return (
     <>
     <ProfileReminders profile={profile} />
+    <ProfileScore userId={userId} />
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
       <Field label="Narození" value={profile.birth_date && `${fmtDate(profile.birth_date)}${age != null ? ` · ${age} let` : ''}`} />
       <Field label="Ve firmě od" value={profile.hire_date && `${fmtDate(profile.hire_date)}${tenure ? ` · ${tenure}` : ''}`} />

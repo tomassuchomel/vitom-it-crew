@@ -10,6 +10,7 @@ import { query } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { callAI, stripHtml } from '../meetingsAi.js';
 import { processNote } from '../ai.js';
+import { userScore } from '../mzvScore.js';
 
 const router = Router();
 
@@ -617,6 +618,18 @@ router.get('/meetings/:id/tasks', requireAuth, async (req, res) => {
     if (err.code === '42703') return res.json({ tasks: [] }); // sloupec ještě neexistuje
     throw err;
   }
+});
+
+// GET /score/:userId — skóre plnění úkolů podřízeného + měsíční trend.
+// Autorizace přes canManage (manager daného člověka nebo admin).
+router.get('/score/:userId', requireAuth, async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'invalid_user_id' });
+  if (!await canManage(req.user.id, req.user.role, userId)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const data = await userScore(userId, req.query.months);
+  res.json(data);
 });
 
 export default router;
