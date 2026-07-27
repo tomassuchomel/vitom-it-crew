@@ -70,6 +70,10 @@ export const reviews = {
   // verdict: 'approved' | 'rejected'; pro rejected je comment povinný.
   decide:   (taskId, verdict, comment) =>
     api.post(`/tasks/${taskId}/review`, { verdict, comment }).then(r => r.data),
+  // Schválit úkol + rovnou založit navazující úkol (vlastní termín). data:
+  // { comment?, title, due_date, description?, assignee_id?, priority? }
+  approveAndContinue: (taskId, data) =>
+    api.post(`/tasks/${taskId}/approve-and-continue`, data).then(r => r.data),
   // Historie všech rozhodnutí pro task – pro programátora, aby viděl, co bylo vráceno.
   history:  (taskId) => api.get(`/tasks/${taskId}/reviews`).then(r => r.data),
 };

@@ -9,6 +9,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import ReviewTaskDialog from '../components/ReviewTaskDialog.jsx';
+import ApproveContinueDialog from '../components/ApproveContinueDialog.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { reviews as reviewsApi } from '../api.js';
 
@@ -25,6 +26,8 @@ export default function Review() {
   const [detailTask, setDetailTask] = useState(null);
   // null | { task, verdict } – pro ReviewTaskDialog otevřený přímo z listu
   const [reviewing, setReviewing] = useState(null);
+  // task, pro který otevíráme dialog „Schválit a navázat"
+  const [continuing, setContinuing] = useState(null);
   const [searchParams] = useSearchParams();
   const teamIdFilter = Number(searchParams.get('team')) || null;
 
@@ -74,6 +77,7 @@ export default function Review() {
                 task={t}
                 onOpen={() => setDetailTask(t)}
                 onApprove={() => setReviewing({ task: t, verdict: 'approved' })}
+                onContinue={() => setContinuing(t)}
                 onReject={() => setReviewing({ task: t, verdict: 'rejected' })}
               />
             ))}
@@ -99,11 +103,20 @@ export default function Review() {
           onDone={() => { setReviewing(null); load(true); }}
         />
       )}
+
+      {/* Schválit + rovnou navázat úkol s vlastním termínem */}
+      {continuing && (
+        <ApproveContinueDialog
+          task={continuing}
+          onClose={() => setContinuing(null)}
+          onDone={() => { setContinuing(null); load(true); }}
+        />
+      )}
     </div>
   );
 }
 
-function ReviewRow({ task, onOpen, onApprove, onReject }) {
+function ReviewRow({ task, onOpen, onApprove, onContinue, onReject }) {
   const due = task.due_date ? String(task.due_date).slice(0, 10) : null;
   const priorityPill = PRIORITY_PILL[task.priority];
   const wasRejected = task.review_count > 0;
@@ -155,6 +168,11 @@ function ReviewRow({ task, onOpen, onApprove, onReject }) {
             onClick={onApprove}
             className="px-3 py-1.5 text-xs font-medium bg-emerald-500 text-white rounded hover:bg-emerald-600 whitespace-nowrap"
           >✅ Schválit</button>
+          <button
+            onClick={onContinue}
+            title="Schválí úkol jako hotový a rovnou založí navazující úkol s vlastním termínem"
+            className="px-3 py-1.5 text-xs font-medium border border-emerald-300 text-emerald-700 rounded hover:bg-emerald-50 whitespace-nowrap"
+          >✅🔗 Schválit a navázat</button>
           <button
             onClick={onReject}
             className="px-3 py-1.5 text-xs font-medium border border-orange-300 text-orange-700 rounded hover:bg-orange-50 whitespace-nowrap"

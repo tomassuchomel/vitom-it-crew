@@ -243,4 +243,67 @@ router.get('/tasks/:id/reviews', requireAuth, async (req, res) => {
   res.json({ reviews: r.rows });
 });
 
+/**
+ * Schválit + navázat: schválí úkol (→ done, drží si „dokončeno včas") A ZÁROVEŇ
+ * založí navazující úkol s vlastním termínem (continues_task_id). Řeší situaci
+ * „úkol je hotový, ale mám k němu další nápad" bez toho, aby se kazilo skóre
+ * znovuotevřením. Jen manager projektu / admin.
+ */
+router.post('/tasks/:id/approve-and-continue', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_task_id' });
+
+  const b = req.body || {};
+  const title = String(b.title || '').trim();
+  const dueDate = String(b.due_date || '').trim();
+  if (!title) return res.status(400).json({ error: 'title_required', message: 'Zadej název navazujícího úkolu.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+    return res.status(400).json({ error: 'due_date_required', message: 'Zadej termín navazujícího úkolu.' });
+  }
+
+  const tr = await query(
+    `SELECT t.*, p.manager_id AS project_manager_id, p.name AS project_name
+     FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`,
+    [id]
+  );
+  const task = tr.rows[0];
+  if (!task) return res.status(404).json({ error: 'not_found' });
+  if (!can.reviewTask(req.user, { manager_id: task.project_manager_id })) {
+    return res.status(403).json({ error: 'forbidden', message: 'Pouze vedoucí projektu nebo admin může schválit úkol.' });
+  }
+  if (task.status !== 'review') {
+    return res.status(400).json({ error: 'invalid_state', message: `Úkol je ve stavu „${task.status}", navázat lze jen z review.` });
+  }
+
+  // 1) Schválit původní úkol (drží si completed_at / on-time)
+  await query(`UPDATE tasks SET status = 'done', completed_at = NOW(), completed_by = $1 WHERE id = $2`, [req.user.id, id]);
+  const comment = b.comment ? String(b.comment).trim().slice(0, 5000) : null;
+  await query(
+    `INSERT INTO task_reviews (task_id, reviewer_id, verdict, comment) VALUES ($1, $2, 'approved', $3)`,
+    [id, req.user.id, comment]
+  );
+
+  // 2) Založit navazující úkol se samostatným termínem + vazbou na původní
+  const assignee = b.assignee_id ? Number(b.assignee_id) : task.assignee_id;
+  const description = b.description ? String(b.description) : null;
+  const priority = ['low', 'normal', 'high', 'urgent'].includes(b.priority) ? b.priority : (task.priority || 'normal');
+  const nt = await query(
+    `INSERT INTO tasks (project_id, title, description, assignee_id, status, priority, due_date, continues_task_id)
+     VALUES ($1, $2, $3, $4, 'todo', $5, $6, $7) RETURNING *`,
+    [task.project_id, title, description, assignee, priority, dueDate, id]
+  );
+
+  res.json({ task: { ...task, status: 'done' }, followUp: nt.rows[0] });
+
+  // Push assignee o schválení (fire-and-forget) — stejný vzor jako u review.
+  if (task.assignee_id && task.assignee_id !== req.user.id) {
+    sendToUser(task.assignee_id, {
+      title: '✅ Úkol schválen (a navázán)',
+      body: `„${task.title}" → pokračování „${title}"`,
+      url: `/my-tasks?taskId=${nt.rows[0].id}`,
+      tag: `task-${id}`,
+    }).catch(err => console.warn('[push/approve-continue]', err.message));
+  }
+});
+
 export default router;
