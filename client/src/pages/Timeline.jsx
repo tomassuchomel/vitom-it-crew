@@ -4,7 +4,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
-import { projects as projectsApi, reports as reportsApi } from '../api.js';
+import { projects as projectsApi, reports as reportsApi, tasks as tasksApi } from '../api.js';
+import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import { useFeature, useTeams } from '../teams.jsx';
 import Avatar from '../components/Avatar.jsx';
 import ScoreStrip from '../components/ScoreStrip.jsx';
@@ -63,6 +64,11 @@ export default function Timeline() {
   // Score Strip nahoře — dostupné pro všechny týmy (data se skládají z běžných
   // úkolů, prezence atd., které má každý tým). Prázdný strip se nezobrazí (řeší si sám).
   const { currentTeam } = useTeams();
+  const [detailTask, setDetailTask] = useState(null);
+  // Klik na úkol v „Kdo na čem pracuje" → načti detail podle id a otevři modal.
+  const openTask = async (taskId) => {
+    try { const d = await tasksApi.get(taskId); setDetailTask(d.task); } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     Promise.all([projectsApi.list(), reportsApi.who(), reportsApi.done({ days: 14 })])
@@ -78,6 +84,9 @@ export default function Timeline() {
 
   return (
     <div>
+      {detailTask && (
+        <TaskDetailModal task={detailTask} onClose={() => setDetailTask(null)} />
+      )}
       <PageHeader
         title="Timeline"
         subtitle="Časová osa projektů – kde stojíme a kam směřujeme"
@@ -143,7 +152,7 @@ export default function Timeline() {
         <div>
           <h2 className="text-lg font-semibold text-ink-800 mb-3">Kdo na čem pracuje</h2>
           <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
-            {workers.map(w => <WorkerCard key={w.user_id} worker={w} />)}
+            {workers.map(w => <WorkerCard key={w.user_id} worker={w} onOpen={openTask} />)}
           </div>
         </div>
 
@@ -158,7 +167,7 @@ export default function Timeline() {
             </div>
           ) : (
             <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
-              {doneBy.map(w => <DoneCard key={w.user_id} worker={w} />)}
+              {doneBy.map(w => <DoneCard key={w.user_id} worker={w} onOpen={openTask} />)}
             </div>
           )}
         </div>
@@ -458,7 +467,7 @@ const ROLE_BADGE = {
 const ROLE_SHORT = { admin: 'Admin', manager: 'PM', senior_dev: 'Senior', external_dev: 'External' };
 const STATUS_LABEL = { todo: 'Čeká', in_progress: 'V práci', review: 'Review', done: 'Hotovo' };
 
-function WorkerCard({ worker }) {
+function WorkerCard({ worker, onOpen }) {
   return (
     <div className="bg-white rounded-xl shadow-sm border border-cream-200 p-4">
       <div className="flex items-center gap-2 mb-3">
@@ -476,14 +485,14 @@ function WorkerCard({ worker }) {
         <ul className="space-y-2">
           {worker.tasks.slice(0, 5).map(t => (
             <li key={t.id} className="text-xs">
-              <Link to={`/projects/${t.project_id}`} className="block hover:bg-cream-50 -mx-1 px-1 py-1 rounded">
+              <button onClick={() => onOpen?.(t.id)} className="block w-full text-left hover:bg-cream-50 -mx-1 px-1 py-1 rounded">
                 <div className="font-medium text-ink-700 truncate">{t.title}</div>
                 <div className="text-ink-500 flex items-center gap-2 mt-0.5">
                   <span className="truncate">{t.project_name}</span>
                   <span>·</span>
                   <span>{STATUS_LABEL[t.status]}</span>
                 </div>
-              </Link>
+              </button>
             </li>
           ))}
           {worker.tasks.length > 5 && (
@@ -495,7 +504,7 @@ function WorkerCard({ worker }) {
   );
 }
 
-function DoneCard({ worker }) {
+function DoneCard({ worker, onOpen }) {
   return (
     <div className="bg-white rounded-xl shadow-sm border border-emerald-200 p-4">
       <div className="flex items-center gap-2 mb-3">
@@ -510,10 +519,10 @@ function DoneCard({ worker }) {
       <ul className="space-y-2">
         {worker.tasks.slice(0, 6).map(t => (
           <li key={t.id} className="text-xs">
-            <Link to={`/projects/${t.project_id}`} className="block hover:bg-emerald-50 -mx-1 px-1 py-1 rounded">
+            <button onClick={() => onOpen?.(t.id)} className="block w-full text-left hover:bg-emerald-50 -mx-1 px-1 py-1 rounded">
               <div className="font-medium text-ink-700 truncate line-through decoration-emerald-400">{t.title}</div>
               <div className="text-ink-500 truncate mt-0.5">{t.project_name}</div>
-            </Link>
+            </button>
           </li>
         ))}
         {worker.tasks.length > 6 && (

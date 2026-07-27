@@ -62,33 +62,49 @@ async function seed() {
   // Rozpracovaný s budoucím termínem → active.
   await ins('T5 aktivní', 'in_progress', null, null);
   await q(`UPDATE tasks SET due_date = CURRENT_DATE + 5 WHERE title='T5 aktivní'`);
+
+  // Předáno do review PŘED termínem, schváleno (completed_at) AŽ PO termínu.
+  // Musí se počítat jako VČAS — rozhoduje předání, ne pozdní schválení.
+  // completed_at = dnes (stejný měsíc jako T1/T2 → deterministický trend).
+  await ins('T6 review včas', 'done', null, null);
+  await q(`UPDATE tasks SET
+    due_date = CURRENT_DATE - 3,
+    review_submitted_at = (CURRENT_DATE - 3)::timestamptz,
+    completed_at = NOW()
+    WHERE title='T6 review včas'`);
 }
 
 test('snapshot: success_rate + počty sedí', async () => {
   const d = await userScore(userId, 6);
-  assert.equal(d.done_on_time, 2, 'on_time (T1 + T4)');
+  assert.equal(d.done_on_time, 3, 'on_time (T1 + T4 + T6)');
   assert.equal(d.done_late, 1, 'late (T2)');
   assert.equal(d.overdue, 1, 'overdue (T3)');
-  assert.equal(d.success_rate, 50, '2 / (2+1+1) = 50 %');
+  assert.equal(d.success_rate, 60, '3 / (3+1+1) = 60 %');
 });
 
-test('trend: řada 6 měsíců, aktuální 50 %, jeden měsíc 100 %', async () => {
+test('trend: řada 6 měsíců + jeden měsíc 100 %', async () => {
   const d = await userScore(userId, 6);
   assert.equal(d.months.length, 6, '6 měsíců v řadě');
   const current = d.months[d.months.length - 1];
-  assert.equal(current.rate, 50, 'aktuální měsíc: 1 včas / 2 = 50 %');
+  assert.equal(current.rate, 67, 'aktuální měsíc: 2 včas (T1,T6) / 3 = 67 %');
   assert.ok(d.months.some(m => m.rate === 100), 'minulý měsíc má 100 %');
 });
 
 test('drill-down: seznamy úkolů per kategorie', async () => {
   const d = await userScore(userId, 6);
   assert.equal(d.active, 1, 'active count (T5)');
-  assert.equal(d.tasks.on_time.length, 2, 'on_time list');
+  assert.equal(d.tasks.on_time.length, 3, 'on_time list (T1,T4,T6)');
   assert.equal(d.tasks.late.length, 1, 'late list');
   assert.equal(d.tasks.overdue.length, 1, 'overdue list');
   assert.equal(d.tasks.active.length, 1, 'active list');
   assert.ok(d.tasks.overdue.some(t => t.title === 'T3 overdue'), 'overdue obsahuje T3');
   assert.ok(d.tasks.active.some(t => t.title === 'T5 aktivní'), 'active obsahuje T5');
+});
+
+test('férové skóre: pozdní schválení nezhorší — rozhoduje předání do review', async () => {
+  const d = await userScore(userId, 6);
+  assert.ok(d.tasks.on_time.some(t => t.title === 'T6 review včas'), 'T6 (předáno včas, schváleno pozdě) je VČAS');
+  assert.ok(!d.tasks.late.some(t => t.title === 'T6 review včas'), 'T6 není mezi pozdními');
 });
 
 test('cizí uživatel bez úkolů → success_rate null', async () => {

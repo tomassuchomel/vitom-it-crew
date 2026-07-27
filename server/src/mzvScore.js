@@ -1,9 +1,14 @@
 // Skóre plnění úkolů jednoho uživatele + měsíční trend + seznamy úkolů per
 // kategorie (pro drill-down v MZV profilu). Pro MZV profil.
 //
-// Definice jako Scoreboard (drž konzistenci):
-//   done_on_time: status='done' AND completed_at <= due_date + 1 den
-//   done_late:    status='done' AND completed_at >  due_date + 1 den
+// „V termínu" se počítá podle ČASU PŘEDÁNÍ DO REVIEW (review_submitted_at), ne
+// podle pozdějšího schválení — pozdní schválení reviewerem neznamená, že úkol
+// je pozdě. Fallback na completed_at u úkolů, které review workflow nepoužily.
+// `delivered` = COALESCE(review_submitted_at, completed_at).
+//
+// Definice (drž konzistenci se Scoreboardem):
+//   done_on_time: status='done' AND delivered <= due_date + 1 den
+//   done_late:    status='done' AND delivered >  due_date + 1 den
 //   overdue:      status<>'done' AND due_date < dnes
 //   active:       status<>'done' AND (due_date IS NULL OR due_date >= dnes)  ← rozpracované
 //   success_rate: done_on_time / (done_on_time + done_late + overdue) v %
@@ -11,13 +16,16 @@
 // Samostatný modul (importuje jen db.js), aby šel testovat bez HTTP/auth vrstvy.
 import { query } from './db.js';
 
+// SQL výraz pro „kdy byl úkol reálně předán" (předání do review, jinak dokončení).
+const DELIVERED = 'COALESCE(review_submitted_at, completed_at)';
+
 export async function userScore(userId, months = 6) {
   const win = Math.min(Math.max(Number(months) || 6, 1), 24);
 
   const snapR = await query(`
     SELECT
-      COUNT(*) FILTER (WHERE status='done' AND due_date IS NOT NULL AND completed_at::date <= due_date + 1) AS done_on_time,
-      COUNT(*) FILTER (WHERE status='done' AND due_date IS NOT NULL AND completed_at::date >  due_date + 1) AS done_late,
+      COUNT(*) FILTER (WHERE status='done' AND due_date IS NOT NULL AND ${DELIVERED}::date <= due_date + 1) AS done_on_time,
+      COUNT(*) FILTER (WHERE status='done' AND due_date IS NOT NULL AND ${DELIVERED}::date >  due_date + 1) AS done_late,
       COUNT(*) FILTER (WHERE status='done' AND due_date IS NULL)                                            AS done_no_deadline,
       COUNT(*) FILTER (WHERE status<>'done' AND due_date IS NOT NULL AND due_date < CURRENT_DATE)           AS overdue,
       COUNT(*) FILTER (WHERE status<>'done' AND (due_date IS NULL OR due_date >= CURRENT_DATE))             AS active
@@ -30,11 +38,11 @@ export async function userScore(userId, months = 6) {
   const base = onTime + late + overdue;
   const successRate = base > 0 ? Math.round((onTime / base) * 100) : null;
 
-  // Měsíční trend podle completed_at (jen dokončené s termínem).
+  // Měsíční trend podle completed_at (kdy úkol „padl" jako hotový), on-time dle předání.
   const trendR = await query(`
     SELECT to_char(date_trunc('month', completed_at), 'YYYY-MM') AS ym,
-      COUNT(*) FILTER (WHERE completed_at::date <= due_date + 1) AS on_time,
-      COUNT(*) FILTER (WHERE completed_at::date >  due_date + 1) AS late
+      COUNT(*) FILTER (WHERE ${DELIVERED}::date <= due_date + 1) AS on_time,
+      COUNT(*) FILTER (WHERE ${DELIVERED}::date >  due_date + 1) AS late
     FROM tasks
     WHERE assignee_id = $1 AND status = 'done'
       AND completed_at IS NOT NULL AND due_date IS NOT NULL
@@ -57,10 +65,10 @@ export async function userScore(userId, months = 6) {
   const listR = await query(`
     SELECT t.id, t.title, t.status, t.due_date, t.completed_at, p.name AS project_name,
       CASE
-        WHEN t.status='done' AND t.due_date IS NOT NULL AND t.completed_at::date <= t.due_date + 1 THEN 'on_time'
-        WHEN t.status='done' AND t.due_date IS NOT NULL AND t.completed_at::date >  t.due_date + 1 THEN 'late'
-        WHEN t.status<>'done' AND t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE           THEN 'overdue'
-        WHEN t.status<>'done'                                                                     THEN 'active'
+        WHEN t.status='done' AND t.due_date IS NOT NULL AND COALESCE(t.review_submitted_at, t.completed_at)::date <= t.due_date + 1 THEN 'on_time'
+        WHEN t.status='done' AND t.due_date IS NOT NULL AND COALESCE(t.review_submitted_at, t.completed_at)::date >  t.due_date + 1 THEN 'late'
+        WHEN t.status<>'done' AND t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE                                              THEN 'overdue'
+        WHEN t.status<>'done'                                                                                                       THEN 'active'
       END AS category
     FROM tasks t
     JOIN projects p ON p.id = t.project_id

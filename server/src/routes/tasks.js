@@ -498,6 +498,11 @@ function completionFields({ curStatus, nextStatus, bodyActualH, userId }) {
     // Explicitní oprava skutečného času bez změny stavu
     out.actual_h = (bodyActualH === '' || bodyActualH == null) ? null : Number(bodyActualH);
   }
+  // Čas předání do review — pro férové skóre rozhoduje PŘEDÁNÍ, ne pozdější schválení.
+  // Nastaví se při přechodu do 'review' (přepíše se při každém dalším předání po vrácení).
+  if (nextStatus === 'review' && curStatus !== 'review') {
+    out.review_submitted_at = new Date();
+  }
   return out;
 }
 
@@ -566,6 +571,7 @@ router.put('/:id', requireAuth, async (req, res) => {
     if ('actual_h' in comp)     { params.push(comp.actual_h);     sets.push(`actual_h = $${params.length}`); }
     if ('completed_at' in comp) { params.push(comp.completed_at); sets.push(`completed_at = $${params.length}`); }
     if ('completed_by' in comp) { params.push(comp.completed_by); sets.push(`completed_by = $${params.length}`); }
+    if ('review_submitted_at' in comp) { params.push(comp.review_submitted_at); sets.push(`review_submitted_at = $${params.length}`); }
     params.push(id);
     await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
     const r = await query('SELECT * FROM tasks WHERE id = $1', [id]);
@@ -580,6 +586,7 @@ router.put('/:id', requireAuth, async (req, res) => {
   const newActualH    = 'actual_h' in comp     ? comp.actual_h     : cur.actual_h;
   const newCompletedAt = 'completed_at' in comp ? comp.completed_at : cur.completed_at;
   const newCompletedBy = 'completed_by' in comp ? comp.completed_by : cur.completed_by;
+  const newReviewSubmittedAt = 'review_submitted_at' in comp ? comp.review_submitted_at : cur.review_submitted_at;
 
   // AI agent fields – pokud body nějaké posílá, validuj a aplikuj.
   // Pokud body žádné neposílá, ponecháme z DB (cur). Validace popisu / kritérií běží
@@ -615,8 +622,8 @@ router.put('/:id', requireAuth, async (req, res) => {
       actual_h = $9, completed_at = $10, completed_by = $11,
       ai_assignee = $12, execution_mode = $13,
       acceptance_criteria = $14::jsonb, out_of_scope = $15::jsonb, scope_paths = $16::jsonb,
-      ai_status = $17
-    WHERE id = $18
+      ai_status = $17, review_submitted_at = $18
+    WHERE id = $19
     RETURNING *
   `, [next.title, next.description, nullableInt(next.assignee_id), next.status,
       next.priority, nullableNum(next.estimated_h), nullableDate(next.due_date), nullableInt(next.parent_id),
@@ -626,6 +633,7 @@ router.put('/:id', requireAuth, async (req, res) => {
       JSON.stringify(newAi.out_of_scope),
       JSON.stringify(newAi.scope_paths),
       newAi.ai_status,
+      newReviewSubmittedAt,
       id]);
 
   // Pokud se změnil název nebo popis, re-spustíme AI odhad
