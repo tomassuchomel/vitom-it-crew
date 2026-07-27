@@ -31,3 +31,6 @@ yarn-error.log*
 
 # Zálohy .env (mohou obsahovat secrety) – nikdy do gitu
 *.env.backup
+
+# Vite dočasné config soubory (build artefakty)
+vite.config.js.timestamp-*

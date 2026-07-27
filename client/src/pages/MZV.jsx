@@ -18,25 +18,25 @@ import { mzv as api, tasks as tasksApi } from '../api.js';
 
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('cs-CZ') : '—';
 
-// 16 socionics typů — kód (Ausra) + populární MBTI-like label + krátký přezdev.
-// Vlastnosti jsou orientační; AI insights generuje detail.
+// 16 socionics typů — jmenný typ (přezdívka, jak se běžně používá) + kód (Ausra)
+// a MBTI ekvivalent v závorce. Ukládá se KÓD; jméno je jen pro zobrazení.
 const SOCIONICS_OPTIONS = [
-  { code: 'ILE', label: 'ILE (ENTp) — Nováček / Vynálezce' },
-  { code: 'SEI', label: 'SEI (ISFp) — Prostředník' },
-  { code: 'ESE', label: 'ESE (ESFj) — Nadšenec' },
-  { code: 'LII', label: 'LII (INTj) — Analytik' },
-  { code: 'SLE', label: 'SLE (ESTp) — Iniciátor' },
-  { code: 'IEI', label: 'IEI (INFp) — Lyrik / Snílek' },
-  { code: 'EIE', label: 'EIE (ENFj) — Mentor' },
-  { code: 'LSI', label: 'LSI (ISTj) — Inspektor' },
-  { code: 'SEE', label: 'SEE (ESFp) — Politik' },
-  { code: 'ILI', label: 'ILI (INTp) — Kritik' },
-  { code: 'LIE', label: 'LIE (ENTj) — Podnikatel' },
-  { code: 'ESI', label: 'ESI (ISFj) — Strážce' },
-  { code: 'IEE', label: 'IEE (ENFp) — Psycholog' },
-  { code: 'SLI', label: 'SLI (ISTp) — Řemeslník' },
-  { code: 'LSE', label: 'LSE (ESTj) — Administrátor' },
-  { code: 'EII', label: 'EII (INFj) — Humanista' },
+  { code: 'ILE', label: 'Don Quijote (ILE / ENTp) — Vynálezce' },
+  { code: 'SEI', label: 'Dumas (SEI / ISFp) — Prostředník' },
+  { code: 'ESE', label: 'Hugo (ESE / ESFj) — Nadšenec' },
+  { code: 'LII', label: 'Robespierre (LII / INTj) — Analytik' },
+  { code: 'SLE', label: 'Žukov (SLE / ESTp) — Maršál' },
+  { code: 'IEI', label: 'Jesenin (IEI / INFp) — Lyrik' },
+  { code: 'EIE', label: 'Hamlet (EIE / ENFj) — Mentor' },
+  { code: 'LSI', label: 'Maxim Gorkij (LSI / ISTj) — Inspektor' },
+  { code: 'SEE', label: 'Napoleon (SEE / ESFp) — Politik' },
+  { code: 'ILI', label: 'Balzac (ILI / INTp) — Kritik' },
+  { code: 'LIE', label: 'Jack London (LIE / ENTj) — Podnikatel' },
+  { code: 'ESI', label: 'Dreiser (ESI / ISFj) — Strážce' },
+  { code: 'IEE', label: 'Huxley (IEE / ENFp) — Rádce' },
+  { code: 'SLI', label: 'Gaben (SLI / ISTp) — Mistr' },
+  { code: 'LSE', label: 'Stirlitz (LSE / ESTj) — Administrátor' },
+  { code: 'EII', label: 'Dostojevskij (EII / INFj) — Humanista' },
 ];
 const SOCIONICS_LABEL = Object.fromEntries(SOCIONICS_OPTIONS.map(o => [o.code, o.label]));
 const daysAgo = (iso) => {
@@ -434,7 +434,7 @@ function MeetingView({ meetingId, user, profile, onBack }) {
       </div>
 
       {/* Kompaktní profil karta — vždy na očích */}
-      <ProfileCard profile={profile} onEdit={() => setProfileOpen(true)} />
+      <ProfileCard profile={profile} userId={user.id} onEdit={() => setProfileOpen(true)} />
 
       {/* AI panel */}
       <section className="bg-white border border-cream-200 rounded-lg p-4">
@@ -578,7 +578,8 @@ function MeetingView({ meetingId, user, profile, onBack }) {
 }
 
 // Kompaktní karta profilu — přehled klíčových údajů. Klik na „upravit" otevře modal.
-function ProfileCard({ profile, onEdit }) {
+function ProfileCard({ profile, userId, onEdit }) {
+  const [expanded, setExpanded] = useState(false);
   if (!profile) {
     return (
       <section className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
@@ -590,30 +591,43 @@ function ProfileCard({ profile, onEdit }) {
     );
   }
   const children = Array.isArray(profile.children) ? profile.children : [];
+  const age = yearsMonthsSince(profile.birth_date)?.years;
+  const years = yearsMonthsSince(profile.hire_date)?.years;
   return (
     <section className="bg-cream-25 border border-cream-200 rounded-lg p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
-          <MiniField label="Ve firmě od" value={profile.hire_date && fmtDate(profile.hire_date)} />
-          <MiniField label="Narozeniny"  value={profile.birth_date && fmtDate(profile.birth_date)} />
+          <MiniField label="Ve firmě od" value={profile.hire_date && `${fmtDate(profile.hire_date)}${years != null ? ` · ${years} let` : ''}`} />
+          <MiniField label="Narozeniny"  value={profile.birth_date && `${fmtDate(profile.birth_date)}${age != null ? ` · ${age} let` : ''}`} />
           <MiniField label="Ambice"
             value={profile.ambition_type === 'growth' ? '🚀 Růst'
                   : profile.ambition_type === 'stability' ? '⭐ Stabilita' : '—'} />
           <MiniField label="Děti" value={children.length > 0 ? children.map(c => c.name).join(', ') : '—'} />
         </div>
-        <button onClick={onEdit}
-          className="shrink-0 text-xs px-2 py-1 border border-ink-300 rounded hover:bg-cream-50">
-          Upravit profil
-        </button>
+        <div className="shrink-0 flex flex-col gap-1">
+          <button onClick={onEdit}
+            className="text-xs px-2 py-1 border border-ink-300 rounded hover:bg-cream-50">
+            Upravit profil
+          </button>
+          <button onClick={() => setExpanded(v => !v)}
+            className="text-xs px-2 py-1 border border-ink-300 rounded hover:bg-cream-50">
+            {expanded ? '▾ Skrýt detail' : '▸ Celý profil'}
+          </button>
+        </div>
       </div>
-      {profile.career_direction && (
+      {!expanded && profile.career_direction && (
         <div className="mt-2 text-[12px] text-ink-700">
           <strong>Směřování:</strong> {profile.career_direction}
         </div>
       )}
-      {profile.feedback_history && (
+      {!expanded && profile.feedback_history && (
         <div className="mt-1 text-[12px] text-ink-600 italic">
           {profile.feedback_history}
+        </div>
+      )}
+      {expanded && (
+        <div className="mt-3 border-t border-cream-200 pt-3">
+          <ProfileView profile={profile} userId={userId} />
         </div>
       )}
     </section>
@@ -730,8 +744,9 @@ function buildReminders(profile, windowDays = 60) {
     out.push({ icon: '🎂', title: `Narozeniny (bude ${bday.turningYears})`, days: bday.days });
   }
   for (const c of (Array.isArray(profile.children) ? profile.children : [])) {
+    // Dětské narozeniny ukazujeme vždy (kvůli plánování dárku), ne jen v okně.
     const cb = daysUntilNext(c.birth_date);
-    if (cb && cb.days <= windowDays) {
+    if (cb) {
       out.push({
         icon: '🎁',
         title: `${c.name || 'Dítě'} — ${cb.turningYears}. narozeniny`,
@@ -775,6 +790,7 @@ function ProfileReminders({ profile }) {
 function ProfileScore({ userId }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(false);
+  const [open, setOpen] = useState(null);
   useEffect(() => {
     let ok = true;
     api.score(userId, 6).then(d => { if (ok) setData(d); }).catch(() => { if (ok) setErr(true); });
@@ -792,6 +808,16 @@ function ProfileScore({ userId }) {
   const last = rated[rated.length - 1]?.rate;
   const prev = rated[rated.length - 2]?.rate;
   const delta = (last != null && prev != null) ? last - prev : null;
+  const cats = [
+    { key: 'on_time', label: 'včas', count: data.done_on_time },
+    { key: 'late', label: 'pozdě', count: data.done_late },
+    { key: 'overdue', label: 'po termínu', count: data.overdue },
+    { key: 'active', label: 'rozpracované', count: data.active },
+  ];
+  const openList = open ? (data.tasks?.[open] || []) : [];
+  const taskDate = (t) => (open === 'on_time' || open === 'late')
+    ? (t.completed_at && fmtDate(t.completed_at))
+    : (t.due_date && fmtDate(t.due_date));
 
   return (
     <div className="rounded-lg border border-ink-300 bg-cream-50 px-3 py-2 mb-4">
@@ -805,8 +831,18 @@ function ProfileScore({ userId }) {
       </div>
       <div className="flex items-end gap-3 flex-wrap">
         <div className="text-2xl font-bold text-ink-800 leading-none">{data.success_rate}%</div>
-        <div className="text-xs text-ink-500 pb-0.5">
-          {data.done_on_time} včas · {data.done_late} pozdě · {data.overdue} po termínu
+        <div className="flex flex-wrap gap-1.5 pb-0.5">
+          {cats.map(c => (
+            <button key={c.key} type="button" disabled={c.count === 0}
+              onClick={() => setOpen(open === c.key ? null : c.key)}
+              className={`text-xs px-2 py-0.5 rounded-full border transition ${
+                c.count === 0 ? 'text-ink-400 border-ink-300 cursor-default'
+                : open === c.key ? 'bg-brand-500 text-white border-brand-500'
+                : 'text-ink-600 border-ink-300 hover:bg-cream-100'
+              }`}>
+              {c.count} {c.label}
+            </button>
+          ))}
         </div>
         <div className="flex items-end gap-0.5 ml-auto h-8" title="Posledních 6 měsíců (% v termínu)">
           {months.map((m, i) => (
@@ -816,8 +852,36 @@ function ProfileScore({ userId }) {
           ))}
         </div>
       </div>
+      {open && (
+        <div className="mt-2 border-t border-ink-300 pt-2">
+          {openList.length === 0 ? (
+            <div className="text-xs text-ink-400 italic">Žádné úkoly v této kategorii.</div>
+          ) : (
+            <ul className="space-y-1 max-h-48 overflow-y-auto">
+              {openList.map(t => (
+                <li key={t.id} className="text-xs text-ink-700 flex justify-between gap-2">
+                  <span className="truncate">{t.title}<span className="text-ink-400"> · {t.project_name}</span></span>
+                  <span className="text-ink-400 shrink-0">{taskDate(t)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+// Popisek dítěte: jméno + věk + za kolik dní narozeniny (stejný detail jako u pracovníka).
+function childLabel(c) {
+  const name = c.name || 'Dítě';
+  if (!c.birth_date) return name;
+  const age = yearsMonthsSince(c.birth_date)?.years;
+  const next = daysUntilNext(c.birth_date);
+  const bits = [fmtDate(c.birth_date)];
+  if (age != null) bits.push(`${age} ${age === 1 ? 'rok' : age < 5 ? 'roky' : 'let'}`);
+  if (next) bits.push(`nar. ${daysLabel(next.days)}`);
+  return `${name} (${bits.join(' · ')})`;
 }
 
 function ProfileView({ profile, userId }) {
@@ -839,7 +903,7 @@ function ProfileView({ profile, userId }) {
       <Field label="Preferovaný feedback" value={profile.feedback_style} />
       <div className="md:col-span-2">
         <Field label="Děti" value={children.length > 0
-          ? children.map(c => `${c.name}${c.birth_date ? ` (${fmtDate(c.birth_date)})` : ''}`).join(', ')
+          ? children.map(childLabel).join(', ')
           : null} />
       </div>
       <div className="md:col-span-2">

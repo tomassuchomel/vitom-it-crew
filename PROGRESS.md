@@ -3,7 +3,7 @@
 Živý přehled stavu projektu — co je hotové, co rozpracované, co dál.
 Aktualizováno průběžně. Pro detailní historii viz [CHANGELOG.md](CHANGELOG.md).
 
-_Poslední aktualizace: 2026-07-24_
+_Poslední aktualizace: 2026-07-26_
 
 ## ⚠️ NUTNÁ AKCE: OPENAI_API_KEY pro přepis porad
 

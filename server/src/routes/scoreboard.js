@@ -112,7 +112,7 @@ router.get('/', requireAuth, async (req, res) => {
   const sql = `
     WITH ${teamUsersCTE},
     user_tasks AS (
-      SELECT t.id, t.assignee_id, t.status, t.due_date, t.completed_at
+      SELECT t.id, t.assignee_id, t.status, t.due_date, t.completed_at, t.review_submitted_at
       FROM tasks t
       JOIN projects p ON p.id = t.project_id
       WHERE t.assignee_id IS NOT NULL ${teamFilter} ${timeFilter}
@@ -121,8 +121,8 @@ router.get('/', requireAuth, async (req, res) => {
       SELECT
         ut.assignee_id AS user_id,
         COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE ut.status = 'done' AND ut.due_date IS NOT NULL AND ut.completed_at <= (ut.due_date + INTERVAL '1 day'))::int AS done_on_time,
-        COUNT(*) FILTER (WHERE ut.status = 'done' AND ut.due_date IS NOT NULL AND ut.completed_at >  (ut.due_date + INTERVAL '1 day'))::int AS done_late,
+        COUNT(*) FILTER (WHERE ut.status = 'done' AND ut.due_date IS NOT NULL AND COALESCE(ut.review_submitted_at, ut.completed_at) <= (ut.due_date + INTERVAL '1 day'))::int AS done_on_time,
+        COUNT(*) FILTER (WHERE ut.status = 'done' AND ut.due_date IS NOT NULL AND COALESCE(ut.review_submitted_at, ut.completed_at) >  (ut.due_date + INTERVAL '1 day'))::int AS done_late,
         COUNT(*) FILTER (WHERE ut.status = 'done' AND ut.due_date IS NULL)::int AS done_no_deadline,
         COUNT(*) FILTER (WHERE ut.status != 'done' AND ut.due_date IS NOT NULL AND ut.due_date < CURRENT_DATE)::int AS overdue,
         COUNT(*) FILTER (WHERE ut.status != 'done' AND (ut.due_date IS NULL OR ut.due_date >= CURRENT_DATE))::int AS in_progress,
@@ -181,7 +181,7 @@ router.get('/history', requireAuth, async (req, res) => {
     completed AS (
       SELECT t.assignee_id AS user_id, u.name,
              to_char(date_trunc('month', t.completed_at), 'YYYY-MM') AS ym,
-             (t.due_date IS NOT NULL AND t.completed_at <= (t.due_date + INTERVAL '1 day')) AS on_time
+             (t.due_date IS NOT NULL AND COALESCE(t.review_submitted_at, t.completed_at) <= (t.due_date + INTERVAL '1 day')) AS on_time
       FROM tasks t
       JOIN projects p ON p.id = t.project_id
       JOIN users u ON u.id = t.assignee_id
@@ -244,7 +244,7 @@ router.get('/tasks', requireAuth, async (req, res) => {
   if (category === 'hotove') {
     statusFilter = `AND t.status = 'done'`;
   } else if (category === 'pozde') {
-    statusFilter = `AND t.status = 'done' AND t.due_date IS NOT NULL AND t.completed_at > (t.due_date + INTERVAL '1 day')`;
+    statusFilter = `AND t.status = 'done' AND t.due_date IS NOT NULL AND COALESCE(t.review_submitted_at, t.completed_at) > (t.due_date + INTERVAL '1 day')`;
   } else if (category === 'po_terminu') {
     statusFilter = `AND t.status != 'done' AND t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE`;
   }
@@ -357,15 +357,15 @@ router.get('/teams-overview', requireAuth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
   const r = await query(`
     WITH tasks_by_team AS (
-      SELECT p.team_id, t.status, t.due_date, t.completed_at, t.assignee_id
+      SELECT p.team_id, t.status, t.due_date, t.completed_at, t.review_submitted_at, t.assignee_id
       FROM tasks t JOIN projects p ON p.id = t.project_id
       WHERE t.assignee_id IS NOT NULL
     ),
     per_team AS (
       SELECT tb.team_id,
         COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE tb.status = 'done' AND tb.due_date IS NOT NULL AND tb.completed_at <= (tb.due_date + INTERVAL '1 day'))::int AS done_on_time,
-        COUNT(*) FILTER (WHERE tb.status = 'done' AND tb.due_date IS NOT NULL AND tb.completed_at >  (tb.due_date + INTERVAL '1 day'))::int AS done_late,
+        COUNT(*) FILTER (WHERE tb.status = 'done' AND tb.due_date IS NOT NULL AND COALESCE(tb.review_submitted_at, tb.completed_at) <= (tb.due_date + INTERVAL '1 day'))::int AS done_on_time,
+        COUNT(*) FILTER (WHERE tb.status = 'done' AND tb.due_date IS NOT NULL AND COALESCE(tb.review_submitted_at, tb.completed_at) >  (tb.due_date + INTERVAL '1 day'))::int AS done_late,
         COUNT(*) FILTER (WHERE tb.status != 'done' AND tb.due_date IS NOT NULL AND tb.due_date < CURRENT_DATE)::int AS overdue,
         COUNT(DISTINCT tb.assignee_id)::int AS users_active
       FROM tasks_by_team tb
