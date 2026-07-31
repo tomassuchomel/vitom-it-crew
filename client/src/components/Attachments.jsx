@@ -75,7 +75,6 @@ export default function Attachments({ taskId, canEdit = true, compact = false })
           <input
             ref={fileRef}
             type="file"
-            accept="image/*,video/*,.md,.markdown,.txt,text/plain,text/markdown,.csv,.json,application/pdf,.pdf,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.ms-excel,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,application/vnd.ms-powerpoint,.ppt,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx,application/zip,.zip"
             multiple
             className="hidden"
             onChange={onPick}
