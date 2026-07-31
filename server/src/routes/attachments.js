@@ -31,44 +31,16 @@ const __dirname = path.dirname(__filename);
 const uploadsDir = path.join(__dirname, '..', '..', 'data', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-// Povolené typy: obrázky, videa, text, PDF, MS Office (Word/Excel/PowerPoint),
-// CSV, JSON, ZIP. Kontrolujeme mime i extension — prohlížeč občas posílá
-// application/octet-stream u .md/.docx/.pptx, extension je spolehlivější.
-const ALLOWED_MIME = new RegExp([
-  '^(image|video)/',
-  '^text/(plain|markdown|x-markdown|csv)$',
-  '^application/(pdf|zip|x-zip-compressed|json|octet-stream',
-    // MS Office (starší)
-    '|msword|vnd\\.ms-excel|vnd\\.ms-powerpoint',
-    // MS Office 2007+ (OOXML)
-    '|vnd\\.openxmlformats-officedocument\\.wordprocessingml\\.document',
-    '|vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.sheet',
-    '|vnd\\.openxmlformats-officedocument\\.presentationml\\.presentation',
-    ')$',
-].join(''));
-const ALLOWED_EXT = new Set([
-  '.md', '.markdown', '.txt', '.csv', '.json',
-  '.pdf',
-  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-  '.zip',
-]);
 const MAX_SIZE = 25 * 1024 * 1024; // 25 MB
 
+// Přijímáme LIBOVOLNÝ typ přílohy — jen limit velikosti. Bezpečnost neřešíme
+// whitelistem typů, ale bezpečným SERVÍROVÁNÍM: GET /:id/file posílá VŠE jako
+// download (Content-Disposition: attachment + X-Content-Type-Options: nosniff),
+// takže se nic (ani SVG/HTML) nespustí inline. Náhled: obrázky jako thumbnail,
+// ostatní jako stažitelná karta s ikonou podle přípony.
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_SIZE },
-  fileFilter: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase();
-    const mimeOk = ALLOWED_MIME.test(file.mimetype);
-    // Extension whitelist: image/video se řídí mime (u obrázků nemá smysl vypisovat všechny),
-    // ostatní musí mít explicit extension v ALLOWED_EXT.
-    const extOk = /^(image|video)\//.test(file.mimetype) || ALLOWED_EXT.has(ext);
-    // SVG obsahuje JS a jde vyrenderovat inline → stored XSS. I když download
-    // route nutí attachment, obrana do hloubky: neber ho vůbec.
-    const isSvg = file.mimetype === 'image/svg+xml' || ext === '.svg' || ext === '.svgz';
-    if (!(mimeOk && extOk) || isSvg) return cb(new Error('unsupported_type'));
-    cb(null, true);
-  },
 });
 
 // Content-Disposition hlavička: ASCII fallback (RFC 2616) + UTF-8 filename*
@@ -110,14 +82,12 @@ router.post('/by-task/:taskId', requireAuth, upload.array('files', 10), async (r
   const created = [];
   for (const f of req.files) {
     const ext = path.extname(f.originalname || '').toLowerCase();
-    // Používá se v UI pro ikonu / náhled. 'document' zahrnuje kancelářské
-    // formáty (pdf/office/csv/json) — všechny je klient renderuje jako
-    // download link se štítkem.
-    const DOC_EXTS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.csv', '.json', '.zip']);
-    const kind = f.mimetype.startsWith('image/') ? 'image'
+    // kind musí sedět s CHECK (image/video/other). Obrázky (kromě SVG) → image,
+    // videa → video, VŠE ostatní → other (klient ukáže stažitelnou kartu s ikonou
+    // podle přípony). SVG záměrně NE jako image → žádný inline render (obrana do hloubky).
+    const isSvg = f.mimetype === 'image/svg+xml' || ext === '.svg' || ext === '.svgz';
+    const kind = (f.mimetype.startsWith('image/') && !isSvg) ? 'image'
                : f.mimetype.startsWith('video/') ? 'video'
-               : (ext === '.md' || ext === '.markdown' || ext === '.txt') ? 'text'
-               : DOC_EXTS.has(ext) ? 'document'
                : 'other';
     // Pseudo-filename pro DB (kompatibilita s legacy schématem)
     const synthFilename = `${crypto.randomBytes(12).toString('hex')}${ext.slice(0, 10)}`;
