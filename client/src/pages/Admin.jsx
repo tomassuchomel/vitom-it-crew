@@ -223,9 +223,14 @@ function EditTeamModal({ teamId, onClose, onSaved }) {
   };
 
   const addMember = async (userId, teamRole) => {
-    await teamsApi.addMember(teamId, { user_id: userId, team_role: teamRole });
-    load();
-    onSaved();
+    try {
+      await teamsApi.addMember(teamId, { user_id: userId, team_role: teamRole });
+      await load();
+      onSaved();
+    } catch (e) {
+      alert(e.response?.data?.message || e.response?.data?.error || 'Přidání člena se nepovedlo.');
+      throw e; // aby volající (formulář) věděl, že to neuspělo, a nevyčistil vstup
+    }
   };
   const removeMember = async (userId) => {
     if (!confirm('Odebrat člena z teamu?')) return;
@@ -238,9 +243,13 @@ function EditTeamModal({ teamId, onClose, onSaved }) {
     }
   };
   const changeRole = async (userId, newRole) => {
-    await teamsApi.addMember(teamId, { user_id: userId, team_role: newRole });
-    load();
-    onSaved();
+    try {
+      await teamsApi.addMember(teamId, { user_id: userId, team_role: newRole });
+      await load();
+      onSaved();
+    } catch (e) {
+      alert(e.response?.data?.message || e.response?.data?.error || 'Změna role se nepovedla.');
+    }
   };
 
   const memberIds = new Set(data.members.map(m => m.user_id));
@@ -521,11 +530,13 @@ function AddMemberPicker({ nonMembers, allowedRoles, defaultRole, onAdd }) {
   const [role, setRole] = useState(defaultRole);
   const roleKeys = Object.keys(allowedRoles || {});
 
-  const submit = () => {
+  const submit = async () => {
     if (!userId) return;
-    onAdd(Number(userId), role);
-    setUserId('');
-    setRole(defaultRole);
+    try {
+      await onAdd(Number(userId), role);
+      setUserId('');
+      setRole(defaultRole);
+    } catch { /* onAdd už chybu zobrazil; vstup necháme, ať to jde zkusit znovu */ }
   };
 
   return (
