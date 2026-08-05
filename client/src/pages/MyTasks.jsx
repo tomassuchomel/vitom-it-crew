@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
+import DueDateDialog from '../components/DueDateDialog.jsx';
 import TaskCompletionDialog from '../components/TaskCompletionDialog.jsx';
 import TimeTriad from '../components/TimeTriad.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge, STATUS_META } from '../components/TaskStatus.jsx';
@@ -43,6 +44,7 @@ export default function MyTasks() {
   const [filter, setFilter] = useState('todo');
   const [view, setView] = useState(() => localStorage.getItem('myTasks.view') || 'list');
   const [detailTaskId, setDetailTaskId] = useState(null);
+  const [dueTask, setDueTask] = useState(null); // úkol, jehož termín posouváme (klik na 📅)
   const [completingTask, setCompletingTask] = useState(null);
   const [creating, setCreating] = useState(false);
   const canCreate = can.createTasks(user);
@@ -174,12 +176,14 @@ export default function MyTasks() {
             currentTeamId={currentTeam?.id}
             onStatusChange={handleStatusChange}
             onOpen={(t) => setDetailTaskId(t.id)}
+            onEditDue={setDueTask}
           />
         ) : (
           <PipelineView
             tasks={tasks}
             onStatusChange={handleStatusChange}
             onOpen={(t) => setDetailTaskId(t.id)}
+            onEditDue={setDueTask}
           />
         )}
       </div>
@@ -189,6 +193,13 @@ export default function MyTasks() {
           task={detailTask}
           onClose={() => setDetailTaskId(null)}
           onChanged={load}
+        />
+      )}
+      {dueTask && (
+        <DueDateDialog
+          task={dueTask}
+          onClose={() => setDueTask(null)}
+          onDone={() => { setDueTask(null); load(); }}
         />
       )}
       {completingTask && (
@@ -404,7 +415,7 @@ function ViewSwitcher({ value, onChange }) {
 }
 
 // ---------- LIST VIEW ----------
-function ListView({ tasks, filter, currentTeamId, onStatusChange, onOpen }) {
+function ListView({ tasks, filter, currentTeamId, onStatusChange, onOpen, onEditDue }) {
   const { user } = useAuth();
   if (tasks.length === 0) {
     return (
@@ -477,9 +488,12 @@ function ListView({ tasks, filter, currentTeamId, onStatusChange, onOpen }) {
                     </span>
                   )}
                   {t.due_date && (
-                    <span className="inline-flex items-center gap-1">
+                    <button type="button"
+                      onClick={(e) => { e.stopPropagation(); onEditDue?.(t); }}
+                      title="Posunout termín / požádat o posun"
+                      className="inline-flex items-center gap-1 hover:text-brand-500 hover:underline">
                       <span>📅</span>{String(t.due_date).slice(0, 10)}
-                    </span>
+                    </button>
                   )}
                   <TimeTriad task={t} compact />
                   {t.attachment_count > 0 && (
@@ -510,7 +524,7 @@ function ListView({ tasks, filter, currentTeamId, onStatusChange, onOpen }) {
 }
 
 // ---------- PIPELINE VIEW ----------
-function PipelineView({ tasks, onStatusChange, onOpen }) {
+function PipelineView({ tasks, onStatusChange, onOpen, onEditDue }) {
   const [dragId, setDragId] = useState(null);
 
   const grouped = useMemo(() => {
@@ -548,13 +562,14 @@ function PipelineView({ tasks, onStatusChange, onOpen }) {
           dragId={dragId}
           onStatusChange={onStatusChange}
           onOpen={onOpen}
+          onEditDue={onEditDue}
         />
       ))}
     </div>
   );
 }
 
-function Column({ statusKey, tasks, onDragStart, onDragEnd, onDrop, dragId, onStatusChange, onOpen }) {
+function Column({ statusKey, tasks, onDragStart, onDragEnd, onDrop, dragId, onStatusChange, onOpen, onEditDue }) {
   const [over, setOver] = useState(false);
   const status = STATUS[statusKey];
   return (
@@ -584,6 +599,7 @@ function Column({ statusKey, tasks, onDragStart, onDragEnd, onDrop, dragId, onSt
               onDragEnd={onDragEnd}
               onStatusChange={onStatusChange}
               onOpen={onOpen}
+              onEditDue={onEditDue}
             />
           ))
         )}
@@ -592,7 +608,7 @@ function Column({ statusKey, tasks, onDragStart, onDragEnd, onDrop, dragId, onSt
   );
 }
 
-function PipelineCard({ task, isDragging, onDragStart, onDragEnd, onStatusChange, onOpen }) {
+function PipelineCard({ task, isDragging, onDragStart, onDragEnd, onStatusChange, onOpen, onEditDue }) {
   return (
     <div
       draggable
@@ -618,7 +634,11 @@ function PipelineCard({ task, isDragging, onDragStart, onDragEnd, onStatusChange
         📁 {task.project_name}
       </div>
       <div className="flex flex-wrap gap-1 text-[10px] text-ink-500 mt-2">
-        {task.due_date && <span className="px-1.5 py-0.5 bg-cream-100 rounded">📅 {String(task.due_date).slice(0, 10)}</span>}
+        {task.due_date && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); onEditDue?.(task); }}
+            title="Posunout termín / požádat o posun"
+            className="px-1.5 py-0.5 bg-cream-100 rounded hover:bg-brand-50 hover:text-brand-600">📅 {String(task.due_date).slice(0, 10)}</button>
+        )}
         {task.estimated_h && <span className="px-1.5 py-0.5 bg-cream-100 rounded">⏱ {task.estimated_h}h</span>}
         {task.attachment_count > 0 && <span className="px-1.5 py-0.5 bg-brand-50 text-brand-600 rounded">📎 {task.attachment_count}</span>}
         <AIEstimateBadge task={task} />

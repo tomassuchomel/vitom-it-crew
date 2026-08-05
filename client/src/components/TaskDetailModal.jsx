@@ -11,6 +11,7 @@ import TaskCompletionDialog from './TaskCompletionDialog.jsx';
 import TimeTriad from './TimeTriad.jsx';
 import AiAgentPanel from './AiAgentPanel.jsx';
 import ReviewTaskDialog from './ReviewTaskDialog.jsx';
+import DueDateDialog from './DueDateDialog.jsx';
 import ReviewHistory from './ReviewHistory.jsx';
 import LinkifyText from './LinkifyText.jsx';
 import AddSubtaskModal from './AddSubtaskModal.jsx';
@@ -29,6 +30,7 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
   // null | { task, verdict } – pro ReviewTaskDialog (manager schvaluje/vrací)
   const [reviewing, setReviewing] = useState(null);
   const [addingSubtask, setAddingSubtask] = useState(false);
+  const [dueOpen, setDueOpen] = useState(false);
 
   // Sync, pokud parent dodá nový úkol
   useEffect(() => { setTask(initialTask); }, [initialTask?.id]);
@@ -111,7 +113,11 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
                   📁 {task.project_name}
                 </Link>
               )}
-              {task.due_date && <span>📅 {String(task.due_date).slice(0, 10)}</span>}
+              {task.due_date && (
+                <button type="button" onClick={() => setDueOpen(true)}
+                  title="Posunout termín / požádat o posun"
+                  className="hover:text-brand-500 hover:underline">📅 {String(task.due_date).slice(0, 10)}</button>
+              )}
               {task.estimated_h && <span>⏱ odhad {task.estimated_h}h</span>}
             </div>
           </div>
@@ -204,6 +210,14 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
           verdict={reviewing.verdict}
           onClose={() => setReviewing(null)}
           onDone={handleReviewDone}
+        />
+      )}
+
+      {dueOpen && (
+        <DueDateDialog
+          task={task}
+          onClose={() => setDueOpen(false)}
+          onDone={() => { setDueOpen(false); onChanged?.(); }}
         />
       )}
 
