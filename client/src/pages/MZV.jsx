@@ -292,7 +292,7 @@ function MeetingView({ meetingId, user, profile, onBack }) {
     setSaving(true);
     try {
       await api.updateMeeting(meeting.id, {
-        meeting_date: meeting.meeting_date,
+        meeting_date: meeting.meeting_date ? String(meeting.meeting_date).slice(0, 10) : null,
         rozhovor: meeting.rozhovor || '',
         priorities: meeting.priorities || '',
         to_improve: meeting.to_improve || '',
@@ -302,7 +302,7 @@ function MeetingView({ meetingId, user, profile, onBack }) {
       });
       setDirty(false);
     } catch (e) {
-      alert(e.response?.data?.message || 'Uložení selhalo');
+      alert(e.response?.data?.message || e.response?.data?.error || `Uložení selhalo (${e.response?.status ?? e.message})`);
     } finally { setSaving(false); }
   };
 

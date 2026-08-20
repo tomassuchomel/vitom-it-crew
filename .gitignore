@@ -34,3 +34,6 @@ yarn-error.log*
 
 # Vite dočasné config soubory (build artefakty)
 vite.config.js.timestamp-*
+
+# dočasné debug skripty
+server/_*.mjs

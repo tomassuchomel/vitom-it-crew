@@ -24,7 +24,7 @@ const SOCIONICS_TYPES = [
 // Vrátí ID týmů, ve kterých je uživatel manager.
 async function managerTeams(userId) {
   const r = await query(
-    `SELECT team_id FROM team_members WHERE user_id = $1 AND team_role = 'manager'`,
+    `SELECT team_id FROM team_members WHERE user_id = $1 AND team_role IN ('manager','reditel')`,
     [userId]
   );
   return r.rows.map(x => x.team_id);
@@ -38,7 +38,7 @@ async function canManage(currentUserId, currentRole, subordinateId) {
   const r = await query(`
     SELECT 1 FROM team_members mgr
     JOIN team_members sub ON sub.team_id = mgr.team_id
-    WHERE mgr.user_id = $1 AND mgr.team_role = 'manager'
+    WHERE mgr.user_id = $1 AND mgr.team_role IN ('manager','reditel')
       AND sub.user_id = $2
     LIMIT 1
   `, [currentUserId, subordinateId]);
@@ -292,7 +292,10 @@ router.patch('/meetings/:id', requireAuth, async (req, res) => {
   const push = (col, val, cast = '') => { params.push(val); sets.push(`${col} = $${params.length}${cast}`); };
 
   if ('meeting_date' in b) {
-    const d = /^\d{4}-\d{2}-\d{2}$/.test(b.meeting_date || '') ? b.meeting_date : null;
+    // Přijmi i ISO timestamp (FE někdy pošle plné datum) — vezmi jen YYYY-MM-DD,
+    // ať se termín při uložení nevynuluje.
+    const d0 = String(b.meeting_date || '').slice(0, 10);
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(d0) ? d0 : null;
     push('meeting_date', d);
   }
   if ('rozhovor' in b)      push('rozhovor',      String(b.rozhovor || ''));
