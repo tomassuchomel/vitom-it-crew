@@ -218,6 +218,7 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
   const [aiBusy, setAiBusy] = useState(false);
   const [suggestion, setSuggestion] = useState(null); // AI navržené úkoly → SuggestedTasksModal
   const [meetingTasks, setMeetingTasks] = useState([]);
+  const [prevTasks, setPrevTasks] = useState([]); // úkoly z předchozích porad ("Last úkoly")
   const [detailTask, setDetailTask] = useState(null);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const { user } = useAuth();
@@ -228,6 +229,7 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
     setNotesSummary(null);
     api.getMeeting(meetingId).then(d => setMeeting(d.meeting));
     api.listTasks(meetingId).then(d => setMeetingTasks(d.tasks || [])).catch(() => setMeetingTasks([]));
+    api.previousTasks(meetingId).then(d => setPrevTasks(d.tasks || [])).catch(() => setPrevTasks([]));
   }, [meetingId]);
 
   const reloadMeetingTasks = () => api.listTasks(meetingId).then(d => setMeetingTasks(d.tasks || [])).catch(() => {});
@@ -753,6 +755,38 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
           </ul>
         )}
       </section>
+
+      {/* Last úkoly — z předchozích porad stejného typu + jejich aktuální stav */}
+      {prevTasks.length > 0 && (
+        <section className="bg-white border border-cream-200 rounded-lg p-4">
+          <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
+            ⏮️ Last úkoly ({prevTasks.length})
+            <span className="ml-2 normal-case font-normal text-ink-400">z minulých porad + aktuální stav</span>
+          </div>
+          <ul className="divide-y divide-cream-100">
+            {prevTasks.map(t => (
+              <li key={t.id}
+                onClick={async () => {
+                  try {
+                    const d = await tasksApi.get(t.id);
+                    setDetailTask(d.task);
+                  } catch { /* ignore */ }
+                }}
+                className="py-2 flex items-center gap-3 cursor-pointer hover:bg-cream-50 rounded px-1">
+                <StatusBadge status={t.status} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-ink-800 truncate">{t.title}</div>
+                  <div className="text-[11px] text-ink-500 truncate">
+                    {t.from_meeting_date && `📋 ${new Date(t.from_meeting_date).toLocaleDateString('cs-CZ')}`}
+                    {t.assignee_name && ` · 👤 ${t.assignee_name}`}
+                    {t.due_date && ` · 📅 ${new Date(t.due_date).toLocaleDateString('cs-CZ')}`}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* Audit log editací */}
       <EditsPanel meetingId={meeting.id} />

@@ -124,7 +124,7 @@ router.post('/me/test-daily-summary', requireAuth, async (req, res) => {
         message: 'Nemáš žádné otevřené úkoly — v takovém případě se denní souhrn neposílá (i produkčně).' });
     }
     if (r?.ok) return res.json({ ok: true, message: `Testovací report odeslán na ${u.email}. Když nedorazí, mrkni i do spamu.` });
-    return res.json({ ok: false, reason: 'send_failed', message: `Odeslání se nepovedlo${r?.error ? ': ' + r.error : ''}.` });
+    return res.json({ ok: false, reason: 'send_failed', message: `M365 odeslání selhalo: ${r?.detail || r?.error || 'neznámá chyba'}` });
   } catch (e) {
     return res.json({ ok: false, reason: 'error', message: String(e.message || 'chyba').slice(0, 300) });
   }
