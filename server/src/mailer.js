@@ -48,6 +48,7 @@ export function describeMailerConfig() {
 // Token cache — Graph access token žije ~60 min. Žádný retry, při expiry
 // se sám refreshne při dalším volání.
 let tokenCache = { token: null, exp: 0 };
+let lastTokenError = null; // poslední chyba získání tokenu (pro diagnostiku)
 
 async function getAppAccessToken() {
   const c = cfg();
@@ -68,9 +69,14 @@ async function getAppAccessToken() {
   });
   if (!r.ok) {
     const txt = await r.text();
-    console.warn(`[mail] token request failed ${r.status}: ${txt.slice(0, 300)}`);
+    let brief = txt.slice(0, 250);
+    // Microsoft vrací JSON { error, error_description: "AADSTSxxxxx: …" }.
+    try { const j = JSON.parse(txt); brief = `${j.error}: ${String(j.error_description || '').split('\n')[0].slice(0, 200)}`; } catch { /* není JSON */ }
+    lastTokenError = brief;
+    console.warn(`[mail] token request failed ${r.status}: ${brief}`);
     return null;
   }
+  lastTokenError = null;
   const d = await r.json();
   const expiresMs = (Number(d.expires_in) || 3600) * 1000;
   tokenCache = { token: d.access_token, exp: Date.now() + expiresMs };
@@ -88,7 +94,7 @@ export async function sendMail({ to, subject, html, text }) {
   if (!to) return { ok: false, error: 'no_recipient' };
 
   const token = await getAppAccessToken();
-  if (!token) return { ok: false, error: 'no_token' };
+  if (!token) return { ok: false, error: 'no_token', detail: lastTokenError };
 
   const body = {
     message: {
@@ -117,7 +123,7 @@ export async function sendMail({ to, subject, html, text }) {
       const errBody = await r.text();
       console.warn(`[mail] Graph sendMail ${r.status}: ${errBody.slice(0, 300)}`);
       if (r.status === 401) tokenCache = { token: null, exp: 0 };
-      return { ok: false, error: `graph_${r.status}` };
+      return { ok: false, error: `graph_${r.status}`, detail: errBody.slice(0, 250) };
     }
     // sendMail vrací 202 Accepted bez body — explicitně logujeme úspěch
     console.log(`[mail] sent OK → ${to} (subject: ${String(subject).slice(0, 80)})`);

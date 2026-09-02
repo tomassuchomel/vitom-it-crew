@@ -602,6 +602,43 @@ router.get('/meetings/:id/tasks', requireAuth, async (req, res) => {
   }
 });
 
+// Úkoly z PŘEDCHOZÍCH porad stejného typu + jejich aktuální stav („Last úkoly").
+// Přehled „co jsme zadali minule a jak to dopadlo". Přístup jako k poradě.
+router.get('/meetings/:id/previous-tasks', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = (await query(`
+    SELECT m.type_id, m.meeting_date, t.team_id, t.visibility, t.custom_users, t.organizer_id
+    FROM meetings m JOIN meeting_types t ON t.id = m.type_id WHERE m.id = $1
+  `, [id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
+
+  try {
+    const r = await query(`
+      SELECT t.id, t.title, t.status, t.priority, t.due_date, t.completed_at,
+             u.name AS assignee_name,
+             mm.id AS from_meeting_id, mm.title AS from_meeting_title, mm.meeting_date AS from_meeting_date
+      FROM tasks t
+      JOIN meetings mm ON mm.id = t.meeting_id
+      LEFT JOIN users u ON u.id = t.assignee_id
+      WHERE mm.type_id = $1
+        AND mm.id <> $2
+        AND (
+          ($3::date IS NOT NULL AND mm.meeting_date < $3::date)
+          OR ($3::date IS NULL AND mm.id < $2)
+        )
+      ORDER BY mm.meeting_date DESC NULLS LAST, mm.id DESC,
+        CASE t.status WHEN 'todo' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'review' THEN 2 WHEN 'done' THEN 3 ELSE 4 END,
+        t.id
+      LIMIT 200
+    `, [cur.type_id, id, cur.meeting_date]);
+    res.json({ tasks: r.rows });
+  } catch (err) {
+    if (err.code === '42703') return res.json({ tasks: [] }); // meeting_id sloupec ještě neexistuje
+    throw err;
+  }
+});
+
 // Audit log editací — poslední 20 změn.
 router.get('/meetings/:id/edits', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
