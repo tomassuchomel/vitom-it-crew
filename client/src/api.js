@@ -259,6 +259,8 @@ export const email = {
 export const notifications = {
   get:    () => api.get('/notifications/me').then(r => r.data),
   update: (prefs) => api.put('/notifications/me', prefs).then(r => r.data),
+  // Diagnostika: pošle denní report hned a vrátí přesný důvod, když to nejde.
+  testDailySummary: () => api.post('/notifications/me/test-daily-summary').then(r => r.data),
 };
 
 // Nápadník — sběr, řízení a schvalování interních návrhů.

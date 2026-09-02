@@ -240,6 +240,28 @@ async function dailyEmailSummary({ h, m, ymd, dayOfWeek } = {}) {
   return { sent, skipped: 0 };
 }
 
+// ── Diagnostika / ruční test denního souhrnu ───────────────────────────────
+// Sestaví a pošle denní souhrn JEDNOMU uživateli hned (bez kontroly rozvrhu).
+// Reminders (porady/MZV) pro test vynecháváme — stačí jádro. Vrací výsledek
+// sendMail ({ ok }) nebo { ok:false, skipped:'no_tasks' }.
+export async function sendDailySummaryToUser(u, apiKey) {
+  const tasksR = await query(`
+    SELECT t.id, t.title, t.status, t.priority, t.due_date, t.estimated_h, p.name AS project_name
+    FROM tasks t JOIN projects p ON p.id = t.project_id
+    WHERE t.assignee_id = $1 AND t.status IN ('todo','in_progress','needs_fix','review')
+    ORDER BY t.due_date NULLS LAST, t.id
+  `, [u.id]);
+  if (tasksR.rows.length === 0) return { ok: false, skipped: 'no_tasks' };
+  const ai = await summarizeUserTasks(u, tasksR.rows, apiKey);
+  const html = buildDailySummaryHtml(u, ai, tasksR.rows, null, null);
+  return sendMail({ to: u.email, subject: `VITOM: Tvůj plán na dnes (${tasksR.rows.length} úkolů)`, html });
+}
+
+// Připravenost denního souhrnu (pro diagnostiku): je mailer i AI klíč?
+export function dailySummaryReadiness() {
+  return { mailer: isMailerConfigured(), anthropic: !!process.env.ANTHROPIC_API_KEY?.trim() };
+}
+
 async function summarizeUserTasks(user, tasks, apiKey) {
   const today = new Date().toISOString().slice(0, 10);
   // Pošleme jen co potřeba: title, priority, deadline, hours, project.

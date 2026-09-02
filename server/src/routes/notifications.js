@@ -7,6 +7,7 @@ import express from 'express';
 import { requireAuth } from '../auth.js';
 import { query } from '../db.js';
 import { getNotificationPrefs, isMailerConfigured } from '../mailer.js';
+import { sendDailySummaryToUser, dailySummaryReadiness } from '../pushCron.js';
 
 const router = express.Router();
 
@@ -99,6 +100,34 @@ router.put('/me', requireAuth, async (req, res) => {
 
   const prefs = await getNotificationPrefs(req.user.id);
   res.json({ prefs });
+});
+
+// Ruční test denního souhrnu — pošle report přihlášenému uživateli HNED (bez
+// čekání na ranní rozvrh) a vrátí PŘESNÝ důvod, když to nejde. Diagnostika.
+router.post('/me/test-daily-summary', requireAuth, async (req, res) => {
+  const ready = dailySummaryReadiness();
+  if (!ready.mailer) {
+    return res.json({ ok: false, reason: 'mailer_not_configured',
+      message: 'Chybí konfigurace M365 mailu (MICROSOFT_CLIENT_ID / _SECRET / _TENANT_ID, MAIL_M365_MAILBOX). Doplň v Admin → Server → Environment a restartuj.' });
+  }
+  if (!ready.anthropic) {
+    return res.json({ ok: false, reason: 'no_anthropic_key',
+      message: 'Chybí ANTHROPIC_API_KEY (denní souhrn obsahuje AI shrnutí). Doplň v Admin → Server → Environment a restartuj.' });
+  }
+  try {
+    const ur = await query('SELECT id, email, name FROM users WHERE id = $1', [req.user.id]);
+    const u = ur.rows[0];
+    if (!u?.email) return res.json({ ok: false, reason: 'no_email', message: 'Tvůj účet nemá e-mail.' });
+    const r = await sendDailySummaryToUser(u, process.env.ANTHROPIC_API_KEY.trim());
+    if (r?.skipped === 'no_tasks') {
+      return res.json({ ok: false, reason: 'no_open_tasks',
+        message: 'Nemáš žádné otevřené úkoly — v takovém případě se denní souhrn neposílá (i produkčně).' });
+    }
+    if (r?.ok) return res.json({ ok: true, message: `Testovací report odeslán na ${u.email}. Když nedorazí, mrkni i do spamu.` });
+    return res.json({ ok: false, reason: 'send_failed', message: `Odeslání se nepovedlo${r?.error ? ': ' + r.error : ''}.` });
+  } catch (e) {
+    return res.json({ ok: false, reason: 'error', message: String(e.message || 'chyba').slice(0, 300) });
+  }
 });
 
 export default router;

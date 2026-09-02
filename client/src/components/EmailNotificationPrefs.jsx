@@ -33,6 +33,7 @@ export default function EmailNotificationPrefs() {
   const [busy, setBusy] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
   const [err, setErr] = useState(null);
+  const [testMsg, setTestMsg] = useState(null); // { ok, text } — výsledek testovacího odeslání
 
   useEffect(() => {
     notifApi.get()
@@ -60,6 +61,17 @@ export default function EmailNotificationPrefs() {
       setSavedAt(new Date());
     } catch {
       setErr('Uložení selhalo.');
+    } finally { setBusy(false); }
+  };
+
+  // Diagnostika: pošle denní report hned a ukáže přesný výsledek/důvod.
+  const sendTest = async () => {
+    setBusy(true); setTestMsg(null);
+    try {
+      const d = await notifApi.testDailySummary();
+      setTestMsg({ ok: !!d.ok, text: d.message || (d.ok ? 'Odesláno.' : 'Nepovedlo se.') });
+    } catch (e) {
+      setTestMsg({ ok: false, text: e.response?.data?.message || 'Test se nepodařilo spustit.' });
     } finally { setBusy(false); }
   };
 
@@ -134,7 +146,17 @@ export default function EmailNotificationPrefs() {
         </button>
         {savedAt && <span className="text-xs text-emerald-700">✓ Uloženo {savedAt.toLocaleTimeString('cs-CZ')}</span>}
         {err && <span className="text-xs text-red-600">{err}</span>}
+        <button onClick={sendTest} disabled={busy}
+          title="Pošle denní report hned (bez čekání na ranní čas) a ukáže, jestli to funguje"
+          className="ml-auto px-3 py-1.5 text-sm rounded border border-brand-300 text-brand-600 hover:bg-brand-50 disabled:opacity-50">
+          ✉️ Poslat testovací report teď
+        </button>
       </div>
+      {testMsg && (
+        <div className={`text-xs rounded p-2 border ${testMsg.ok ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+          {testMsg.ok ? '✅ ' : '⚠️ '}{testMsg.text}
+        </div>
+      )}
       <div className="text-[10px] text-ink-400">
         Emaily přicházejí z noreply adresy — neodpovídej na ně. Akci provedeš kliknutím na odkaz v mailu.
       </div>
