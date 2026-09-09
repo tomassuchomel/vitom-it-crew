@@ -206,6 +206,18 @@ export default function Meetings() {
   );
 }
 
+// API vrací DATE jako ISO s časem v UTC ("2026-09-01T22:00:00.000Z" = 2. 9.
+// v Praze). Takový řetězec <input type="date"> nezobrazí a při uložení zpět by
+// se datum posunulo o den. Proto ho hned po načtení převedeme na YYYY-MM-DD
+// podle lokální zóny.
+function withLocalDate(m) {
+  if (!m?.meeting_date) return m;
+  const d = new Date(m.meeting_date);
+  if (Number.isNaN(d.getTime())) return m;
+  const pad = (n) => String(n).padStart(2, '0');
+  return { ...m, meeting_date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` };
+}
+
 // ==================== Detail zápisu ====================
 
 function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
@@ -213,6 +225,7 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [teamUsers, setTeamUsers] = useState([]);
+  const [allUsers, setAllUsers] = useState([]); // fallback jmen pro účastníky mimo aktuální tým
   const [summary, setSummary] = useState(null);   // { text, loading } — sumář předchozích
   const [notesSummary, setNotesSummary] = useState(null); // shrnutí AKTUÁLNÍHO zápisu
   const [aiBusy, setAiBusy] = useState(false);
@@ -227,7 +240,7 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
     setMeeting(null);
     setDirty(false);
     setNotesSummary(null);
-    api.getMeeting(meetingId).then(d => setMeeting(d.meeting));
+    api.getMeeting(meetingId).then(d => setMeeting(withLocalDate(d.meeting)));
     api.listTasks(meetingId).then(d => setMeetingTasks(d.tasks || [])).catch(() => setMeetingTasks([]));
     api.previousTasks(meetingId).then(d => setPrevTasks(d.tasks || [])).catch(() => setPrevTasks([]));
   }, [meetingId]);
@@ -238,17 +251,24 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
   useEffect(() => {
     if (!type) return;
     if (type.visibility === 'team' && type.team_id) {
-      usersApi.listInTeam(type.team_id).then(d => setTeamUsers(d.users || []));
+      usersApi.listInTeam(type.team_id).then(d => setTeamUsers(d.users || [])).catch(() => setTeamUsers([]));
     } else if (type.visibility === 'custom' && Array.isArray(type.custom_users) && type.custom_users.length > 0) {
       // Načteme všechny users a filtrujeme na custom seznam
-      usersApi.list().then(d => setTeamUsers((d.users || []).filter(u => type.custom_users.map(Number).includes(u.id))));
+      usersApi.list().then(d => setTeamUsers((d.users || []).filter(u => type.custom_users.map(Number).includes(u.id)))).catch(() => setTeamUsers([]));
     } else {
       setTeamUsers([]);
     }
   }, [type?.id, type?.visibility, type?.team_id]);
 
+  // Záloha jmen: prezence se kreslí podle aktuálních členů týmu, takže kdo je
+  // v zápise uložený, ale už v týmu není, by jinak z docházky zmizel i s omluvou.
+  useEffect(() => {
+    usersApi.list().then(d => setAllUsers(d.users || [])).catch(() => setAllUsers([]));
+  }, []);
+
+  // Vrací true/false — přechod stavu podle toho pozná, jestli smí pokračovat.
   const save = async () => {
-    if (!meeting) return;
+    if (!meeting) return false;
     setSaving(true);
     try {
       await api.updateMeeting(meeting.id, {
@@ -261,8 +281,10 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
       });
       setDirty(false);
       onChanged?.();
+      return true;
     } catch (e) {
       alert(e.response?.data?.message || 'Uložení selhalo');
+      return false;
     } finally { setSaving(false); }
   };
 
@@ -426,9 +448,13 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
     <div className="max-w-4xl mx-auto p-6 space-y-4">
       {/* Header */}
       <div className="bg-white border border-cream-200 rounded-lg p-4">
-        <StatusBar meeting={meeting} type={type} user={user} onCompleted={onMeetingCompleted} onChanged={async () => {
+        <StatusBar meeting={meeting} type={type} user={user} onCompleted={onMeetingCompleted}
+          // Přechod stavu znovu načte zápis z DB — rozpracovaná prezence by se
+          // ztratila. Proto ji předtím uložíme (a při chybě přechod neprovedeme).
+          onBeforeTransition={async () => (dirty ? await save() : true)}
+          onChanged={async () => {
           const d = await api.getMeeting(meeting.id);
-          setMeeting(d.meeting);
+          setMeeting(withLocalDate(d.meeting));
           onChanged?.();
         }} />
         <input
@@ -599,6 +625,23 @@ function MeetingDetail({ meetingId, type, onChanged, onDeleted }) {
               />
             );
           })}
+          {/* Zapsaní účastníci, kteří už nejsou v týmu — ať docházka nezmizí zpětně. */}
+          {attendees
+            .filter(a => a.user_id && !teamUsers.some(u => u.id === a.user_id))
+            .map((a) => {
+              const u = allUsers.find(x => x.id === a.user_id);
+              return (
+                <AttendanceRow
+                  key={`ext-${a.user_id}`}
+                  name={`${u?.name || `Uživatel #${a.user_id}`} (už není v týmu)`}
+                  avatarUser={u || { id: a.user_id, name: u?.name || '?' }}
+                  status={getAttendanceStatus(a.user_id)}
+                  reason={a.reason}
+                  reasonNote={a.reason_note}
+                  onSet={(s, r) => setAttendanceStatus(a.user_id, s, r)}
+                />
+              );
+            })}
           {/* Hosté */}
           {attendees.filter(a => !a.user_id).map((a) => {
             const idx = attendees.findIndex(x => x === a);
@@ -879,7 +922,7 @@ const STATUS_META = {
   completed:   { label: '✅ Uzavřeno',  cls: 'bg-brand-50 text-brand-700 border-brand-300' },
 };
 
-function StatusBar({ meeting, type, user, onChanged, onCompleted }) {
+function StatusBar({ meeting, type, user, onChanged, onCompleted, onBeforeTransition }) {
   const [busy, setBusy] = useState(false);
   const status = meeting.status || 'draft';
   const isOrgOrAdmin = meeting.organizer_id === user?.id || user?.role === 'admin';
@@ -904,6 +947,9 @@ function StatusBar({ meeting, type, user, onChanged, onCompleted }) {
     }
     setBusy(true);
     try {
+      // Ulož rozpracované změny (typicky prezenci) — po přechodu se zápis
+      // načte z DB a neuložené kliknutí by zmizelo.
+      if (await onBeforeTransition?.() === false) return;
       const d = await api.transition(meeting.id, to, reason, start);
       await onChanged();
       // Po uzavření porady se rovnou zeptáme na follow-up mail (žádné hledání

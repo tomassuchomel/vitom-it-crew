@@ -253,9 +253,15 @@ router.patch('/meetings/:id', requireAuth, async (req, res) => {
     }
   }
   if ('meeting_date' in b) {
-    push('meeting_date', b.meeting_date || null);
-    if (String(b.meeting_date || '') !== String(cur.meeting_date || '').slice(0, 10)) {
-      auditChanges.push({ type: 'date', before: cur.meeting_date, after: b.meeting_date });
+    // Klient vrací datum tak, jak ho dostal z API — tedy ISO s časem a zónou
+    // ("2026-09-01T22:00:00.000Z"). Bez oříznutí by se cast na ::date v UTC
+    // posunul o den zpět a každé uložení by poradu odsunulo.
+    const newDate = b.meeting_date ? String(b.meeting_date).slice(0, 10) : null;
+    const validDate = newDate && /^\d{4}-\d{2}-\d{2}$/.test(newDate) ? newDate : null;
+    push('meeting_date', validDate, '::date');
+    const curDate = toYMD(cur.meeting_date);
+    if (String(validDate || '') !== String(curDate || '')) {
+      auditChanges.push({ type: 'date', before: curDate, after: validDate });
     }
   }
   if ('meeting_time' in b) {
@@ -301,6 +307,15 @@ router.patch('/meetings/:id', requireAuth, async (req, res) => {
 // status: 'present' | 'late' | 'missed' | 'excused'. Backward compat: pokud přijde jen
 // `present: bool`, přeložíme na status ('present' nebo 'missed').
 // Pro 'excused' držíme volitelné reason (dovolena/nemoc/jina) + reason_note.
+// DATE z pg přijde jako JS Date v lokální zóně. toISOString() by ho posunul
+// o den, proto skládáme YYYY-MM-DD z lokálních složek.
+function toYMD(d) {
+  if (!d) return null;
+  if (typeof d === 'string') return d.slice(0, 10);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 const VALID_STATUS = ['present', 'late', 'missed', 'excused'];
 const VALID_EXCUSE = ['dovolena', 'nemoc', 'jina'];
 function sanitizeAttendees(list) {
@@ -606,14 +621,18 @@ router.get('/meetings/:id/tasks', requireAuth, async (req, res) => {
 // Přehled „co jsme zadali minule a jak to dopadlo". Přístup jako k poradě.
 router.get('/meetings/:id/previous-tasks', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
+  // meeting_date bereme jako ::text — JS Date by se při zpětném bindu na ::date
+  // posunul o den kvůli timezone (DATE → ISO serializace).
   const cur = (await query(`
-    SELECT m.type_id, m.meeting_date, t.team_id, t.visibility, t.custom_users, t.organizer_id
+    SELECT m.type_id, m.meeting_date::text AS meeting_date, t.team_id, t.visibility, t.custom_users, t.organizer_id
     FROM meetings m JOIN meeting_types t ON t.id = m.type_id WHERE m.id = $1
   `, [id])).rows[0];
   if (!cur) return res.status(404).json({ error: 'not_found' });
   if (!await canAccessType(req.user.id, req.user.role, cur)) return res.status(403).json({ error: 'forbidden' });
 
   try {
+    // "Předchozí" = dřívější v pořadí (datum, id). Porovnání dvojicí řeší i porady
+    // se STEJNÝM datem (rozhodne id) a porady bez data (řadí se jako nejstarší).
     const r = await query(`
       SELECT t.id, t.title, t.status, t.priority, t.due_date, t.completed_at,
              u.name AS assignee_name,
@@ -622,11 +641,8 @@ router.get('/meetings/:id/previous-tasks', requireAuth, async (req, res) => {
       JOIN meetings mm ON mm.id = t.meeting_id
       LEFT JOIN users u ON u.id = t.assignee_id
       WHERE mm.type_id = $1
-        AND mm.id <> $2
-        AND (
-          ($3::date IS NOT NULL AND mm.meeting_date < $3::date)
-          OR ($3::date IS NULL AND mm.id < $2)
-        )
+        AND (COALESCE(mm.meeting_date, '-infinity'::date), mm.id)
+          < (COALESCE($3::date, 'infinity'::date), $2::int)
       ORDER BY mm.meeting_date DESC NULLS LAST, mm.id DESC,
         CASE t.status WHEN 'todo' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'review' THEN 2 WHEN 'done' THEN 3 ELSE 4 END,
         t.id
