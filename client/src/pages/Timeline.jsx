@@ -185,8 +185,12 @@ function GanttChart({ projects, zoom, forecastEnabled }) {
   const layout = useMemo(() => {
     const starts = projects.map(p => parseDate(p.start_date));
     const dues   = projects.map(p => parseDate(p.effective_due_date));
-    const min = new Date(Math.min(...starts, today.getTime()) - 5 * dayMs);
-    const max = new Date(Math.max(...dues, today.getTime()) + 5 * dayMs);
+    // Milníky musí do osy taky — milník po termínu projektu je běžný scénář
+    // a bez tohohle by se vykreslil mimo graf.
+    const msDates = projects.flatMap(p =>
+      (p.milestones || []).filter(m => m.deadline).map(m => parseDate(m.deadline)));
+    const min = new Date(Math.min(...starts, ...msDates, today.getTime()) - 5 * dayMs);
+    const max = new Date(Math.max(...dues, ...msDates, today.getTime()) + 5 * dayMs);
     const totalDays = Math.max(1, daysBetween(min, max));
 
     // Najdeme nejdelší projekt – jeho délka určuje pixelovou škálu
@@ -279,6 +283,19 @@ function GanttChart({ projects, zoom, forecastEnabled }) {
         <span className="flex items-center gap-1"><span className="w-3 h-2 rounded bg-brand-500" /> Hlavní bar = od začátku do termínu</span>
         <span className="flex items-center gap-1"><span className="w-3 h-1 rounded bg-accent-500" /> Tenká linka = odhad práce ({HOURS_PER_DAY} h/den)</span>
         <span className="flex items-center gap-1"><span className="w-px h-3 bg-red-500" /> Dnes</span>
+        <span className="flex items-center gap-1">
+          <span className="w-0.5 h-3 bg-ink-900" /> Deadline projektu
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rotate-45 border-2 border-brand-700 bg-white inline-block" /> Milník
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rotate-45 border-2 border-brand-700 bg-brand-700 inline-block" /> Milník navázaný na úkol
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rotate-45 border-2 border-red-600 bg-red-600 inline-block" /> po termínu
+          <span className="w-2 h-2 rotate-45 border-2 border-emerald-600 bg-emerald-600 inline-block ml-1" /> hotový
+        </span>
         <span className="ml-auto">Nejdelší projekt: {layout.longestDays} dní</span>
       </div>
     </div>
@@ -391,8 +408,51 @@ function ProjectRow({ project, layout, colorIdx, forecastEnabled }) {
   const forecastLabel = workdaysLabel(remH);
   const projectedDateLabel = fmtCs(forecastEndDate);
 
+  // Milníky projektu (sekce 5). Kreslíme je jako kosočtverce na ose — každý
+  // druh položky má vlastní tvar/barvu, ať jde na první pohled rozlišit
+  // deadline projektu od milníku a od milníku navázaného na úkol.
+  const milestones = Array.isArray(project.milestones) ? project.milestones : [];
+
   return (
     <div className="relative border-b border-cream-100 hover:bg-cream-50/50 transition" style={{ height: 100 }}>
+      {/* Milníky — nad hlavním barem, ať nepřekrývají progress */}
+      {milestones.filter(m => m.deadline).map(m => {
+        const md = parseDate(m.deadline);
+        const mLeft = daysBetween(layout.min, md) * layout.pxPerDay;
+        const mDone = m.task_status === 'done';
+        const mOverdue = !mDone && md < today;
+        const linked = !!m.task_id;
+        return (
+          <div key={m.id}
+            className="absolute z-10 pointer-events-auto"
+            style={{ left: mLeft - 5, top: 1 }}
+            title={`Milník: ${m.name} · ${fmtCs(md)}`
+              + (linked ? ` · navázán na úkol${mDone ? ' (hotový)' : ''}` : '')
+              + (mOverdue ? ' · PO TERMÍNU' : '')}
+          >
+            {/* Kosočtverec = milník. Vyplněný = navázaný na úkol, prázdný = samostatný. */}
+            <div
+              className="w-2.5 h-2.5 rotate-45 border-2"
+              style={{
+                borderColor: mOverdue ? '#dc2626' : mDone ? '#059669' : '#082327',
+                background: linked ? (mOverdue ? '#dc2626' : mDone ? '#059669' : '#082327') : 'white',
+              }}
+            />
+          </div>
+        );
+      })}
+
+      {/* Deadline celého projektu — jen když ho projekt opravdu má.
+          Když effective_due_date pochází z úkolu, značku nekreslíme, ať
+          uživateli netvrdíme deadline, který projekt nemá. */}
+      {project.due_source === 'project' && (
+        <div
+          className="absolute z-10 w-0.5 pointer-events-auto bg-ink-900"
+          style={{ left: left + width - 1, top: 6, height: 38 }}
+          title={`Deadline projektu: ${fmtCs(due)}`}
+        />
+      )}
+
       {/* Hlavní bar */}
       <div
         className="absolute rounded-lg shadow-sm flex items-center px-2 text-xs text-white overflow-hidden"

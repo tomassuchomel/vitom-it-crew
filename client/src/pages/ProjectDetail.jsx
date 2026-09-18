@@ -11,7 +11,7 @@ import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import ReviewTaskDialog from '../components/ReviewTaskDialog.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge } from '../components/TaskStatus.jsx';
 import { Input, Textarea, Select, TimelineFlags } from './ProjectsList.jsx';
-import { projects as projectsApi, tasks as tasksApi, users as usersApi } from '../api.js';
+import { projects as projectsApi, tasks as tasksApi, users as usersApi, milestones as milestonesApi } from '../api.js';
 import { useAuth, can } from '../auth.jsx';
 
 const STATUS_OPTIONS = [
@@ -278,6 +278,8 @@ export default function ProjectDetail() {
             />
           </div>
 
+          <MilestonesPanel projectId={project.id} tasks={tasks} />
+
           {/* Historie změn */}
           <div className="bg-white rounded-xl border border-cream-200 p-5 text-sm">
             <h3 className="font-semibold text-ink-800 mb-3">Historie změn</h3>
@@ -360,6 +362,161 @@ export default function ProjectDetail() {
 }
 
 // ---------- Edit Project Modal ----------
+// Milníky projektu (sekce 4) — části projektu s vlastním termínem.
+// Celkový deadline projektu zůstává v Detailech, tohle ho doplňuje.
+function MilestonesPanel({ projectId, tasks }) {
+  const [list, setList] = useState([]);
+  const [canEdit, setCanEdit] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ name: '', deadline: '', task_id: '' });
+  const [editId, setEditId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const [loadErr, setLoadErr] = useState(false);
+  const load = () => milestonesApi.list(projectId)
+    .then(d => { setList(d.milestones || []); setCanEdit(!!d.can_edit); setLoadErr(false); })
+    .catch(() => { setList([]); setLoadErr(true); });
+  useEffect(() => { load(); }, [projectId]);
+
+  const reset = () => { setForm({ name: '', deadline: '', task_id: '' }); setAdding(false); setEditId(null); setErr(null); };
+
+  const submit = async () => {
+    if (!form.name.trim()) { setErr('Vyplň název milníku.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      const payload = {
+        name: form.name.trim(),
+        deadline: form.deadline || null,
+        task_id: form.task_id ? Number(form.task_id) : null,
+      };
+      if (editId) await milestonesApi.update(editId, payload);
+      else await milestonesApi.create(projectId, payload);
+      reset();
+      await load();
+    } catch (e) {
+      setErr(e.response?.data?.fields?.name || e.response?.data?.fields?.task_id
+        || e.response?.data?.message || 'Uložení selhalo.');
+    } finally { setBusy(false); }
+  };
+
+  const remove = async (m) => {
+    if (!confirm(`Smazat milník „${m.name}"?`)) return;
+    try {
+      await milestonesApi.remove(m.id);
+    } catch (e) {
+      setErr(e.response?.data?.message || 'Smazání selhalo.');
+    }
+    await load();
+  };
+
+  // Posun v pořadí — prohodí se sousedi a pošle se nové pořadí celého seznamu.
+  const move = async (idx, dir) => {
+    const next = [...list];
+    const j = idx + dir;
+    if (j < 0 || j >= next.length) return;
+    [next[idx], next[j]] = [next[j], next[idx]];
+    setList(next);
+    await milestonesApi.reorder(projectId, next.map(m => m.id)).catch(() => load());
+  };
+
+  const startEdit = (m) => {
+    setEditId(m.id);
+    setAdding(true);
+    setForm({ name: m.name, deadline: m.deadline || '', task_id: m.task_id || '' });
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-cream-200 p-5 text-sm">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-semibold text-ink-800">🏁 Milníky ({list.length})</h3>
+        {canEdit && !adding && (
+          <button onClick={() => setAdding(true)} className="text-xs text-brand-600 hover:underline">+ Přidat</button>
+        )}
+      </div>
+
+      {loadErr ? (
+        <div className="text-xs text-red-600">Milníky se nepodařilo načíst.</div>
+      ) : list.length === 0 && !adding && (
+        <div className="text-xs text-ink-400 italic">
+          Zatím žádné milníky. Rozděl projekt na části s vlastními termíny.
+        </div>
+      )}
+
+      <ul className="space-y-1.5">
+        {list.map((m, idx) => {
+          // Obě strany parsujeme na lokální poledne — jinak by se v záporném
+          // UTC offsetu dnešní milník označil jako po termínu.
+          const overdue = m.deadline && m.task_status !== 'done'
+            && new Date(`${m.deadline}T12:00:00`) < new Date(new Date().setHours(12, 0, 0, 0));
+          return (
+            <li key={m.id} className="flex items-start gap-2 border border-cream-200 rounded px-2 py-1.5">
+              <span className="text-ink-400 text-[10px] mt-0.5 w-4 shrink-0">{idx + 1}.</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-ink-800 truncate">{m.name}</div>
+                <div className="text-[11px] text-ink-500 flex flex-wrap gap-x-2">
+                  <span className={overdue ? 'text-red-600 font-medium' : ''}>
+                    📅 {m.deadline ? fmtDate(m.deadline) : 'bez termínu'}
+                  </span>
+                  {m.task_id && (
+                    <span title="Milník je navázaný na úkol">
+                      🔗 {m.task_title || `úkol #${m.task_id}`}
+                      {m.task_status === 'done' && ' ✓'}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {canEdit && (
+                <div className="flex items-center gap-1 shrink-0 text-xs">
+                  <button onClick={() => move(idx, -1)} disabled={idx === 0}
+                    className="px-1 text-ink-400 hover:text-ink-700 disabled:opacity-30" title="Nahoru">↑</button>
+                  <button onClick={() => move(idx, 1)} disabled={idx === list.length - 1}
+                    className="px-1 text-ink-400 hover:text-ink-700 disabled:opacity-30" title="Dolů">↓</button>
+                  <button onClick={() => startEdit(m)} className="px-1 text-brand-600 hover:underline">upravit</button>
+                  <button onClick={() => remove(m)} className="px-1 text-red-500" title="Smazat">×</button>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      {adding && (
+        <div className="mt-3 border-t border-cream-200 pt-3 space-y-2">
+          <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+            placeholder="Např. Výběr dodavatele"
+            className="w-full border border-ink-300 rounded px-2 py-1 text-sm" />
+          <div className="flex gap-2">
+            <label className="flex-1">
+              <span className="text-[11px] text-ink-500">Termín</span>
+              <input type="date" value={form.deadline}
+                onChange={e => setForm(f => ({ ...f, deadline: e.target.value }))}
+                className="w-full border border-ink-300 rounded px-2 py-1 text-sm" />
+            </label>
+            <label className="flex-1 min-w-0">
+              <span className="text-[11px] text-ink-500">Navázat na úkol</span>
+              <select value={form.task_id}
+                onChange={e => setForm(f => ({ ...f, task_id: e.target.value }))}
+                className="w-full border border-ink-300 rounded px-2 py-1 text-sm">
+                <option value="">— žádný —</option>
+                {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+              </select>
+            </label>
+          </div>
+          {err && <div className="text-xs text-red-600">{err}</div>}
+          <div className="flex gap-2">
+            <button onClick={submit} disabled={busy}
+              className="px-3 py-1 text-xs bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+              {busy ? 'Ukládám…' : editId ? 'Uložit' : 'Přidat milník'}
+            </button>
+            <button onClick={reset} className="px-3 py-1 text-xs border border-ink-300 rounded hover:bg-cream-50">Zrušit</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EditProjectModal({ open, onClose, project, users, onSaved }) {
   const [form, setForm] = useState({
     name: '', description: '',
