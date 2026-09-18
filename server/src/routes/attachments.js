@@ -23,6 +23,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { query } from '../db.js';
 import { requireAuth, can } from '../auth.js';
+import { isManagement, isIdeaPM } from '../ideaAccess.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -114,30 +115,42 @@ router.post('/by-task/:taskId', requireAuth, upload.array('files', 10), async (r
 router.get('/:id/file', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).end();
+  // Příloha visí BUĎ na úkolu, NEBO na nápadu (CHECK v DB). Každá vazba má
+  // vlastní pravidla přístupu, proto nejdřív načteme řádek a pak větvíme.
   const r = await query(`
-    SELECT a.data, a.mime_type, a.original_name, a.filename,
+    SELECT a.data, a.mime_type, a.original_name, a.filename, a.task_id, a.idea_id,
            t.assignee_id, p.team_id AS project_team_id, p.manager_id AS project_manager_id
     FROM attachments a
-    JOIN tasks t    ON t.id = a.task_id
-    JOIN projects p ON p.id = t.project_id
+    LEFT JOIN tasks t    ON t.id = a.task_id
+    LEFT JOIN projects p ON p.id = t.project_id
     WHERE a.id = $1
   `, [id]);
   const a = r.rows[0];
   if (!a) return res.status(404).end();
 
-  const isAdmin       = req.user.role === 'admin';
-  const isAssignee    = a.assignee_id === req.user.id;
-  const isProjectMgr  = a.project_manager_id === req.user.id;
-  let isTeamMember    = false;
-  if (!isAdmin && !isAssignee && !isProjectMgr) {
-    const m = await query(
-      `SELECT 1 FROM team_members WHERE user_id = $1 AND team_id = $2 LIMIT 1`,
-      [req.user.id, a.project_team_id]
-    );
-    isTeamMember = m.rows.length > 0;
-  }
-  if (!isAdmin && !isAssignee && !isProjectMgr && !isTeamMember) {
-    return res.status(404).end();
+  if (a.idea_id) {
+    // Přílohy nápadu vidí jen Management a PM Nápadníku — stejné pravidlo jako
+    // u samotného Nápadníku. Veřejný navrhovatel se k cizím souborům nedostane.
+    const [mgr, pm] = await Promise.all([
+      isManagement(req.user.id, req.user.role),
+      isIdeaPM(req.user.id),
+    ]);
+    if (!mgr && !pm) return res.status(404).end();
+  } else {
+    const isAdmin       = req.user.role === 'admin';
+    const isAssignee    = a.assignee_id === req.user.id;
+    const isProjectMgr  = a.project_manager_id === req.user.id;
+    let isTeamMember    = false;
+    if (!isAdmin && !isAssignee && !isProjectMgr) {
+      const m = await query(
+        `SELECT 1 FROM team_members WHERE user_id = $1 AND team_id = $2 LIMIT 1`,
+        [req.user.id, a.project_team_id]
+      );
+      isTeamMember = m.rows.length > 0;
+    }
+    if (!isAdmin && !isAssignee && !isProjectMgr && !isTeamMember) {
+      return res.status(404).end();
+    }
   }
 
   const setDownloadHeaders = () => {
@@ -167,7 +180,15 @@ router.delete('/:id', requireAuth, async (req, res) => {
   const aR = await query('SELECT * FROM attachments WHERE id = $1', [id]);
   const a = aR.rows[0];
   if (!a) return res.status(404).json({ error: 'not_found' });
-  if (a.uploader_id !== req.user.id && !can.manageProjects(req.user)) {
+  if (a.idea_id) {
+    // Přílohu nápadu smí odebrat Management nebo PM Nápadníku — ten, kdo
+    // s nápadem pracuje. Autor z veřejného formuláře žádné uploader_id nemá.
+    const [mgr, pm] = await Promise.all([
+      isManagement(req.user.id, req.user.role),
+      isIdeaPM(req.user.id),
+    ]);
+    if (!mgr && !pm) return res.status(403).json({ error: 'forbidden' });
+  } else if (a.uploader_id !== req.user.id && !can.manageProjects(req.user)) {
     return res.status(403).json({ error: 'forbidden' });
   }
   // Smaž z disku pokud existuje (legacy)

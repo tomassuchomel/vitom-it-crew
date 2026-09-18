@@ -3,7 +3,8 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
-import { ideas as ideasApi, users as usersApi } from '../api.js';
+import { ideas as ideasApi, users as usersApi, projects as projectsApi } from '../api.js';
+import FilePicker from '../components/FilePicker.jsx';
 import { useTeams } from '../teams.jsx';
 import { useAuth } from '../auth.jsx';
 
@@ -26,15 +27,27 @@ const PM_REC_META = {
   D: { label: 'D – čeká na vstupy',               cls: 'text-orange-600' },
 };
 
+const ALL_STATES = Object.keys(STATE_META);
+
+// Výchozí pohled („Aktivní") nechává filtrování na serveru — ten schová
+// rozpracované, hotové a odložené. Ostatní volby posílají konkrétní stav,
+// takže se skryté nápady dají kdykoliv dohledat.
 const STATE_FILTERS = [
+  { value: 'open',    label: 'Aktivní' },
   { value: 'all',     label: 'Vše' },
-  { value: 'open',    label: 'Otevřené' },   // = vše kromě hotovo / zamitnuto / odlozeno
   { value: 'zadano', label: '📥 Zadané' },
   { value: 'ke_schvaleni', label: '👔 Ke schválení' },
   { value: 'schvaleno_ceka_na_analyzu', label: '🔍 V analýze' },
   { value: 'rozpracovano', label: '🚀 Rozpracované' },
   { value: 'hotovo', label: '✅ Hotové' },
+  { value: 'odlozeno', label: '🗄 Odložené' },
   { value: 'zamitnuto', label: '❌ Zamítnuté' },
+];
+
+const SOURCE_FILTERS = [
+  { value: '', label: 'Odkudkoli' },
+  { value: 'public_form', label: '🌐 Veřejný formulář' },
+  { value: 'internal', label: '🏢 Interní' },
 ];
 
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: '2-digit' }) : '';
@@ -47,6 +60,10 @@ export default function Napadnik() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [filter, setFilter] = useState('open');
   const [search, setSearch] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [addOpen, setAddOpen] = useState(false);
   const [tab, setTab] = useState('wishlist');
   const { user } = useAuth();
   const { teams } = useTeams();
@@ -62,15 +79,32 @@ export default function Napadnik() {
   // Přístup do Nápadníku vůbec — vidí ho jen Management + PM Nápadníku.
   const hasAccess = canManageIdea;
 
+  // Filtrování běží na serveru — jinak by nešly zobrazit stavy, které
+  // výchozí pohled schovává (rozpracováno / hotovo / odloženo).
+  const queryParams = useMemo(() => {
+    const p = {};
+    if (filter === 'all') p.state = ALL_STATES.join(',');
+    else if (filter !== 'open') p.state = filter;
+    if (search.trim()) p.q = search.trim();
+    if (sourceFilter) p.source = sourceFilter;
+    if (dateFrom) p.from = dateFrom;
+    if (dateTo) p.to = dateTo;
+    return p;
+  }, [filter, search, sourceFilter, dateFrom, dateTo]);
+
   // silent=true refresh: neschovává tabulku (aby rozbalený detail
   // nezmizel a nezpůsobil re-mount, který resetuje jeho interní state).
   const load = (silent = false) => {
     if (!silent) setLoading(true);
-    ideasApi.list()
+    ideasApi.listFiltered(queryParams)
       .then(d => setIdeas(d.ideas || []))
       .finally(() => setLoading(false));
   };
-  useEffect(() => { load(); }, []);
+  // Psaní do hledání debounceujeme, ať každý znak neposílá request.
+  useEffect(() => {
+    const t = setTimeout(() => load(true), search ? 300 : 0);
+    return () => clearTimeout(t);
+  }, [queryParams]);
 
   const toggleExpand = async (id) => {
     if (expandedId === id) { setExpandedId(null); setDetail(null); return; }
@@ -81,24 +115,8 @@ export default function Napadnik() {
     } finally { setDetailLoading(false); }
   };
 
-  const filtered = useMemo(() => {
-    let out = ideas;
-    if (filter === 'open') {
-      out = out.filter(i => !['hotovo', 'zamitnuto', 'odlozeno'].includes(i.state));
-    } else if (filter !== 'all') {
-      out = out.filter(i => i.state === filter);
-    }
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      out = out.filter(i =>
-        i.title?.toLowerCase().includes(q) ||
-        i.proposer_name?.toLowerCase().includes(q) ||
-        i.department?.toLowerCase().includes(q) ||
-        i.category?.toLowerCase().includes(q)
-      );
-    }
-    return out;
-  }, [ideas, filter, search]);
+  // Server už vrací přesně to, co má být vidět — klient jen renderuje.
+  const filtered = ideas;
 
   // Před načtením perms nic neblikni; kdyby BE 403 → hasAccess=false.
   if (perms === null) return <div className="p-8 text-ink-500">Načítám…</div>;
@@ -123,9 +141,16 @@ export default function Napadnik() {
         title="Nápadník"
         subtitle={tab === 'report'
           ? 'Management report — přehled a rozhodnutí'
-          : `${filtered.length} z ${ideas.length} nápadů — sběr, schvalování a řízení`}
+          : `${ideas.length} nápadů — sběr, schvalování a řízení`}
         actions={
           <div className="flex flex-wrap gap-2 print:hidden">
+            {canManageIdea && (
+              <button type="button" onClick={() => setAddOpen(true)}
+                title="Založit nápad přímo v systému — nemusíš přes veřejný formulář."
+                className="px-3 py-1.5 text-sm bg-accent-500 text-white rounded-lg hover:bg-accent-600">
+                ➕ Přidat nápad
+              </button>
+            )}
             {canManageIdea && (
               <a href={ideasApi.exportCsvUrl()} download
                 className="px-3 py-1.5 text-sm bg-white border border-ink-300 text-ink-700 rounded-lg hover:bg-cream-50">
@@ -182,6 +207,28 @@ export default function Napadnik() {
               </button>
             ))}
           </div>
+        </div>
+        {/* Další filtry — kombinují se s hledáním i stavem (AND). */}
+        <div className="flex flex-wrap gap-2 items-center text-sm">
+          <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}
+            title="Odkud nápad přišel"
+            className="border border-ink-300 rounded px-2 py-1.5 text-sm">
+            {SOURCE_FILTERS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          <label className="flex items-center gap-1 text-xs text-ink-500">
+            Od
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+              className="border border-ink-300 rounded px-2 py-1 text-sm" />
+          </label>
+          <label className="flex items-center gap-1 text-xs text-ink-500">
+            Do
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+              className="border border-ink-300 rounded px-2 py-1 text-sm" />
+          </label>
+          {(sourceFilter || dateFrom || dateTo || search || filter !== 'open') && (
+            <button onClick={() => { setSourceFilter(''); setDateFrom(''); setDateTo(''); setSearch(''); setFilter('open'); }}
+              className="text-xs text-brand-600 hover:underline">Zrušit filtry</button>
+          )}
         </div>
 
         {loading ? (
@@ -251,6 +298,110 @@ export default function Napadnik() {
         )}
       </div>
       )}
+      {addOpen && (
+        <AddIdeaModal
+          onClose={() => setAddOpen(false)}
+          onCreated={() => { setAddOpen(false); load(true); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Pole formuláře VNĚ komponenty — kdyby bylo uvnitř, každý re-render (psaní)
+// by vytvořil nový komponent typ, React by input remountoval a po prvním
+// znaku by vypadl focus. Stejná past je okomentovaná v NapadnikForm.jsx.
+function IdeaField({ label, value, onChange, err, textarea, required }) {
+  const cls = 'mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-sm';
+  return (
+    <label className="block">
+      <span className="text-xs text-ink-500">{label}{required && ' *'}</span>
+      {textarea
+        ? <textarea value={value} onChange={e => onChange(e.target.value)} rows={3} className={cls} />
+        : <input value={value} onChange={e => onChange(e.target.value)} className={cls} />}
+      {err && <span className="text-[11px] text-red-600">{err}</span>}
+    </label>
+  );
+}
+
+// Interní založení nápadu (sekce 6). Používá stejná pole i stejnou entitu
+// jako veřejný formulář — navrhovatel se doplní z přihlášeného uživatele.
+function AddIdeaModal({ onClose, onCreated }) {
+  const [meta, setMeta] = useState({ departments: [], categories: [] });
+  const [form, setForm] = useState({
+    title: '', department: '', category: '',
+    problem_description: '', solution_proposal: '',
+    impact_scope: '', estimated_time_savings: '', external_link: '',
+  });
+  const [files, setFiles] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [fieldErrs, setFieldErrs] = useState({});
+
+  useEffect(() => { ideasApi.meta().then(setMeta).catch(() => {}); }, []);
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const submit = async () => {
+    setBusy(true); setErr(null); setFieldErrs({});
+    try {
+      await ideasApi.createInternal(form, files);
+      onCreated();
+    } catch (e) {
+      const d = e.response?.data;
+      if (d?.fields) setFieldErrs(d.fields);
+      setErr(d?.message || (d?.fields ? 'Zkontroluj vyplněná pole.' : 'Uložení selhalo.'));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-5 space-y-3"
+        onClick={e => e.stopPropagation()}>
+        <div className="text-lg font-semibold text-ink-800">➕ Nový nápad</div>
+        <div className="text-xs text-ink-500">
+          Nápad se uloží stejně jako z veřejného formuláře a projde stejným schvalováním.
+          Jako navrhovatel se doplníš ty.
+        </div>
+
+        <IdeaField label="Název nápadu" value={form.title} onChange={v => set('title', v)} err={fieldErrs.title} required />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="block">
+            <span className="text-xs text-ink-500">Oddělení *</span>
+            <select value={form.department} onChange={e => set('department', e.target.value)}
+              className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-sm">
+              <option value="">— vyber —</option>
+              {meta.departments.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+            {fieldErrs.department && <span className="text-[11px] text-red-600">{fieldErrs.department}</span>}
+          </label>
+          <label className="block">
+            <span className="text-xs text-ink-500">Kategorie *</span>
+            <select value={form.category} onChange={e => set('category', e.target.value)}
+              className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-sm">
+              <option value="">— vyber —</option>
+              {meta.categories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            {fieldErrs.category && <span className="text-[11px] text-red-600">{fieldErrs.category}</span>}
+          </label>
+        </div>
+        <IdeaField label="Jaký problém to řeší" value={form.problem_description} onChange={v => set('problem_description', v)} err={fieldErrs.problem_description} textarea required />
+        <IdeaField label="Navržené řešení" value={form.solution_proposal} onChange={v => set('solution_proposal', v)} err={fieldErrs.solution_proposal} textarea required />
+        <IdeaField label="Koho a jak často se to týká" value={form.impact_scope} onChange={v => set('impact_scope', v)} />
+        <IdeaField label="Odhad úspory času" value={form.estimated_time_savings} onChange={v => set('estimated_time_savings', v)} />
+        <IdeaField label="Odkaz (volitelně)" value={form.external_link} onChange={v => set('external_link', v)} />
+
+        <FilePicker files={files} onChange={setFiles} />
+
+        {err && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{err}</div>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm border border-ink-300 rounded hover:bg-cream-50">Zrušit</button>
+          <button onClick={submit} disabled={busy}
+            className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+            {busy ? 'Ukládám…' : 'Vytvořit nápad'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -263,6 +414,7 @@ function IdeaDetail({ data, onChanged }) {
   const [users, setUsers] = useState([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
+  const [mergeOpen, setMergeOpen] = useState(false);
 
   const { idea, events } = state;
 
@@ -406,8 +558,37 @@ function IdeaDetail({ data, onChanged }) {
             </div>
           )}
           {err && <div className="mt-2 text-xs text-red-600">{err}</div>}
+
+          {/* Sloučit / přiřadit — dává smysl jen u nezpracovaného nápadu. */}
+          {idea.state === 'zadano' && !idea.merged_into_id && (
+            <button onClick={() => setMergeOpen(true)}
+              title="Sloučit s jiným nápadem nebo z něj rovnou udělat úkol v projektu."
+              className="mt-2 w-full px-3 py-1.5 text-sm bg-white border border-ink-300 rounded hover:bg-cream-50">
+              🔀 Sloučit / přiřadit
+            </button>
+          )}
+          {idea.state === 'odlozeno' && (
+            <button onClick={async () => { await ideasApi.reactivate(idea.id); reload(); }}
+              title="Vrátit odložený nápad zpět mezi aktivní."
+              className="mt-2 w-full px-3 py-1.5 text-sm bg-amber-500 text-white rounded hover:bg-amber-600">
+              ♻️ Znovu aktivovat
+            </button>
+          )}
+          {idea.merged_into_id && (
+            <div className="mt-2 text-xs bg-amber-50 border border-amber-200 rounded p-2 text-amber-800">
+              Tento nápad byl sloučen do #{idea.merged_into_id}.
+            </div>
+          )}
         </div>
+
+        <IdeaAttachments ideaId={idea.id} />
+        <IdeaNotes ideaId={idea.id} />
       </div>
+
+      {mergeOpen && (
+        <MergeModal idea={idea} onClose={() => setMergeOpen(false)}
+          onDone={() => { setMergeOpen(false); reload(); onChanged?.(); }} />
+      )}
 
       {/* Pravý sloupec — historie */}
       <div className="bg-white border border-cream-200 rounded-lg p-3">
@@ -440,6 +621,230 @@ function IdeaDetail({ data, onChanged }) {
 }
 
 // Poznámka PM: textarea s Uložit tlačítkem (patch až po klik, ne po každém keystroke).
+// Přílohy nápadu (sekce 7) — obrázek s náhledem, ostatní jako stažitelná karta.
+function IdeaAttachments({ ideaId }) {
+  const [list, setList] = useState([]);
+  const [picked, setPicked] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const load = () => ideasApi.attachments(ideaId).then(d => setList(d.attachments || [])).catch(() => setList([]));
+  useEffect(() => { load(); }, [ideaId]);
+
+  const upload = async () => {
+    if (picked.length === 0) return;
+    setBusy(true); setErr(null);
+    try {
+      await ideasApi.addAttachments(ideaId, picked);
+      setPicked([]);
+      await load();
+    } catch (e) {
+      setErr(e.response?.data?.message || 'Nahrání selhalo.');
+    } finally { setBusy(false); }
+  };
+
+  const fileUrl = (id) => `/api/attachments/${id}/file`;
+
+  return (
+    <div className="border-t border-cream-200 pt-3">
+      <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
+        📎 Přílohy ({list.length})
+      </div>
+      {list.length === 0 ? (
+        <div className="text-xs text-ink-400 italic mb-2">Žádné přílohy.</div>
+      ) : (
+        <ul className="space-y-1 mb-2">
+          {list.map(a => (
+            <li key={a.id} className="flex items-center gap-2 text-sm bg-cream-50 border border-cream-200 rounded px-2 py-1">
+              {a.kind === 'image'
+                ? <img src={fileUrl(a.id)} alt="" className="w-8 h-8 object-cover rounded" />
+                : <span className="w-8 text-center">📄</span>}
+              <a href={fileUrl(a.id)} download className="flex-1 truncate text-brand-600 hover:underline">
+                {a.original_name}
+              </a>
+              <span className="text-[11px] text-ink-400">{(a.size / 1024).toFixed(0)} kB</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <FilePicker files={picked} onChange={setPicked} label="Přidat přílohu" />
+      {picked.length > 0 && (
+        <button onClick={upload} disabled={busy}
+          className="mt-2 px-3 py-1 text-xs bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+          {busy ? 'Nahrávám…' : `Nahrát ${picked.length} souborů`}
+        </button>
+      )}
+      {err && <div className="text-xs text-red-600 mt-1">{err}</div>}
+    </div>
+  );
+}
+
+// Poznámky (sekce 13) — každá samostatný záznam, editovatelná zvlášť.
+function IdeaNotes({ ideaId }) {
+  const [notes, setNotes] = useState([]);
+  const [text, setText] = useState('');
+  const [editId, setEditId] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = () => ideasApi.notes(ideaId).then(d => setNotes(d.notes || [])).catch(() => setNotes([]));
+  useEffect(() => { load(); }, [ideaId]);
+
+  const add = async () => {
+    if (!text.trim()) return;
+    setBusy(true);
+    try { await ideasApi.addNote(ideaId, text.trim()); setText(''); await load(); }
+    finally { setBusy(false); }
+  };
+  const saveEdit = async () => {
+    if (!editText.trim()) return;
+    setBusy(true);
+    try { await ideasApi.editNote(ideaId, editId, editText.trim()); setEditId(null); await load(); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="border-t border-cream-200 pt-3">
+      <div className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
+        📝 Poznámky ({notes.length})
+      </div>
+      <div className="space-y-2 mb-2">
+        {notes.map(n => (
+          <div key={n.id} className="bg-cream-50 border border-cream-200 rounded p-2">
+            {editId === n.id ? (
+              <>
+                <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={3}
+                  className="w-full border border-ink-300 rounded px-2 py-1 text-sm" />
+                <div className="flex gap-2 mt-1">
+                  <button onClick={saveEdit} disabled={busy}
+                    className="px-2 py-0.5 text-xs bg-brand-500 text-white rounded">Uložit</button>
+                  <button onClick={() => setEditId(null)} className="px-2 py-0.5 text-xs border border-ink-300 rounded">Zrušit</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-sm text-ink-800 whitespace-pre-wrap">{n.text}</div>
+                <div className="text-[10px] text-ink-400 mt-1 flex items-center gap-2">
+                  <span>{n.author_name || 'neznámý'} · {fmtDate(n.created_at)}</span>
+                  {n.updated_at !== n.created_at && <span>(upraveno {fmtDate(n.updated_at)})</span>}
+                  <button onClick={() => { setEditId(n.id); setEditText(n.text); }}
+                    className="text-brand-600 hover:underline ml-auto">upravit</button>
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+        {notes.length === 0 && <div className="text-xs text-ink-400 italic">Zatím žádné poznámky.</div>}
+      </div>
+      <textarea value={text} onChange={e => setText(e.target.value)} rows={2}
+        placeholder="Nová poznámka…"
+        className="w-full border border-ink-300 rounded px-2 py-1 text-sm" />
+      <button onClick={add} disabled={busy || !text.trim()}
+        className="mt-1 px-3 py-1 text-xs bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+        Přidat poznámku
+      </button>
+    </div>
+  );
+}
+
+// Sloučit / přiřadit (sekce 12) — dvě záložky: projekt (vznikne úkol) a nápad.
+function MergeModal({ idea, onClose, onDone }) {
+  const [tab, setTab] = useState('projects');
+  const [projects, setProjects] = useState([]);
+  const [ideasList, setIdeasList] = useState([]);
+  const [projectId, setProjectId] = useState('');
+  const [targetId, setTargetId] = useState('');
+  const [taskTitle, setTaskTitle] = useState(idea.title);
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    projectsApi.list().then(d => setProjects(d.projects || [])).catch(() => setProjects([]));
+    ideasApi.listFiltered({ state: 'zadano' }).then(d => setIdeasList((d.ideas || []).filter(i => i.id !== idea.id)))
+      .catch(() => setIdeasList([]));
+  }, [idea.id]);
+
+  const run = async () => {
+    setBusy(true); setErr(null);
+    try {
+      if (tab === 'projects') {
+        if (!projectId) { setErr('Vyber projekt.'); return; }
+        await ideasApi.createTask(idea.id, { project_id: Number(projectId), title: taskTitle.trim() || idea.title });
+      } else {
+        if (!targetId) { setErr('Vyber nápad.'); return; }
+        await ideasApi.merge(idea.id, Number(targetId));
+      }
+      onDone();
+    } catch (e) {
+      setErr(e.response?.data?.message || 'Akce selhala.');
+    } finally { setBusy(false); }
+  };
+
+  const shownIdeas = ideasList.filter(i => !q.trim() || i.title.toLowerCase().includes(q.toLowerCase()));
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-lg w-full p-5 space-y-3" onClick={e => e.stopPropagation()}>
+        <div className="text-lg font-semibold text-ink-800">🔀 Sloučit / přiřadit</div>
+        <div className="flex gap-2 border-b border-cream-200">
+          {[['projects', 'Projekty'], ['ideas', 'Nápady']].map(([v, l]) => (
+            <button key={v} onClick={() => { setTab(v); setErr(null); }}
+              className={`px-3 py-1.5 text-sm border-b-2 -mb-px ${
+                tab === v ? 'border-brand-500 text-brand-600' : 'border-transparent text-ink-500'
+              }`}>{l}</button>
+          ))}
+        </div>
+
+        {tab === 'projects' ? (
+          <>
+            <div className="text-xs text-ink-500">Z nápadu vznikne úkol ve vybraném projektu. Nápad se posune na „rozpracováno".</div>
+            <select value={projectId} onChange={e => setProjectId(e.target.value)}
+              className="w-full border border-ink-300 rounded px-2 py-1.5 text-sm">
+              <option value="">— vyber projekt —</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <label className="block">
+              <span className="text-xs text-ink-500">Název úkolu</span>
+              <input value={taskTitle} onChange={e => setTaskTitle(e.target.value)}
+                className="mt-0.5 w-full border border-ink-300 rounded px-2 py-1 text-sm" />
+            </label>
+          </>
+        ) : (
+          <>
+            <div className="text-xs text-ink-500">
+              Tento nápad se sloučí do vybraného. Přílohy, poznámky i popis se přenesou — nic se neztratí.
+            </div>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 Hledat nápad…"
+              className="w-full border border-ink-300 rounded px-2 py-1.5 text-sm" />
+            <div className="max-h-52 overflow-y-auto border border-cream-200 rounded">
+              {shownIdeas.map(i => (
+                <button key={i.id} onClick={() => setTargetId(i.id)}
+                  className={`w-full text-left px-2 py-1.5 text-sm border-b border-cream-100 hover:bg-cream-50 ${
+                    String(targetId) === String(i.id) ? 'bg-accent-50' : ''
+                  }`}>
+                  <div className="truncate">{i.title}</div>
+                  <div className="text-[10px] text-ink-400">#{i.id} · {i.proposer_name}</div>
+                </button>
+              ))}
+              {shownIdeas.length === 0 && <div className="p-3 text-xs text-ink-400 italic">Žádný odpovídající nápad.</div>}
+            </div>
+          </>
+        )}
+
+        {err && <div className="text-xs text-red-600">{err}</div>}
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm border border-ink-300 rounded hover:bg-cream-50">Zrušit</button>
+          <button onClick={run} disabled={busy}
+            className="px-3 py-1.5 text-sm bg-brand-500 text-white rounded hover:bg-brand-600 disabled:opacity-50">
+            {busy ? 'Pracuji…' : tab === 'projects' ? 'Vytvořit úkol' : 'Sloučit'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PmNoteField({ initial, onSave, disabled }) {
   const [val, setVal] = useState(initial);
   const dirty = val !== initial;

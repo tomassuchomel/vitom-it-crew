@@ -15,6 +15,7 @@
 //   APP_BASE_URL             — public URL appky (pro odkazy v emailu)
 
 import { query } from './db.js';
+import { recordError } from './errorBuffer.js';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
@@ -74,6 +75,13 @@ async function getAppAccessToken() {
     try { const j = JSON.parse(txt); brief = `${j.error}: ${String(j.error_description || '').split('\n')[0].slice(0, 200)}`; } catch { /* není JSON */ }
     lastTokenError = brief;
     console.warn(`[mail] token request failed ${r.status}: ${brief}`);
+    // Do error bufferu, ať je noční selhání cronu vidět v Admin → Chyby.
+    // Bez toho zůstane důvod jen v systemd logu, kam se admin nedostane.
+    recordError({
+      source: 'mail',
+      message: `Získání tokenu z Azure selhalo (${r.status}): ${brief}`,
+      status: r.status,
+    });
     return null;
   }
   lastTokenError = null;
@@ -122,6 +130,11 @@ export async function sendMail({ to, subject, html, text }) {
     if (!r.ok) {
       const errBody = await r.text();
       console.warn(`[mail] Graph sendMail ${r.status}: ${errBody.slice(0, 300)}`);
+      recordError({
+        source: 'mail',
+        message: `Odeslání přes Graph selhalo (${r.status}) na ${to}: ${errBody.slice(0, 200)}`,
+        status: r.status,
+      });
       if (r.status === 401) tokenCache = { token: null, exp: 0 };
       return { ok: false, error: `graph_${r.status}`, detail: errBody.slice(0, 250) };
     }

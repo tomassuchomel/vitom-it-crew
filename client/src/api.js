@@ -285,6 +285,41 @@ export const ideas = {
   pmRemove:     (user_id) => api.delete(`/ideas/_pms/${user_id}`).then(r => r.data),
   exportCsvUrl: () => `${api.defaults.baseURL}/ideas/_export.csv`,
   submitPublic: (payload) => api.post('/ideas/public', payload).then(r => r.data),
+
+  // Veřejný formulář s přílohami — jde jedním multipart requestem, aby
+  // nevznikaly osiřelé soubory z nedokončeného formuláře.
+  submitPublicWithFiles: (payload, files) => {
+    const fd = new FormData();
+    Object.entries(payload).forEach(([k, v]) => { if (v != null) fd.append(k, v); });
+    (files || []).forEach(f => fd.append('files', f));
+    return api.post('/ideas/public', fd).then(r => r.data);
+  },
+
+  // Interní založení nápadu (PM Nápadníku / Management). Stejná entita i workflow.
+  createInternal: (payload, files) => {
+    const fd = new FormData();
+    Object.entries(payload).forEach(([k, v]) => { if (v != null) fd.append(k, v); });
+    (files || []).forEach(f => fd.append('files', f));
+    return api.post('/ideas/internal', fd).then(r => r.data);
+  },
+
+  // Seznam s filtry — params se kombinují (stav, text, garant, zdroj, období…).
+  listFiltered: (params) => api.get('/ideas', { params }).then(r => r.data),
+
+  notes:       (id) => api.get(`/ideas/${id}/notes`).then(r => r.data),
+  addNote:     (id, text) => api.post(`/ideas/${id}/notes`, { text }).then(r => r.data),
+  editNote:    (id, noteId, text) => api.patch(`/ideas/${id}/notes/${noteId}`, { text }).then(r => r.data),
+
+  attachments: (id) => api.get(`/ideas/${id}/attachments`).then(r => r.data),
+  addAttachments: (id, files) => {
+    const fd = new FormData();
+    (files || []).forEach(f => fd.append('files', f));
+    return api.post(`/ideas/${id}/attachments`, fd).then(r => r.data);
+  },
+
+  merge:       (id, target_id) => api.post(`/ideas/${id}/merge`, { target_id }).then(r => r.data),
+  createTask:  (id, data) => api.post(`/ideas/${id}/create-task`, data).then(r => r.data),
+  reactivate:  (id, comment) => api.post(`/ideas/${id}/reactivate`, { comment }).then(r => r.data),
 };
 
 // Web Push — VAPID klíč + (un)subscribe. Backend server/src/routes/push.js.

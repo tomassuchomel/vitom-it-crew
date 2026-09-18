@@ -5,6 +5,11 @@ import express from 'express';
 import { requireAuth } from '../auth.js';
 import { query } from '../db.js';
 import { sendMail, getNotificationPrefs, buildIdeaEmailHtml } from '../mailer.js';
+import { isManagement, isIdeaPM, requireIdeaAccess } from '../ideaAccess.js';
+import {
+  publicIdeaUpload, publicFormUpload, saveIdeaAttachments, describeUploadError,
+  MAX_IDEA_FILES, MAX_PUBLIC_FILES,
+} from '../ideaAttachments.js';
 
 const router = express.Router();
 
@@ -42,7 +47,15 @@ async function sendIdeaMail(userId, email, prefKey, subject, title, body) {
 // vrací true (bypass — dev/local i nasazení bez klíčů funguje). Token je z FE.
 async function verifyTurnstile(token, remoteIp) {
   const secret = process.env.TURNSTILE_SECRET;
-  if (!secret) return true;
+  if (!secret) {
+    // V produkci je veřejný endpoint bez antispamu otevřený sklad — raději
+    // odmítneme, než abychom tiše pustili kohokoli s přílohami.
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('[turnstile] TURNSTILE_SECRET není nastaven — veřejný formulář odmítá odeslání.');
+      return false;
+    }
+    return true;
+  }
   if (!token) return false;
   try {
     const params = new URLSearchParams();
@@ -58,36 +71,6 @@ async function verifyTurnstile(token, remoteIp) {
     console.warn('[turnstile] verify failed', err.message);
     return false;
   }
-}
-
-// Management role = admin globálně NEBO člen týmu se slug='management'.
-async function isManagement(userId, userRole) {
-  if (userRole === 'admin') return true;
-  const r = await query(
-    `SELECT 1 FROM team_members tm JOIN teams t ON t.id = tm.team_id
-     WHERE tm.user_id = $1 AND t.slug = 'management' LIMIT 1`,
-    [userId]
-  );
-  return r.rows.length > 0;
-}
-
-// PM Nápadníku — vidí Report / Dashboard / Export, edituje metadata,
-// posouvá garant-akce (Analýza hotová, Vytvořit projekt, Dokončit).
-// NEschvaluje / nezamítá (to Management).
-async function isIdeaPM(userId) {
-  const r = await query(`SELECT 1 FROM idea_pms WHERE user_id = $1`, [userId]);
-  return r.rows.length > 0;
-}
-
-// Middleware: Nápadník smí vidět jen Management nebo PM Nápadníku. Ostatní
-// (např. běžný člen IT týmu) dostanou 403 — vč. přístupu k listu nápadů.
-async function requireIdeaAccess(req, res, next) {
-  const [mgr, pm] = await Promise.all([
-    isManagement(req.user.id, req.user.role),
-    isIdeaPM(req.user.id),
-  ]);
-  if (!mgr && !pm) return res.status(403).json({ error: 'forbidden', message: 'Nápadník je vyhrazený pro Management a PM Nápadníku.' });
-  next();
 }
 
 // Workflow graf — z jakého stavu jsou povolené jaké přechody + kdo je smí provést.
@@ -143,21 +126,53 @@ const VALID_STATES = [
   'hotovo', 'zamitnuto', 'odlozeno',
 ];
 
-// Public endpoint: veřejný formulář, bez autentizace.
-// Vytvoří nový nápad ve stavu 'zadano'.
-// Fáze 5 přidá Turnstile check.
-router.post('/public', async (req, res) => {
-  const b = req.body || {};
-  // Validace povinných polí
+const trim = (v) => String(v || '').trim();
+
+// Validace polí nápadu — sdílená veřejným formulářem i interním založením,
+// ať mají obě cesty stejná pravidla a nevznikne druhý datový model.
+// Jméno a e-mail navrhovatele se interně předvyplní z přihlášeného uživatele,
+// proto je lze přeskočit (`skipProposer`).
+function validateIdeaFields(b, { skipProposer = false } = {}) {
   const errors = {};
-  const trim = (v) => String(v || '').trim();
-  if (!trim(b.proposer_name)) errors.proposer_name = 'Vyplň jméno.';
-  if (!/^[^@]+@[^@]+\.[a-z]{2,}$/i.test(trim(b.proposer_email))) errors.proposer_email = 'Vyplň platný e-mail.';
+  if (!skipProposer) {
+    if (!trim(b.proposer_name)) errors.proposer_name = 'Vyplň jméno.';
+    if (!/^[^@]+@[^@]+\.[a-z]{2,}$/i.test(trim(b.proposer_email))) errors.proposer_email = 'Vyplň platný e-mail.';
+  }
   if (!trim(b.title)) errors.title = 'Vyplň název nápadu.';
   if (!DEPARTMENTS.includes(trim(b.department))) errors.department = 'Vyber oddělení.';
   if (!CATEGORIES.includes(trim(b.category))) errors.category = 'Vyber kategorii.';
   if (!trim(b.problem_description)) errors.problem_description = 'Popiš problém.';
   if (!trim(b.solution_proposal)) errors.solution_proposal = 'Navrhni řešení.';
+  return errors;
+}
+
+// Vloží nápad. Stejná tabulka i stavový vstup ('zadano') pro obě cesty vzniku.
+function insertIdea(b, { source, createdById = null, proposerName, proposerEmail }) {
+  return query(`
+    INSERT INTO ideas (
+      proposer_name, proposer_email, title, department, category,
+      problem_description, solution_proposal, impact_scope,
+      estimated_time_savings, external_link, source, created_by_id
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    RETURNING id, created_at
+  `, [
+    proposerName, proposerEmail, trim(b.title),
+    trim(b.department), trim(b.category),
+    trim(b.problem_description), trim(b.solution_proposal),
+    trim(b.impact_scope) || null,
+    trim(b.estimated_time_savings) || null,
+    trim(b.external_link) || null,
+    source, createdById,
+  ]);
+}
+
+// Public endpoint: veřejný formulář, bez autentizace.
+// Vytvoří nový nápad ve stavu 'zadano'.
+// Fáze 5 přidá Turnstile check.
+router.post('/public', publicFormUpload.array('files', MAX_PUBLIC_FILES), async (req, res) => {
+  const b = req.body || {};
+  const errors = validateIdeaFields(b);
   if (Object.keys(errors).length > 0) {
     return res.status(400).json({ error: 'validation', fields: errors });
   }
@@ -169,27 +184,21 @@ router.post('/public', async (req, res) => {
     return res.status(400).json({ error: 'turnstile_failed', message: 'Ověření anti‑spam selhalo. Zkus prosím znovu.' });
   }
 
-  const r = await query(`
-    INSERT INTO ideas (
-      proposer_name, proposer_email, title, department, category,
-      problem_description, solution_proposal, impact_scope,
-      estimated_time_savings, external_link
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-    RETURNING id, created_at
-  `, [
-    trim(b.proposer_name), trim(b.proposer_email), trim(b.title),
-    trim(b.department), trim(b.category),
-    trim(b.problem_description), trim(b.solution_proposal),
-    trim(b.impact_scope) || null,
-    trim(b.estimated_time_savings) || null,
-    trim(b.external_link) || null,
-  ]);
+  const r = await insertIdea(b, {
+    source: 'public_form',
+    proposerName: trim(b.proposer_name),
+    proposerEmail: trim(b.proposer_email),
+  });
   // Log event
   await query(`
     INSERT INTO idea_events (idea_id, action, to_state, comment)
     VALUES ($1, 'created', 'zadano', $2)
   `, [r.rows[0].id, `Podal ${trim(b.proposer_name)} přes veřejný formulář.`]);
+
+  // Přílohy dorazily ve stejném multipart requestu — uložíme je až teď,
+  // kdy známe idea_id. Žádné osiřelé soubory z nedokončeného formuláře.
+  await saveIdeaAttachments(r.rows[0].id, req.files, null);
+
   res.status(201).json({ ok: true, id: r.rows[0].id });
 
   // Notify Management (fire-and-forget)
@@ -212,6 +221,48 @@ function escapeMail(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Interní založení nápadu (PM Nápadníku / Management). Stejná tabulka, stejný
+// vstupní stav i workflow jako u veřejného formuláře — liší se jen `source`
+// a tím, že navrhovatel se bere z přihlášeného uživatele.
+// Oprávnění vynucené na backendu, ne jen skrytím tlačítka v UI.
+router.post('/internal', requireAuth, requireIdeaAccess,
+  publicIdeaUpload.array('files', MAX_IDEA_FILES), async (req, res) => {
+    const b = req.body || {};
+    const errors = validateIdeaFields(b, { skipProposer: true });
+    if (Object.keys(errors).length > 0) {
+      return res.status(400).json({ error: 'validation', fields: errors });
+    }
+
+    const me = (await query(`SELECT name, email FROM users WHERE id = $1`, [req.user.id])).rows[0] || {};
+    const r = await insertIdea(b, {
+      source: 'internal',
+      createdById: req.user.id,
+      proposerName: me.name || req.user.name || 'Interní návrh',
+      proposerEmail: me.email || req.user.email || '',
+    });
+    const ideaId = r.rows[0].id;
+
+    await query(`
+      INSERT INTO idea_events (idea_id, action, to_state, user_id, comment)
+      VALUES ($1, 'created_internal', 'zadano', $2, $3)
+    `, [ideaId, req.user.id, `Nápad založen interně uživatelem ${me.name || ''}.`.trim()]);
+
+    const attachments = await saveIdeaAttachments(ideaId, req.files, req.user.id);
+    res.status(201).json({ ok: true, id: ideaId, attachments });
+
+    // Management informujeme stejně jako u veřejného nápadu.
+    const title = trim(b.title);
+    getManagementUsers().then(mgmt => {
+      mgmt.filter(u => u.id !== req.user.id).forEach(u => sendIdeaMail(
+        u.id, u.email, 'email_idea_new',
+        `VITOM Nápadník: nový nápad — ${title}`,
+        `💡 Nový nápad k posouzení`,
+        `<p><strong>${escapeMail(me.name || '')}</strong> založil nápad interně:</p>
+         <p style="background:#f8f5f0;padding:10px;border-radius:6px;"><strong>${escapeMail(title)}</strong></p>`
+      ));
+    }).catch(err => console.warn('[mail/idea] mgmt lookup', err.message));
+  });
+
 // SELECT s garantem + linked project — společný pro list i detail.
 const SELECT_FULL = `
   SELECT i.*,
@@ -224,9 +275,52 @@ const SELECT_FULL = `
   LEFT JOIN teams lt ON lt.id = i.linked_project_team_id
 `;
 
-// Auth endpoint: seznam všech nápadů (interní wishlist).
+// Stavy, které ve výchozím seznamu nechceme — nápad je vyřešený nebo odložený.
+// Nemažou se, jen se schovají; přes filtr stavu je uživatel kdykoli zobrazí.
+const DEFAULT_HIDDEN_STATES = ['rozpracovano', 'hotovo', 'odlozeno'];
+
+// Auth endpoint: seznam nápadů (interní wishlist).
+// Filtry se kombinují (AND): stav, text, garant, oddělení, kategorie, zdroj, období.
 router.get('/', requireAuth, requireIdeaAccess, async (req, res) => {
-  const r = await query(`${SELECT_FULL} ORDER BY i.created_at DESC`);
+  const q = req.query || {};
+  const where = [];
+  const params = [];
+  // `$?` se nahradí číslem právě přidaného parametru — i vícekrát v jednom
+  // výrazu (fulltext hledá stejný řetězec ve více sloupcích).
+  const add = (sql, val) => { params.push(val); where.push(sql.replaceAll('$?', `$${params.length}`)); };
+
+  // Stav — multiselect (?state=zadano,hotovo). Bez filtru schováme vyřešené.
+  const states = String(q.state || '').split(',').map(s => s.trim()).filter(Boolean);
+  const valid = states.filter(s => VALID_STATES.includes(s));
+  if (states.length > 0 && valid.length === 0) {
+    return res.status(400).json({ error: 'validation', fields: { state: 'Neznámý stav nápadu.' } });
+  }
+  if (valid.length > 0) {
+    add('i.state = ANY($?::text[])', valid);
+  } else if (q.state === undefined) {
+    add('i.state <> ALL($?::text[])', DEFAULT_HIDDEN_STATES);
+  }
+  // Sloučené nápady drží data kvůli historii, ale v seznamu jen matou.
+  // ?include_merged=1 je zobrazí.
+  if (q.include_merged !== '1') where.push('i.merged_into_id IS NULL');
+
+  // Fulltext přes text nápadu a jméno navrhovatele.
+  if (trim(q.q)) {
+    add(
+      '(i.title ILIKE $? OR i.problem_description ILIKE $? OR i.solution_proposal ILIKE $? OR i.proposer_name ILIKE $?)',
+      `%${trim(q.q)}%`
+    );
+  }
+  if (Number(q.garant_id))   add('i.garant_id = $?', Number(q.garant_id));
+  if (trim(q.department))    add('i.department = $?', trim(q.department));
+  if (trim(q.category))      add('i.category = $?', trim(q.category));
+  if (trim(q.source))        add('i.source = $?', trim(q.source));
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trim(q.from))) add('i.created_at >= $?::date', trim(q.from));
+  // `to` je včetně celého dne → porovnáváme proti následujícímu dni.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trim(q.to)))   add(`i.created_at < ($?::date + 1)`, trim(q.to));
+
+  const sql = `${SELECT_FULL} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY i.created_at DESC`;
+  const r = await query(sql, params);
   res.json({ ideas: r.rows });
 });
 
@@ -237,7 +331,7 @@ router.get('/', requireAuth, requireIdeaAccess, async (req, res) => {
 router.get('/_report', requireAuth, requireIdeaAccess, async (req, res) => {
 
   const [byState, awaiting, waitAnalysis, active, savings] = await Promise.all([
-    query(`SELECT state, COUNT(*)::int AS n FROM ideas GROUP BY state`),
+    query(`SELECT state, COUNT(*)::int AS n FROM ideas WHERE merged_into_id IS NULL GROUP BY state`),
     query(`${SELECT_FULL} WHERE i.state IN ('ke_schvaleni','ke_schvaleni_analyzy') ORDER BY i.created_at ASC`),
     query(`${SELECT_FULL} WHERE i.state = 'schvaleno_ceka_na_analyzu' ORDER BY i.created_at ASC`),
     query(`${SELECT_FULL} WHERE i.state = 'rozpracovano' ORDER BY i.updated_at DESC`),
@@ -263,24 +357,25 @@ router.get('/_report', requireAuth, requireIdeaAccess, async (req, res) => {
 // GET /ideas/_stats — data pro Dashboard grafy.
 router.get('/_stats', requireAuth, requireIdeaAccess, async (req, res) => {
   const [byState, byDept, byCat, monthly, topProposers, byRec] = await Promise.all([
-    query(`SELECT state, COUNT(*)::int AS n FROM ideas GROUP BY state`),
-    query(`SELECT department, COUNT(*)::int AS n FROM ideas GROUP BY department ORDER BY n DESC`),
-    query(`SELECT category, COUNT(*)::int AS n FROM ideas GROUP BY category ORDER BY n DESC`),
+    query(`SELECT state, COUNT(*)::int AS n FROM ideas WHERE merged_into_id IS NULL GROUP BY state`),
+    query(`SELECT department, COUNT(*)::int AS n FROM ideas WHERE merged_into_id IS NULL GROUP BY department ORDER BY n DESC`),
+    query(`SELECT category, COUNT(*)::int AS n FROM ideas WHERE merged_into_id IS NULL GROUP BY category ORDER BY n DESC`),
     query(`
       SELECT TO_CHAR(date_trunc('month', created_at), 'YYYY-MM') AS ym,
              COUNT(*)::int AS n
       FROM ideas
-      WHERE created_at >= NOW() - INTERVAL '6 months'
+      WHERE created_at >= NOW() - INTERVAL '6 months' AND merged_into_id IS NULL
       GROUP BY ym ORDER BY ym ASC
     `),
     query(`
       SELECT proposer_name, COUNT(*)::int AS n
       FROM ideas
+      WHERE merged_into_id IS NULL
       GROUP BY proposer_name
       ORDER BY n DESC, proposer_name ASC
       LIMIT 5
     `),
-    query(`SELECT COALESCE(pm_recommendation, '?') AS rec, COUNT(*)::int AS n FROM ideas GROUP BY rec ORDER BY rec`),
+    query(`SELECT COALESCE(pm_recommendation, '?') AS rec, COUNT(*)::int AS n FROM ideas WHERE merged_into_id IS NULL GROUP BY rec ORDER BY rec`),
   ]);
   res.json({
     by_state:      Object.fromEntries(byState.rows.map(r => [r.state, r.n])),
@@ -308,6 +403,7 @@ router.get('/_export.csv', requireAuth, requireIdeaAccess, async (req, res) => {
     LEFT JOIN projects lp ON lp.id = i.linked_project_id
     LEFT JOIN teams lt ON lt.id = i.linked_project_team_id
     LEFT JOIN idea_analysis a ON a.idea_id = i.id
+    WHERE i.merged_into_id IS NULL
     ORDER BY i.created_at DESC
   `);
 
@@ -681,6 +777,255 @@ router.put('/:id/analysis', requireAuth, requireIdeaAccess, async (req, res) => 
 // Meta: pro klienta — dropdowny (oddělení, kategorie, stavy)
 router.get('/_meta/enums', async (req, res) => {
   res.json({ departments: DEPARTMENTS, categories: CATEGORIES, states: VALID_STATES });
+});
+
+// ===========================================================================
+// POZNÁMKY (sekce 13) — každá poznámka vlastní záznam, editovatelná zvlášť.
+// ===========================================================================
+
+router.get('/:id/notes', requireAuth, requireIdeaAccess, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad_id' });
+  const r = await query(`
+    SELECT n.id, n.idea_id, n.text, n.author_id, n.created_at, n.updated_at,
+           u.name AS author_name
+    FROM idea_notes n
+    LEFT JOIN users u ON u.id = n.author_id
+    WHERE n.idea_id = $1
+    ORDER BY n.created_at DESC
+  `, [id]);
+  res.json({ notes: r.rows });
+});
+
+router.post('/:id/notes', requireAuth, requireIdeaAccess, async (req, res) => {
+  const id = Number(req.params.id);
+  const text = trim(req.body?.text);
+  if (!text) return res.status(400).json({ error: 'validation', fields: { text: 'Napiš text poznámky.' } });
+
+  const exists = await query('SELECT 1 FROM ideas WHERE id = $1', [id]);
+  if (exists.rows.length === 0) return res.status(404).json({ error: 'not_found' });
+
+  const r = await query(`
+    INSERT INTO idea_notes (idea_id, text, author_id) VALUES ($1, $2, $3)
+    RETURNING id, idea_id, text, author_id, created_at, updated_at
+  `, [id, text, req.user.id]);
+
+  await query(`
+    INSERT INTO idea_events (idea_id, action, user_id, comment)
+    VALUES ($1, 'note_created', $2, $3)
+  `, [id, req.user.id, text.slice(0, 500)]);
+
+  res.status(201).json({ note: r.rows[0] });
+});
+
+router.patch('/:id/notes/:noteId', requireAuth, requireIdeaAccess, async (req, res) => {
+  const id = Number(req.params.id);
+  const noteId = Number(req.params.noteId);
+  const text = trim(req.body?.text);
+  if (!text) return res.status(400).json({ error: 'validation', fields: { text: 'Napiš text poznámky.' } });
+
+  const cur = (await query('SELECT * FROM idea_notes WHERE id = $1 AND idea_id = $2', [noteId, id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'not_found' });
+  // Cizí poznámku smí přepsat jen Management — jinak by si PM navzájem
+  // přepisovali zápisy a audit by to jen zaznamenal, nezabránil tomu.
+  if (cur.author_id !== req.user.id && !req.ideaPerms?.isManagement) {
+    return res.status(403).json({ error: 'forbidden', message: 'Upravit můžeš jen vlastní poznámku.' });
+  }
+
+  const r = await query(`
+    UPDATE idea_notes SET text = $1, updated_at = NOW() WHERE id = $2
+    RETURNING id, idea_id, text, author_id, created_at, updated_at
+  `, [text, noteId]);
+
+  // Audit drží starou i novou hodnotu, ať je dohledatelné, co se změnilo.
+  await query(`
+    INSERT INTO idea_events (idea_id, action, user_id, comment)
+    VALUES ($1, 'note_edited', $2, $3)
+  `, [id, req.user.id, `Původně: ${cur.text.slice(0, 250)} → nově: ${text.slice(0, 250)}`]);
+
+  res.json({ note: r.rows[0] });
+});
+
+// ===========================================================================
+// PŘÍLOHY NÁPADU (sekce 7) — sdílí tabulku attachments přes idea_id.
+// ===========================================================================
+
+router.get('/:id/attachments', requireAuth, requireIdeaAccess, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad_id' });
+  const r = await query(`
+    SELECT a.id, a.idea_id, a.uploader_id, a.original_name, a.mime_type, a.size, a.kind, a.created_at,
+           u.name AS uploader_name
+    FROM attachments a
+    LEFT JOIN users u ON u.id = a.uploader_id
+    WHERE a.idea_id = $1
+    ORDER BY a.created_at
+  `, [id]);
+  res.json({ attachments: r.rows });
+});
+
+router.post('/:id/attachments', requireAuth, requireIdeaAccess,
+  publicIdeaUpload.array('files', MAX_IDEA_FILES), async (req, res) => {
+    const id = Number(req.params.id);
+    const exists = await query('SELECT 1 FROM ideas WHERE id = $1', [id]);
+    if (exists.rows.length === 0) return res.status(404).json({ error: 'not_found' });
+
+    const saved = await saveIdeaAttachments(id, req.files, req.user.id);
+    if (saved.length === 0) return res.status(400).json({ error: 'no_files', message: 'Nepřišel žádný soubor.' });
+
+    await query(`
+      INSERT INTO idea_events (idea_id, action, user_id, comment)
+      VALUES ($1, 'attachment_added', $2, $3)
+    `, [id, req.user.id, saved.map(a => a.original_name).join(', ').slice(0, 500)]);
+
+    res.status(201).json({ attachments: saved });
+  });
+
+// ===========================================================================
+// SLOUČIT / PŘIŘADIT (sekce 12)
+// ===========================================================================
+
+// Sloučí tento nápad do cílového. Data se nemažou — přílohy a poznámky
+// přesuneme na cílový nápad, zdrojový zůstane kvůli historii označený
+// přes merged_into_id.
+router.post('/:id/merge', requireAuth, requireIdeaAccess, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad_id' });
+  const targetId = Number(req.body?.target_id);
+  if (!Number.isInteger(targetId)) return res.status(400).json({ error: 'validation', fields: { target_id: 'Vyber cílový nápad.' } });
+  if (targetId === id) return res.status(400).json({ error: 'self_merge', message: 'Nápad nelze sloučit sám se sebou.' });
+
+  const src = (await query('SELECT * FROM ideas WHERE id = $1', [id])).rows[0];
+  const dst = (await query('SELECT * FROM ideas WHERE id = $1', [targetId])).rows[0];
+  if (!src || !dst) return res.status(404).json({ error: 'not_found' });
+  if (src.merged_into_id) return res.status(400).json({ error: 'already_merged', message: 'Tento nápad už byl sloučen.' });
+  // Řetězení by vedlo k cyklu (A→B, B→A) a k nedohledatelnému originálu.
+  if (dst.merged_into_id) return res.status(400).json({ error: 'target_merged', message: 'Cílový nápad je sám sloučený do jiného.' });
+
+  // Přílohy a poznámky přesuneme, ať se sloučením nic neztratí.
+  await query('UPDATE attachments SET idea_id = $1 WHERE idea_id = $2', [targetId, id]);
+  await query('UPDATE idea_notes SET idea_id = $1 WHERE idea_id = $2', [targetId, id]);
+
+  // Popis zdrojového nápadu připojíme do poznámek cíle, ať text nezmizí.
+  await query(`
+    INSERT INTO idea_notes (idea_id, text, author_id) VALUES ($1, $2, $3)
+  `, [targetId,
+      `Sloučeno z nápadu #${id} „${src.title}" (podal ${src.proposer_name}).\n\nProblém: ${src.problem_description}\n\nŘešení: ${src.solution_proposal}`,
+      req.user.id]);
+
+  await query(`UPDATE ideas SET merged_into_id = $1, updated_at = NOW() WHERE id = $2`, [targetId, id]);
+
+  await query(`
+    INSERT INTO idea_events (idea_id, action, user_id, comment)
+    VALUES ($1, 'merged_into', $2, $3), ($4, 'merged_from', $2, $5)
+  `, [id, req.user.id, `Sloučeno do #${targetId} „${dst.title}".`,
+      targetId, `Sem byl sloučen nápad #${id} „${src.title}".`]);
+
+  res.json({ ok: true, merged_into_id: targetId });
+});
+
+// Vytvoří z nápadu úkol v existujícím projektu (záložka PROJEKTY v modalu
+// Sloučit/přiřadit, a zároveň akce „Vytvořit úkol" po schválení analýzy).
+// Používá standardní tabulku tasks — žádný druhý systém úkolů.
+router.post('/:id/create-task', requireAuth, requireIdeaAccess, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad_id' });
+  const projectId = Number(req.body?.project_id);
+  if (!Number.isInteger(projectId)) {
+    return res.status(400).json({ error: 'validation', fields: { project_id: 'Vyber projekt.' } });
+  }
+
+  const idea = (await query('SELECT * FROM ideas WHERE id = $1', [id])).rows[0];
+  if (!idea) return res.status(404).json({ error: 'not_found' });
+  // Úkol smí vzniknout jen z nápadu, který se opravdu řeší. Bez tohohle by
+  // zamítnutý nebo odložený nápad tiše obešel workflow graf, a u hotového by
+  // přibyl otevřený úkol, který už nikdo nepřepočítá.
+  const CAN_SPAWN_TASK = ['zadano', 'ke_schvaleni', 'schvaleno_ceka_na_analyzu',
+    'ke_schvaleni_analyzy', 'schvalena_analyza', 'rozpracovano'];
+  if (!CAN_SPAWN_TASK.includes(idea.state)) {
+    return res.status(400).json({ error: 'invalid_state', message: `Z nápadu ve stavu „${idea.state}" úkol vytvořit nelze.` });
+  }
+
+  const project = (await query('SELECT id, team_id FROM projects WHERE id = $1', [projectId])).rows[0];
+  if (!project) return res.status(404).json({ error: 'project_not_found' });
+
+  // Multi-team izolace: úkol nelze založit v cizím týmu (stejně jako u
+  // /create-project). Bez toho by PM Nápadníku sahal do všech týmů.
+  if (req.user.role !== 'admin') {
+    const memb = await query(
+      `SELECT 1 FROM team_members WHERE user_id = $1 AND team_id = $2 LIMIT 1`,
+      [req.user.id, project.team_id]
+    );
+    if (memb.rows.length === 0) {
+      return res.status(403).json({ error: 'not_team_member', message: 'V týmu tohoto projektu nejsi členem.' });
+    }
+  }
+
+  const title = trim(req.body?.title) || idea.title;
+  const description = trim(req.body?.description)
+    || `Z nápadu #${idea.id}.\n\nProblém: ${idea.problem_description}\n\nNavržené řešení: ${idea.solution_proposal}`;
+  // Řešitel musí být členem týmu projektu — jinak by šlo přiřadit úkol komukoli.
+  const assigneeId = Number(req.body?.assignee_id) || null;
+  if (assigneeId) {
+    const ok = await query(
+      `SELECT 1 FROM team_members WHERE user_id = $1 AND team_id = $2 LIMIT 1`,
+      [assigneeId, project.team_id]
+    );
+    if (ok.rows.length === 0) {
+      return res.status(400).json({ error: 'validation', fields: { assignee_id: 'Řešitel není členem týmu projektu.' } });
+    }
+  }
+  const priority = ['low', 'normal', 'high', 'urgent'].includes(req.body?.priority) ? req.body.priority : 'normal';
+  const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(trim(req.body?.due_date)) ? trim(req.body.due_date) : null;
+
+  const t = await query(`
+    INSERT INTO tasks (project_id, title, description, assignee_id, priority, due_date, status)
+    VALUES ($1, $2, $3, $4, $5, $6::date, 'todo')
+    RETURNING *
+  `, [projectId, title, description, assigneeId, priority, dueDate]);
+  const task = t.rows[0];
+
+  await query(`
+    INSERT INTO idea_tasks (idea_id, task_id, created_by) VALUES ($1, $2, $3)
+    ON CONFLICT DO NOTHING
+  `, [id, task.id, req.user.id]);
+
+  // Vznikla realizace → nápad je rozpracovaný (sekce 9).
+  const fromState = idea.state;
+  if (idea.state !== 'rozpracovano' && idea.state !== 'hotovo') {
+    await query(`UPDATE ideas SET state = 'rozpracovano', updated_at = NOW() WHERE id = $1`, [id]);
+  }
+  await query(`
+    INSERT INTO idea_events (idea_id, action, from_state, to_state, user_id, comment)
+    VALUES ($1, 'create_task', $2, 'rozpracovano', $3, $4)
+  `, [id, fromState, req.user.id, `Vytvořen úkol #${task.id} „${title}".`]);
+
+  res.status(201).json({ task });
+});
+
+// Znovu aktivovat odložený nápad (sekce 14).
+router.post('/:id/reactivate', requireAuth, requireIdeaAccess, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad_id' });
+  const idea = (await query('SELECT * FROM ideas WHERE id = $1', [id])).rows[0];
+  if (!idea) return res.status(404).json({ error: 'not_found' });
+  if (idea.state !== 'odlozeno') {
+    return res.status(400).json({ error: 'invalid_state', message: 'Znovu aktivovat lze jen odložený nápad.' });
+  }
+  await query(`UPDATE ideas SET state = 'zadano', updated_at = NOW() WHERE id = $1`, [id]);
+  await query(`
+    INSERT INTO idea_events (idea_id, action, from_state, to_state, user_id, comment)
+    VALUES ($1, 'reactivated', 'odlozeno', 'zadano', $2, $3)
+  `, [id, req.user.id, trim(req.body?.comment) || 'Nápad znovu aktivován.']);
+  res.json({ ok: true, state: 'zadano' });
+});
+
+// Chyby uploadu (typ / velikost / počet) přeložíme na srozumitelnou hlášku.
+// Musí být až za routami, aby zachytilo chyby z multeru.
+router.use((err, req, res, next) => {
+  const described = describeUploadError(err);
+  if (described) return res.status(400).json(described);
+  next(err);
 });
 
 export default router;
