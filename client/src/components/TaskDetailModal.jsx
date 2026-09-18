@@ -7,6 +7,8 @@ import { useAuth, can, ROLE_LABELS } from '../auth.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge, STATUS_META } from './TaskStatus.jsx';
 import Avatar from './Avatar.jsx';
 import Attachments from './Attachments.jsx';
+import TaskDependencies from './TaskDependencies.jsx';
+import WaitingDialog from './WaitingDialog.jsx';
 import TaskCompletionDialog from './TaskCompletionDialog.jsx';
 import TimeTriad from './TimeTriad.jsx';
 import AiAgentPanel from './AiAgentPanel.jsx';
@@ -27,6 +29,7 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
   const { user } = useAuth();
   const [task, setTask] = useState(initialTask);
   const [completingTask, setCompletingTask] = useState(null);
+  const [waitingOpen, setWaitingOpen] = useState(false);
   // null | { task, verdict } – pro ReviewTaskDialog (manager schvaluje/vrací)
   const [reviewing, setReviewing] = useState(null);
   const [addingSubtask, setAddingSubtask] = useState(false);
@@ -56,8 +59,20 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
       setCompletingTask({ ...task, _targetStatus: 'review' });
       return;
     }
+    // „Čekám na" bez důvodu je za týden k ničemu — zeptáme se na něj.
+    if (newStatus === 'waiting' && task.status !== 'waiting') {
+      setWaitingOpen(true);
+      return;
+    }
     const updated = await tasksApi.update(task.id, { status: newStatus });
     setTask(prev => ({ ...prev, ...updated.task }));
+    refresh();
+  };
+
+  const confirmWaiting = async (fields) => {
+    const updated = await tasksApi.update(task.id, { status: 'waiting', ...fields });
+    setTask(prev => ({ ...prev, ...updated.task }));
+    setWaitingOpen(false);
     refresh();
   };
 
@@ -192,6 +207,30 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
           {canEditFull && (
             <FullEditSection task={task} onSave={handleSave} />
           )}
+
+          {waitingOpen && (
+            <WaitingDialog task={task} onClose={() => setWaitingOpen(false)} onConfirm={confirmWaiting} />
+          )}
+
+          {/* Proč úkol stojí — ať to nikdo nemusí dohledávat */}
+          {task.status === 'waiting' && (task.waiting_for || task.waiting_note) && (
+            <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-sm">
+              <div className="text-violet-900">
+                ⏳ Čeká na: <strong>{task.waiting_for || '—'}</strong>
+              </div>
+              {task.waiting_note && <div className="text-violet-800 text-xs mt-1">{task.waiting_note}</div>}
+              {task.waiting_until && (
+                <div className="text-violet-700 text-[11px] mt-1">
+                  Follow-up: {new Date(task.waiting_until).toLocaleDateString('cs-CZ')}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Návaznosti — na co úkol čeká a co blokuje */}
+          <Section title="Návaznosti" subtitle="Na co úkol čeká a co sám blokuje">
+            <TaskDependencies task={task} />
+          </Section>
 
           {/* Přílohy */}
           <Section title="Přílohy" subtitle="Foto, video a další soubory (max 25 MB)">

@@ -11,6 +11,7 @@ import {
 import { preflightTask } from '../aiAgent/preflight.js';
 import { sendMail, buildTaskEmailHtml, getNotificationPrefs } from '../mailer.js';
 import { syncIdeasForTask } from '../ideaLifecycle.js';
+import { notifyBlockerDone, notifyBlockerDueChanged } from '../taskDependencyNotify.js';
 
 // Minimální délka popisu, pokud je úkol přiřazen AI agentovi.
 // Bez kontextu agent nemůže rozumně pracovat.
@@ -109,6 +110,26 @@ async function maybeAutoEnqueue(task, userId) {
       },
     };
   }
+}
+
+// DATE z pg přijde jako JS Date. String(Date).slice(0,10) dá "Sun Nov 01",
+// takže bez tohohle převodu by se datum při každém uložení zahodilo na NULL.
+// Skládáme z lokálních složek — toISOString() by posunul o den.
+function toYMD(v) {
+  if (v === '' || v === undefined || v === null) return null;
+  if (v instanceof Date) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`;
+  }
+  const s = String(v).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+// Pole stavu „Čekám na". Prázdné hodnoty ukládáme jako NULL.
+function waitingValue(col, v) {
+  if (col === 'waiting_until') return toYMD(v);
+  if (v === '' || v === undefined || v === null) return null;
+  return String(v).slice(0, 1000);
 }
 
 const router = Router();
@@ -537,12 +558,25 @@ router.put('/:id', requireAuth, async (req, res) => {
     }
   }
 
+  // Stav „Čekám na" bez důvodu je k ničemu — za týden nikdo neví, proč úkol
+  // stojí. Hlídáme na backendu, ne jen v dialogu (API i MCP jdou mimo něj).
+  if (req.body?.status === 'waiting' && cur.status !== 'waiting') {
+    const reason = req.body.waiting_for ?? cur.waiting_for;
+    if (!String(reason || '').trim()) {
+      return res.status(400).json({
+        error: 'validation',
+        fields: { waiting_for: 'Napiš, na koho nebo na co se čeká.' },
+      });
+    }
+  }
+
   if (!can.createTasks(req.user)) {
     // Externí dev / běžný assignee může u VLASTNÍHO úkolu měnit jen status, popis (poznámku) nebo actual_h.
     if (cur.assignee_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
     // due_date je zde povolený, protože gate check výše už rozhodl, zda smí projít
     // (creator/admin/manager projektu) nebo musí přes žádost.
-    const allowed = ['status', 'description', 'actual_h', 'due_date'];
+    const allowed = ['status', 'description', 'actual_h', 'due_date',
+                     'waiting_for', 'waiting_note', 'waiting_until'];
     const keys = Object.keys(req.body || {}).filter(k => allowed.includes(k));
     if (keys.length === 0) return res.status(400).json({ error: 'no_allowed_fields' });
 
@@ -573,14 +607,14 @@ router.put('/:id', requireAuth, async (req, res) => {
     if ('completed_at' in comp) { params.push(comp.completed_at); sets.push(`completed_at = $${params.length}`); }
     if ('completed_by' in comp) { params.push(comp.completed_by); sets.push(`completed_by = $${params.length}`); }
     if ('review_submitted_at' in comp) { params.push(comp.review_submitted_at); sets.push(`review_submitted_at = $${params.length}`); }
+    for (const [col, cast] of [['waiting_for', ''], ['waiting_note', ''], ['waiting_until', '::date']]) {
+      if (col in req.body) { params.push(waitingValue(col, req.body[col])); sets.push(`${col} = $${params.length}${cast}`); }
+    }
     params.push(id);
     await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
     const r = await query('SELECT * FROM tasks WHERE id = $1', [id]);
     res.json({ task: r.rows[0] });
-    // Dokončení úkolu může dokončit i nápad, ze kterého vznikl (fire-and-forget).
-    if (r.rows[0].status === 'done') {
-      syncIdeasForTask(id, req.user.id).catch(err => console.warn('[ideaLifecycle/task]', err.message));
-    }
+    afterTaskChange(cur, r.rows[0], req.user.id);
     return;
   }
 
@@ -628,8 +662,9 @@ router.put('/:id', requireAuth, async (req, res) => {
       actual_h = $9, completed_at = $10, completed_by = $11,
       ai_assignee = $12, execution_mode = $13,
       acceptance_criteria = $14::jsonb, out_of_scope = $15::jsonb, scope_paths = $16::jsonb,
-      ai_status = $17, review_submitted_at = $18
-    WHERE id = $19
+      ai_status = $17, review_submitted_at = $18,
+      waiting_for = $19, waiting_note = $20, waiting_until = $21::date
+    WHERE id = $22
     RETURNING *
   `, [next.title, next.description, nullableInt(next.assignee_id), next.status,
       next.priority, nullableNum(next.estimated_h), nullableDate(next.due_date), nullableInt(next.parent_id),
@@ -640,6 +675,9 @@ router.put('/:id', requireAuth, async (req, res) => {
       JSON.stringify(newAi.scope_paths),
       newAi.ai_status,
       newReviewSubmittedAt,
+      waitingValue('waiting_for', next.waiting_for),
+      waitingValue('waiting_note', next.waiting_note),
+      waitingValue('waiting_until', next.waiting_until),
       id]);
 
   // Pokud se změnil název nebo popis, re-spustíme AI odhad
@@ -664,11 +702,27 @@ router.put('/:id', requireAuth, async (req, res) => {
   }
 
   res.json({ task: updated, auto_enqueued, ai_preflight });
-  // Dokončení úkolu může dokončit i nápad, ze kterého vznikl (fire-and-forget).
-  if (updated.status === 'done') {
-    syncIdeasForTask(id, req.user.id).catch(err => console.warn('[ideaLifecycle/task]', err.message));
-  }
+  afterTaskChange(cur, updated, req.user.id);
 });
+
+// Následky změny úkolu, které nesmí blokovat odpověď: dokončení nápadu,
+// odblokování návazných úkolů a upozornění na posunutý termín.
+function afterTaskChange(before, after, userId) {
+  const wasDone = before?.status === 'done';
+  const isDone = after?.status === 'done';
+  if (isDone && !wasDone) {
+    syncIdeasForTask(after.id, userId).catch(err => console.warn('[ideaLifecycle/task]', err.message));
+    notifyBlockerDone(after.id).catch(err => console.warn('[deps/done]', err.message));
+  }
+  // Kdo má o posunu vědět, vybírá až SQL v notifyBlockerDueChanged — tady
+  // jen zjistíme, jestli se termín opravdu změnil. Přes toYMD, protože
+  // porovnávat Date objekt se stringem by hlásilo změnu pokaždé.
+  const oldDue = toYMD(before?.due_date);
+  const newDue = toYMD(after?.due_date);
+  if (oldDue !== newDue) {
+    notifyBlockerDueChanged(after.id, oldDue, newDue).catch(err => console.warn('[deps/due]', err.message));
+  }
+}
 
 // Manuální spuštění AI odhadu pro konkrétní úkol
 router.post('/:id/estimate', requireAuth, async (req, res) => {

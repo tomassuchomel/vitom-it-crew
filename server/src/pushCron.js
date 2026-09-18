@@ -43,7 +43,7 @@ async function deadlineReminders() {
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
     WHERE t.assignee_id IS NOT NULL
-      AND t.status IN ('open', 'in_progress', 'review', 'needs_fix')
+      AND t.status IN ('open', 'in_progress', 'review', 'needs_fix', 'waiting')
       AND t.due_date = (CURRENT_DATE AT TIME ZONE 'Europe/Prague')::date + INTERVAL '1 day'
   `);
   if (r.rows.length === 0) return { sent: 0, skipped: 0 };
@@ -81,7 +81,7 @@ async function dailyDigest() {
     SELECT u.id, u.name,
       (SELECT COUNT(*)::int FROM tasks t
         WHERE t.assignee_id = u.id
-          AND t.status IN ('open', 'in_progress', 'review', 'needs_fix')
+          AND t.status IN ('open', 'in_progress', 'review', 'needs_fix', 'waiting')
           AND t.due_date = (CURRENT_DATE AT TIME ZONE 'Europe/Prague')::date) AS due_today,
       (SELECT COUNT(*)::int FROM tasks t
         WHERE t.assignee_id = u.id AND t.status = 'needs_fix') AS needs_fix,
@@ -130,7 +130,7 @@ async function dailyEmailSummary({ h, m, ymd, dayOfWeek } = {}) {
     JOIN tasks t ON t.assignee_id = u.id
     WHERE u.active = TRUE
       AND u.email IS NOT NULL
-      AND t.status IN ('todo', 'in_progress', 'needs_fix', 'review')
+      AND t.status IN ('todo', 'in_progress', 'needs_fix', 'review', 'waiting')
   `);
 
   let sent = 0;
@@ -164,7 +164,7 @@ async function dailyEmailSummary({ h, m, ymd, dayOfWeek } = {}) {
         FROM tasks t
         JOIN projects p ON p.id = t.project_id
         WHERE t.assignee_id = $1
-          AND t.status IN ('todo', 'in_progress', 'needs_fix', 'review')
+          AND t.status IN ('todo', 'in_progress', 'needs_fix', 'review', 'waiting')
         ORDER BY
           CASE t.priority
             WHEN 'urgent' THEN 0 WHEN 'high' THEN 1
@@ -248,7 +248,7 @@ export async function sendDailySummaryToUser(u, apiKey) {
   const tasksR = await query(`
     SELECT t.id, t.title, t.status, t.priority, t.due_date, t.estimated_h, p.name AS project_name
     FROM tasks t JOIN projects p ON p.id = t.project_id
-    WHERE t.assignee_id = $1 AND t.status IN ('todo','in_progress','needs_fix','review')
+    WHERE t.assignee_id = $1 AND t.status IN ('todo','in_progress','needs_fix','review','waiting')
     ORDER BY t.due_date NULLS LAST, t.id
   `, [u.id]);
   if (tasksR.rows.length === 0) return { ok: false, skipped: 'no_tasks' };

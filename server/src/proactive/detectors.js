@@ -17,7 +17,11 @@
 import { query } from '../db.js';
 
 // Aktivní = ještě není dokončený (řešitel na něm může/má pracovat).
-const ACTIVE_STATUSES = ['todo', 'in_progress', 'review', 'needs_fix'];
+const ACTIVE_STATUSES = ['todo', 'in_progress', 'review', 'needs_fix', 'waiting'];
+// „Uvízlý úkol" hlásíme jen tam, kde ticho znamená problém. Úkol ve stavu
+// „Čekám na" stojí vědomě a s uvedeným důvodem — hlásit ho jako uvízlý je
+// přesně ten šum, který má ten stav odstranit.
+const STALLABLE_STATUSES = ACTIVE_STATUSES.filter(s => s !== 'waiting');
 
 // ── 1) Skluz: úkoly po termínu, ještě nedokončené ─────────────────────────
 export async function overdueTasks(teamId) {
@@ -100,7 +104,7 @@ export async function stalledTasks(teamId, days = 7) {
       WHERE p.team_id = $1
         AND t.status = ANY($2)
       ORDER BY last_activity ASC`,
-    [teamId, ACTIVE_STATUSES]
+    [teamId, STALLABLE_STATUSES]
   );
   const cutoffMs = days * 24 * 60 * 60 * 1000;
   const now = Date.now();

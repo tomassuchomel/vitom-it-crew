@@ -20,6 +20,7 @@ const STATUS_OPTIONS = [
   { value: 'todo',        label: '📥 K řešení' },
   { value: 'in_progress', label: '🛠 Rozpracované' },
   { value: 'review',      label: '👀 Review' },
+  { value: 'waiting',     label: '⏳ Čekám na' },
   { value: 'needs_fix',   label: '🔄 K opravě' },
   { value: 'done',        label: '✅ Hotové' },
 ];

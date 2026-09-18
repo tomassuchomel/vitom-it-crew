@@ -104,7 +104,7 @@ router.get('/', requireAuth, async (req, res) => {
   const myTasksQ = query(`
     SELECT p.team_id, COUNT(*)::int AS n
     FROM tasks t JOIN projects p ON p.id = t.project_id
-    WHERE t.assignee_id = $1 AND t.status IN ('todo', 'in_progress', 'needs_fix')
+    WHERE t.assignee_id = $1 AND t.status IN ('todo', 'in_progress', 'needs_fix', 'waiting')
     GROUP BY p.team_id
   `, [uid]);
 

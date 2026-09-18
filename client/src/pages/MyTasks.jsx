@@ -16,7 +16,7 @@ import Modal from '../components/Modal.jsx';
 
 const STATUS = STATUS_META;
 // needs_fix patří doprostřed – je to "vráceno k opravě, hned to vyřeš".
-const PIPELINE_ORDER = ['todo', 'needs_fix', 'in_progress', 'review', 'done'];
+const PIPELINE_ORDER = ['todo', 'needs_fix', 'in_progress', 'waiting', 'review', 'done'];
 
 const PRIORITY = {
   urgent: { label: '🔥 Urgent', color: 'text-red-600' },
@@ -30,6 +30,7 @@ const STATUS_TABS = [
   { value: 'todo',        label: 'Čeká' },
   { value: 'needs_fix',   label: 'K opravě' },
   { value: 'in_progress', label: 'V práci' },
+  { value: 'waiting',     label: 'Čekám na' },
   { value: 'review',      label: 'Review' },
   { value: 'done',        label: 'Hotovo' },
 ];
@@ -528,7 +529,7 @@ function PipelineView({ tasks, onStatusChange, onOpen, onEditDue }) {
   const [dragId, setDragId] = useState(null);
 
   const grouped = useMemo(() => {
-    const g = { todo: [], in_progress: [], review: [], done: [] };
+    const g = { todo: [], in_progress: [], waiting: [], review: [], done: [] };
     for (const t of tasks) {
       if (g[t.status]) g[t.status].push(t);
     }

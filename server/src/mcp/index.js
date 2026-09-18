@@ -18,6 +18,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod';
 import { query } from '../db.js';
 import { verifyMcpToken } from '../routes/mcp-tokens.js';
+import { notifyBlockerDone } from '../taskDependencyNotify.js';
 
 // Mapa MCP status ↔ naše tasks.status.
 const MCP_TO_DB = {
@@ -34,6 +35,9 @@ const DB_TO_MCP = {
   review:      'in_review',
   done:        'done',
   needs_fix:   'blocked',
+  // „Čekám na" je pro MCP taky blokovaný stav — jemnější rozlišení
+  // (na koho se čeká) vnější vocabulary nemá.
+  waiting:     'blocked',
 };
 
 // Povolené přechody (MCP semantics)
@@ -260,10 +264,17 @@ function buildMcpServer(mcpUser = { global: true }) {
           isError: true,
         };
       }
-      const dbNext = MCP_TO_DB[status];
+      // 'waiting' i 'needs_fix' se navenek tváří jako 'blocked'. Kdyby úkol
+      // ve stavu „Čekám na" dostal blocked, přepsali bychom ho na „vráceno
+      // k opravě" — jiná informace. Když se MCP stav nemění, necháme DB stav být.
+      const dbNext = (status === fromMcp) ? row.status : MCP_TO_DB[status];
       const upd = await query(`UPDATE tasks SET status = $1 WHERE id = $2`, [dbNext, id]);
       if (upd.rowCount === 0) {
         return { content: [{ type: 'text', text: 'Update failed (0 rows affected)' }], isError: true };
+      }
+      // Dokončení přes MCP musí odblokovat návazné úkoly stejně jako z UI.
+      if (dbNext === 'done' && row.status !== 'done') {
+        notifyBlockerDone(id).catch(err => console.warn('[deps/mcp]', err.message));
       }
       if (note) {
         // Zaznamenáme jako task_review s verdikt 'note' (fallback: comment).
