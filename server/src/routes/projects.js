@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { query } from '../db.js';
 import { requireAuth, can } from '../auth.js';
+import { syncIdeasForProject } from '../ideaLifecycle.js';
 
 const router = Router();
 
@@ -294,6 +295,10 @@ router.put('/:id', requireAuth, async (req, res) => {
   }
 
   res.json({ project: r.rows[0], changes });
+  // Dokončení projektu může dokončit i nápad, ze kterého vznikl (fire-and-forget).
+  if (r.rows[0].status === 'done') {
+    syncIdeasForProject(id, req.user.id).catch(err => console.warn('[ideaLifecycle/project]', err.message));
+  }
 });
 
 // Smazání – admin/manager + jen v rámci current teamu (nebo admin globálně)

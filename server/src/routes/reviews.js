@@ -11,6 +11,7 @@
 
 import { Router } from 'express';
 import { query } from '../db.js';
+import { syncIdeasForTask } from '../ideaLifecycle.js';
 import { requireAuth, can } from '../auth.js';
 import { sendToUser } from '../push.js';
 import { sendMail, buildTaskEmailHtml, getNotificationPrefs } from '../mailer.js';
@@ -85,6 +86,11 @@ router.post('/tasks/:id/review', requireAuth, async (req, res) => {
   // Vrátíme aktualizovaný task + review
   const updR = await query('SELECT * FROM tasks WHERE id = $1', [id]);
   res.json({ task: updR.rows[0], review: rev.rows[0] });
+  // Schválení review je hlavní cesta úkolu do 'done' — odsud musí doběhnout
+  // i dokončení nápadu, ze kterého úkol vznikl (fire-and-forget).
+  if (verdict === 'approved') {
+    syncIdeasForTask(id, req.user.id).catch(err => console.warn('[ideaLifecycle/review]', err.message));
+  }
 
   // Push notifikace assignee — fire-and-forget po response.
   if (task.assignee_id && task.assignee_id !== req.user.id) {
@@ -294,6 +300,7 @@ router.post('/tasks/:id/approve-and-continue', requireAuth, async (req, res) => 
   );
 
   res.json({ task: { ...task, status: 'done' }, followUp: nt.rows[0] });
+  syncIdeasForTask(id, req.user.id).catch(err => console.warn('[ideaLifecycle/review]', err.message));
 
   // Push assignee o schválení (fire-and-forget) — stejný vzor jako u review.
   if (task.assignee_id && task.assignee_id !== req.user.id) {

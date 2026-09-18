@@ -10,6 +10,7 @@ import {
 } from '../taskModel.js';
 import { preflightTask } from '../aiAgent/preflight.js';
 import { sendMail, buildTaskEmailHtml, getNotificationPrefs } from '../mailer.js';
+import { syncIdeasForTask } from '../ideaLifecycle.js';
 
 // Minimální délka popisu, pokud je úkol přiřazen AI agentovi.
 // Bez kontextu agent nemůže rozumně pracovat.
@@ -575,7 +576,12 @@ router.put('/:id', requireAuth, async (req, res) => {
     params.push(id);
     await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
     const r = await query('SELECT * FROM tasks WHERE id = $1', [id]);
-    return res.json({ task: r.rows[0] });
+    res.json({ task: r.rows[0] });
+    // Dokončení úkolu může dokončit i nápad, ze kterého vznikl (fire-and-forget).
+    if (r.rows[0].status === 'done') {
+      syncIdeasForTask(id, req.user.id).catch(err => console.warn('[ideaLifecycle/task]', err.message));
+    }
+    return;
   }
 
   const next = { ...cur, ...req.body };
@@ -658,6 +664,10 @@ router.put('/:id', requireAuth, async (req, res) => {
   }
 
   res.json({ task: updated, auto_enqueued, ai_preflight });
+  // Dokončení úkolu může dokončit i nápad, ze kterého vznikl (fire-and-forget).
+  if (updated.status === 'done') {
+    syncIdeasForTask(id, req.user.id).catch(err => console.warn('[ideaLifecycle/task]', err.message));
+  }
 });
 
 // Manuální spuštění AI odhadu pro konkrétní úkol

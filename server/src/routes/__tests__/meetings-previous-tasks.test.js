@@ -102,6 +102,29 @@ test('z první porady (mOld) nejsou žádné previous', async () => {
   assert.equal(r.body.tasks.length, 0);
 });
 
+// Regrese: nově založená porada měla často STEJNÉ datum jako předchozí
+// (dvě porady v jeden den) a striktní `<` na datu je celé skryl.
+test('porada se stejným datem jako předchozí vidí její úkoly (rozhoduje id)', async () => {
+  const sameDay = (await db.query(
+    `INSERT INTO meetings (type_id,title,meeting_date) VALUES ($1,'Porada 2b','2026-02-01') RETURNING id`, [ctx.type]
+  )).rows[0].id;
+  const r = await getAs(mgrUser(), sameDay);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const titles = r.body.tasks.map(t => t.title);
+  assert.ok(titles.includes('Z prostřední'), 'vidí úkol z porady se stejným datem, ale nižším id');
+  assert.ok(titles.includes('Ze staré'), 'vidí i starší poradu');
+});
+
+// Regrese: porada bez data nesmí skrýt datované předchozí porady.
+test('porada bez data vidí úkoly ze všech předchozích', async () => {
+  const undated = (await db.query(
+    `INSERT INTO meetings (type_id,title,meeting_date) VALUES ($1,'Bez data',NULL) RETURNING id`, [ctx.type]
+  )).rows[0].id;
+  const r = await getAs(mgrUser(), undated);
+  assert.equal(r.status, 200);
+  assert.ok(r.body.tasks.length >= 2, 'vidí úkoly z datovaných porad');
+});
+
 test('outsider bez přístupu → 403', async () => {
   const r = await getAs({ id: ctx.outsider, email: 'out-pt@t.cz', role: 'external_dev', name: 'Out' }, ctx.mNow);
   assert.equal(r.status, 403);

@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ideas as ideasApi } from '../api.js';
 import VitomLogo from '../components/VitomLogo.jsx';
+import FilePicker from '../components/FilePicker.jsx';
 
 // Field wrapper VNĚ komponenty — kdyby byl uvnitř NapadnikForm, každý
 // re-render (typing) by vytvořil nový komponent typ → React unmountuje
@@ -31,6 +32,7 @@ export default function NapadnikForm() {
     problem_description: '', solution_proposal: '',
     impact_scope: '', estimated_time_savings: '', external_link: '',
   });
+  const [files, setFiles] = useState([]);
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -88,10 +90,18 @@ export default function NapadnikForm() {
     }
     setBusy(true); setErrors({}); setGlobalErr(null);
     try {
-      await ideasApi.submitPublic({ ...form, turnstile_token: turnstileToken });
+      // S přílohami posíláme multipart, bez nich zůstává původní JSON —
+      // ať se chování beze souborů nijak nemění.
+      if (files.length > 0) {
+        await ideasApi.submitPublicWithFiles({ ...form, turnstile_token: turnstileToken }, files);
+      } else {
+        await ideasApi.submitPublic({ ...form, turnstile_token: turnstileToken });
+      }
       setSuccess(true);
     } catch (err) {
-      if (err.response?.data?.error === 'turnstile_failed') {
+      if (['unsupported_type', 'file_too_large', 'too_many_files'].includes(err.response?.data?.error)) {
+        setGlobalErr(err.response.data.message);
+      } else if (err.response?.data?.error === 'turnstile_failed') {
         setGlobalErr(err.response.data.message || 'Anti‑spam ověření selhalo.');
         window.turnstile?.reset(tsWidgetId.current);
         setTurnstileToken('');
@@ -223,6 +233,10 @@ export default function NapadnikForm() {
               placeholder="https://…"
               className={inputCls('external_link', errors)} />
           </Field>
+
+          <div className="pt-2">
+            <FilePicker files={files} onChange={setFiles} label="📎 Přílohy (volitelně)" />
+          </div>
 
           {turnstileKey && turnstileKey !== 'no' && (
             <div className="pt-2">
