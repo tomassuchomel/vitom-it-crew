@@ -15,6 +15,7 @@ import { passport, HAS_GOOGLE } from './auth.js';
 import authRoutes from './routes/auth.js';
 import usersRoutes from './routes/users.js';
 import projectsRoutes from './routes/projects.js';
+import milestonesRoutes from './routes/milestones.js';
 import tasksRoutes from './routes/tasks.js';
 import timeRoutes from './routes/time.js';
 import reportsRoutes from './routes/reports.js';
@@ -67,6 +68,8 @@ app.use('/api/teams', teamsRoutes);
 app.use('/api/scoreboard', scoreboardRoutes);
 app.use('/api/notes', notesRoutes);
 app.use('/api/projects', projectsRoutes);
+// Milníky mají vlastní mount — projects.js by jinak jen bobtnal.
+app.use('/api/milestones', milestonesRoutes);
 // aiAgentRoutes obsluhuje smíšené cesty: /api/ai-agent/preflight* i /api/tasks/:id/enqueue,
 // MUSÍ být před tasksRoutes – statická cesta "enqueue" by jinak kolidovala s /:id.
 // reviewsRoutes definuje /api/tasks/review-queue, /api/tasks/:id/review, /api/tasks/:id/reviews,

@@ -86,7 +86,20 @@ router.get('/', requireAuth, async (req, res) => {
       (SELECT COALESCE(SUM(te.hours * u.hourly_rate), 0)
          FROM time_entries te JOIN users u ON u.id = te.user_id
          WHERE te.project_id = p.id) AS cost_so_far,
-      mu.name AS manager_name
+      mu.name AS manager_name,
+      -- Milníky pro Timeline. Agregace v jednom dotazu, ať klient nedělá N+1.
+      -- Tabulku zakládá souborová migrace, která běží při startu serveru dřív
+      -- než se začne obsluhovat — proto tu na rozdíl od responsible_id
+      -- nepotřebujeme fallback.
+      COALESCE((
+        SELECT json_agg(json_build_object(
+                 'id', ms.id, 'name', ms.name, 'deadline', ms.deadline::text,
+                 'task_id', ms.task_id, 'task_status', mt.status
+               ) ORDER BY ms.position, ms.id)
+        FROM project_milestones ms
+        LEFT JOIN tasks mt ON mt.id = ms.task_id
+        WHERE ms.project_id = p.id
+      ), '[]'::json) AS milestones
       ${withResponsible ? ', ru.name AS responsible_name' : ''}
     FROM projects p
     LEFT JOIN users mu ON mu.id = p.manager_id

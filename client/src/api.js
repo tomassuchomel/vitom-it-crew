@@ -387,6 +387,15 @@ export const time = {
   remove:  (id) => api.delete(`/time/${id}`).then(r => r.data),
 };
 
+// Projektové milníky — části projektu s vlastním termínem (sekce 4 zadání).
+export const milestones = {
+  list:    (projectId) => api.get(`/milestones/project/${projectId}`).then(r => r.data),
+  create:  (projectId, data) => api.post(`/milestones/project/${projectId}`, data).then(r => r.data),
+  update:  (id, data) => api.patch(`/milestones/${id}`, data).then(r => r.data),
+  remove:  (id) => api.delete(`/milestones/${id}`).then(r => r.data),
+  reorder: (projectId, order) => api.put(`/milestones/project/${projectId}/reorder`, { order }).then(r => r.data),
+};
+
 export const users = {
   // Default: team-scoped (jen členové current teamu).
   list:    () => api.get('/users').then(r => r.data),
