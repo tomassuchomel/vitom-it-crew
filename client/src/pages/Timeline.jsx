@@ -525,7 +525,7 @@ const ROLE_BADGE = {
   external_dev: 'bg-accent-100 text-accent-700',
 };
 const ROLE_SHORT = { admin: 'Admin', manager: 'PM', senior_dev: 'Senior', external_dev: 'External' };
-const STATUS_LABEL = { todo: 'Čeká', in_progress: 'V práci', review: 'Review', done: 'Hotovo' };
+const STATUS_LABEL = { todo: 'Čeká', in_progress: 'V práci', waiting: 'Čekám na', review: 'Review', done: 'Hotovo' };
 
 function WorkerCard({ worker, onOpen }) {
   return (

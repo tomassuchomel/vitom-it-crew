@@ -9,6 +9,7 @@ import TimeTriad from '../components/TimeTriad.jsx';
 import Attachments from '../components/Attachments.jsx';
 import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import ReviewTaskDialog from '../components/ReviewTaskDialog.jsx';
+import WaitingDialog from '../components/WaitingDialog.jsx';
 import { StatusBadge, StatusActions, AIEstimateBadge } from '../components/TaskStatus.jsx';
 import { Input, Textarea, Select, TimelineFlags } from './ProjectsList.jsx';
 import { projects as projectsApi, tasks as tasksApi, users as usersApi, milestones as milestonesApi } from '../api.js';
@@ -17,6 +18,7 @@ import { useAuth, can } from '../auth.jsx';
 const STATUS_OPTIONS = [
   { value: 'todo', label: 'Čeká' },
   { value: 'in_progress', label: 'V práci' },
+  { value: 'waiting', label: 'Čekám na' },
   { value: 'review', label: 'Review' },
   { value: 'done', label: 'Hotovo' },
 ];
@@ -30,6 +32,7 @@ const STATUS_BADGE = {
   todo: 'bg-slate-100 text-slate-600',
   in_progress: 'bg-blue-100 text-blue-700',
   review: 'bg-amber-100 text-amber-700',
+  waiting: 'bg-violet-100 text-violet-700',
   done: 'bg-emerald-100 text-emerald-700',
 };
 const PROJECT_STATUS_LABEL = {
@@ -57,6 +60,7 @@ export default function ProjectDetail() {
   const [aiDetailTask, setAiDetailTask] = useState(null);  // null | task – pro TaskDetailModal s AI panelem
   const [editOpen, setEditOpen] = useState(false);
   const [reviewing, setReviewing] = useState(null);    // null | { task, verdict } pro ReviewTaskDialog
+  const [waitingTask, setWaitingTask] = useState(null); // null | task pro WaitingDialog
   // Status filter pro úkoly. 'open' default = skrýt done/cancelled.
   const [taskFilter, setTaskFilter] = useState(() => localStorage.getItem('projectDetail.taskFilter') || 'open');
   useEffect(() => { localStorage.setItem('projectDetail.taskFilter', taskFilter); }, [taskFilter]);
@@ -127,7 +131,17 @@ export default function ProjectDetail() {
       setCompletingTask({ ...task, _targetStatus: 'done' });
       return;
     }
+    // „Čekám na" bez důvodu je za týden k ničemu — zeptáme se na něj.
+    if (status === 'waiting' && task.status !== 'waiting') {
+      setWaitingTask(task);
+      return;
+    }
     await tasksApi.update(task.id, { status });
+    load(true);
+  };
+  const confirmWaiting = async (fields) => {
+    await tasksApi.update(waitingTask.id, { status: 'waiting', ...fields });
+    setWaitingTask(null);
     load(true);
   };
   const handleCompletionConfirm = async (actualH) => {
@@ -349,6 +363,9 @@ export default function ProjectDetail() {
       )}
 
       {/* Schválit / vrátit z review – jen pro manager projektu nebo admin */}
+      {waitingTask && (
+        <WaitingDialog task={waitingTask} onClose={() => setWaitingTask(null)} onConfirm={confirmWaiting} />
+      )}
       {reviewing && (
         <ReviewTaskDialog
           task={reviewing.task}

@@ -396,6 +396,13 @@ export const milestones = {
   reorder: (projectId, order) => api.put(`/milestones/project/${projectId}/reorder`, { order }).then(r => r.data),
 };
 
+// Návaznosti mezi úkoly (sekce 15). Směr: úkol ČEKÁ NA jiný úkol.
+export const dependencies = {
+  list:   (taskId) => api.get(`/dependencies/task/${taskId}`).then(r => r.data),
+  add:    (taskId, dependsOnId) => api.post(`/dependencies/task/${taskId}`, { depends_on_id: dependsOnId }).then(r => r.data),
+  remove: (id) => api.delete(`/dependencies/${id}`).then(r => r.data),
+};
+
 export const users = {
   // Default: team-scoped (jen členové current teamu).
   list:    () => api.get('/users').then(r => r.data),

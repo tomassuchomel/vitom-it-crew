@@ -12,6 +12,7 @@
 import { Router } from 'express';
 import { query } from '../db.js';
 import { syncIdeasForTask } from '../ideaLifecycle.js';
+import { notifyBlockerDone } from '../taskDependencyNotify.js';
 import { requireAuth, can } from '../auth.js';
 import { sendToUser } from '../push.js';
 import { sendMail, buildTaskEmailHtml, getNotificationPrefs } from '../mailer.js';
@@ -90,6 +91,7 @@ router.post('/tasks/:id/review', requireAuth, async (req, res) => {
   // i dokončení nápadu, ze kterého úkol vznikl (fire-and-forget).
   if (verdict === 'approved') {
     syncIdeasForTask(id, req.user.id).catch(err => console.warn('[ideaLifecycle/review]', err.message));
+    notifyBlockerDone(id).catch(err => console.warn('[deps/review]', err.message));
   }
 
   // Push notifikace assignee — fire-and-forget po response.

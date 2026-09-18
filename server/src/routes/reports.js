@@ -90,7 +90,7 @@ router.get('/who-works-on-what', requireAuth, async (req, res) => {
     FROM users u
     JOIN team_members tm ON tm.user_id = u.id AND tm.team_id = $1
     LEFT JOIN tasks t ON t.assignee_id = u.id
-                     AND t.status IN ('todo', 'in_progress', 'review', 'needs_fix')
+                     AND t.status IN ('todo', 'in_progress', 'review', 'needs_fix', 'waiting')
                      AND EXISTS (SELECT 1 FROM projects pp WHERE pp.id = t.project_id AND pp.team_id = $1)
     LEFT JOIN projects p ON p.id = t.project_id
     WHERE u.active = TRUE

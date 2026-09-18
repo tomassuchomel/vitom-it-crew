@@ -7,6 +7,7 @@ export const STATUS_META = {
   in_progress: { label: 'Pracuje se',   icon: '⚙️', bg: 'bg-blue-100',     text: 'text-blue-800',      border: 'border-blue-300',   dot: 'bg-blue-500 animate-pulse' },
   review:      { label: 'Čeká na review', icon: '👀', bg: 'bg-accent-100', text: 'text-accent-800',    border: 'border-accent-300', dot: 'bg-accent-500' },
   needs_fix:   { label: 'K opravě',     icon: '🔄', bg: 'bg-orange-100',  text: 'text-orange-800',    border: 'border-orange-300', dot: 'bg-orange-500 animate-pulse' },
+  waiting:     { label: 'Čekám na',     icon: '⏳', bg: 'bg-violet-100',  text: 'text-violet-800',    border: 'border-violet-300', dot: 'bg-violet-500' },
   done:        { label: 'Hotovo',       icon: '✅', bg: 'bg-emerald-100', text: 'text-emerald-800',   border: 'border-emerald-400',dot: 'bg-emerald-500' },
 };
 
@@ -85,7 +86,16 @@ export function StatusActions({ task, onChange, onReview, compact = false, canCh
     return (
       <div className="flex items-center gap-1">
         <Btn targetStatus="review" label="Předat k review" color="emerald" />
+        <Btn targetStatus="waiting" label="Čekám na…" color="ink" />
         <Btn targetStatus="todo" label="Pozastavit" color="ink" />
+      </div>
+    );
+  }
+  // Z čekání se nevrací automaticky — rozhodnout musí člověk (zadání).
+  if (fromStatus === 'waiting' && canChange) {
+    return (
+      <div className="flex items-center gap-1">
+        <Btn targetStatus="in_progress" label="Pokračovat" color="blue" />
       </div>
     );
   }
