@@ -65,6 +65,29 @@ after(async () => {
   if (stopDb) await stopDb();
 });
 
+// „Zadáno od" je důležitý kontext — kdo o úkol požádal. Musí dorazit
+// ze všech míst, kde se úkoly vypisují, ne jen z Mých úkolů.
+test('endpointy vracejí jméno zadavatele', async () => {
+  const id = (await db.query(
+    `INSERT INTO tasks (project_id,title,assignee_id,created_by) VALUES ($1,'Se zadavatelem',$2,$3) RETURNING id`,
+    [ctx.project, ctx.dev, ctx.mgr]
+  )).rows[0].id;
+
+  const get = async (path) => {
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks${path}`, {
+      headers: { cookie: `tf_token=${signToken(mgrUser())}` },
+    });
+    return res.json();
+  };
+
+  const detail = await get(`/${id}`);
+  assert.equal(detail.task.created_by_name, 'Mgr', 'detail úkolu');
+
+  const mine = await get('/mine?userId=' + ctx.dev);
+  const found = (mine.tasks || []).find(t => t.id === id);
+  assert.equal(found?.created_by_name, 'Mgr', 'moje úkoly');
+});
+
 test('úkol lze přepnout na Čekám na s důvodem, poznámkou i datem', async () => {
   const id = await newTask();
   const r = await put(mgrUser(), id, {

@@ -761,6 +761,12 @@ function TaskRow({ task, children, user, onStatusChange, onReview, onAddSubtask,
                 <span className="font-medium">{task.assignee_name}</span>
               </span>
             )}
+            {/* Zadavatel — ať je poznat, kdo o úkol požádal. */}
+            {task.created_by_name && (
+              <span className="inline-flex items-center gap-1" title="Zadavatel úkolu">
+                <span>👤</span>Zadáno od: {task.created_by_name}
+              </span>
+            )}
             {task.due_date && (
               <span className="inline-flex items-center gap-1">
                 <span>📅</span>{fmtDate(task.due_date)}

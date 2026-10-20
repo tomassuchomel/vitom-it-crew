@@ -134,6 +134,13 @@ export default function TaskDetailModal({ task: initialTask, onClose, onChanged 
                   className="hover:text-brand-500 hover:underline">📅 {String(task.due_date).slice(0, 10)}</button>
               )}
               {task.estimated_h && <span>⏱ odhad {task.estimated_h}h</span>}
+              {/* Od koho úkol je — důležitý kontext, komu se ozvat. */}
+              {task.created_by_name && (
+                <span title="Zadavatel úkolu">👤 Zadáno od: {task.created_by_name}</span>
+              )}
+              {task.assignee_name && (
+                <span title="Řešitel úkolu">🛠 Řeší: {task.assignee_name}</span>
+              )}
             </div>
           </div>
           <button onClick={onClose} className="text-ink-400 hover:text-ink-700 text-2xl leading-none -mt-1">×</button>
