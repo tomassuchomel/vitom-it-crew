@@ -268,11 +268,13 @@ router.get('/search', requireAuth, async (req, res) => {
       p.team_id,
       tm.name AS team_name,
       u.name AS assignee_name,
+      cb.name AS created_by_name,
       u.avatar_updated_at AS assignee_avatar_updated_at
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
     LEFT JOIN teams tm ON tm.id = p.team_id
     LEFT JOIN users u ON u.id = t.assignee_id
+    LEFT JOIN users cb ON cb.id = t.created_by
     WHERE ${where.join(' AND ')}
     ORDER BY
       CASE WHEN t.status = 'done' THEN 1 ELSE 0 END,
@@ -299,6 +301,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       p.team_id AS project_team_id,
       tm.name AS project_team_name,
       u.name AS assignee_name,
+      cb.name AS created_by_name,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.to_user_id = $1 AND q.status = 'pending') AS pending_questions_for_me,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q,
@@ -308,6 +311,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     JOIN projects p ON p.id = t.project_id
     LEFT JOIN teams tm ON tm.id = p.team_id
     LEFT JOIN users u ON u.id = t.assignee_id
+    LEFT JOIN users cb ON cb.id = t.created_by
     WHERE t.id = $2
   `, [req.user.id, id]);
   const task = r.rows[0];

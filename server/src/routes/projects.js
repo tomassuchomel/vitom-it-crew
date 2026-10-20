@@ -168,12 +168,15 @@ router.get('/:id', requireAuth, async (req, res) => {
   const tR = await query(`
     SELECT t.*,
       u.name AS assignee_name,
+      cb.name AS created_by_name,
       $2::int AS project_manager_id,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'pending')  AS pending_q,
       (SELECT COUNT(*) FROM questions q WHERE q.task_id = t.id AND q.status = 'answered') AS answered_q,
       (SELECT COUNT(*) FROM attachments a WHERE a.task_id = t.id) AS attachment_count,
       (SELECT COALESCE(SUM(te.hours), 0) FROM time_entries te WHERE te.task_id = t.id) AS logged_hours
-    FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
+    FROM tasks t
+    LEFT JOIN users u ON u.id = t.assignee_id
+    LEFT JOIN users cb ON cb.id = t.created_by
     WHERE t.project_id = $1
     ORDER BY COALESCE(t.parent_id, t.id), t.id
   `, [id, project.manager_id]);

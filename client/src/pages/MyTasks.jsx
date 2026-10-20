@@ -478,7 +478,7 @@ function ListView({ tasks, filter, currentTeamId, onStatusChange, onOpen, onEdit
                   {t.created_by_name && (
                     <span className="inline-flex items-center gap-1 text-ink-500"
                       title="Zadavatel úkolu">
-                      <span>👤</span>{t.created_by_name}{t.created_by === user?.id && ' (já)'}
+                      <span>👤</span>Zadáno od: {t.created_by_name}{t.created_by === user?.id && ' (já)'}
                     </span>
                   )}
                   {/* Host badge: úkol z týmu, kde současný user není členem. */}
