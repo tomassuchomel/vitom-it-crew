@@ -319,20 +319,69 @@ export async function migrate() {
 // Každý soubor musí být sám idempotentní (používáme ADD COLUMN IF NOT EXISTS apod.),
 // takže opakované spuštění je bezpečné. Slouží jako precedent pro budoucí migrace
 // vedle inline ALTER bloků v migrate() výše.
+// Souborové migrace — každá se aplikuje právě jednou a je to zapsané
+// v tabulce schema_migrations.
+//
+// PROČ EVIDENCE: dřív se všech 43 souborů pouštělo při KAŽDÉM startu znovu
+// nad živými daty. Stačilo, aby jedna selhala na produkčních datech (říjen
+// 2026: stará migrace nastavovala CHECK stavů úkolu bez 'waiting'), a
+// index.js skončil přes process.exit(1) — server se přestal umět spustit
+// a systemd ho dokola restartoval. Navíc se tím při každém bootu braly
+// exkluzivní zámky na tasks a attachments a datové migrace přepisovaly
+// ručně provedená nastavení.
+//
+// PRVNÍ BĚH PO NASAZENÍ: záměrně NEoznačujeme existující soubory paušálně
+// jako aplikované. Doteď se pouštěly při každém startu, takže je ještě
+// jednou spustit = přesně to, co dělal předchozí boot — žádné nové riziko,
+// migrace jsou psané idempotentně. Naopak paušální označení by přeskočilo
+// migraci přidanou ve stejném nasazení jako tahle změna (ta ještě nikdy
+// neběžela) a její změna schématu by tiše nikdy nedorazila. Po tomhle
+// jednom běhu se už nic znovu nespouští.
 export async function runFileMigrations() {
   const dir = path.join(__dirname, 'migrations');
   if (!fs.existsSync(dir)) return;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      filename   TEXT PRIMARY KEY,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  const done = new Set(
+    (await pool.query('SELECT filename FROM schema_migrations')).rows.map(r => r.filename)
+  );
+
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort();
+  let applied = 0;
   for (const f of files) {
+    if (done.has(f)) continue;
     const sql = fs.readFileSync(path.join(dir, f), 'utf8');
+    const client = await pool.connect();
     try {
-      await pool.query(sql);
+      await client.query('BEGIN');
+      // Raději hlasitě selhat než viset navěky: bez timeoutů stačí, aby
+      // jiný proces (AI worker) držel transakci nad tasks, a start serveru
+      // uvízne na zámku — systemd to vidí jako zdravý proces, ale nikdy
+      // nedojde k app.listen() a appka vrací 502.
+      await client.query("SET LOCAL lock_timeout = '5s'");
+      await client.query("SET LOCAL statement_timeout = '60s'");
+      await client.query(sql);
+      await client.query(
+        'INSERT INTO schema_migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING',
+        [f]
+      );
+      await client.query('COMMIT');
+      applied++;
       console.log(`[db] file migration applied: ${f}`);
     } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
       console.error(`[db] file migration FAILED: ${f}`, err.message);
       throw err;
+    } finally {
+      client.release();
     }
   }
+  if (applied === 0) console.log(`[db] file migrations: nic nového (${files.length} už aplikováno)`);
 }
 
 // Post-migrace: pro existující uživatele bez password_hash / first_name nastav výchozí hodnoty.
