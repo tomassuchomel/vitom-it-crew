@@ -15,9 +15,16 @@
 -- auto-pojmenovává CHECK constraint pod tímto názvem (table_column_check).
 
 -- 1) Rozšířit status CHECK constraint o 'needs_fix'
+--
+-- POZOR: souborové migrace běží při KAŽDÉM startu serveru, takže tenhle
+-- drop+add se pokaždé znovu provede nad živými daty. Seznam stavů tu proto
+-- musí obsahovat i stavy přidané pozdějšími migracemi — jinak se o ně
+-- rozbije (constraint je porušený existujícím řádkem) a server vůbec
+-- nenastartuje. 'waiting' přidala migrace 2026-09-18-task-dependencies.sql,
+-- která běží AŽ PO téhle. Při přidání dalšího stavu rozšiř oba soubory.
 ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_status_check;
 ALTER TABLE tasks ADD CONSTRAINT tasks_status_check
-  CHECK (status IN ('todo','in_progress','review','done','needs_fix'));
+  CHECK (status IN ('todo','in_progress','review','done','needs_fix','waiting'));
 
 -- 2) Tabulka pro historii reviews
 CREATE TABLE IF NOT EXISTS task_reviews (
