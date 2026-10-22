@@ -2,6 +2,7 @@
 // Fáze 2 přidá workflow tranzice, F3 analýzu, F4 dashboard, F5 export.
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import { ideas as ideasApi, users as usersApi, projects as projectsApi } from '../api.js';
 import FilePicker from '../components/FilePicker.jsx';
@@ -482,7 +483,10 @@ function IdeaDetail({ data, onChanged }) {
             <a href={idea.external_link} target="_blank" rel="noreferrer" className="text-brand-500 hover:underline">🔗 {idea.external_link}</a>
           </div>}
           {idea.linked_project_id && <div className="pt-2 text-emerald-700">
-            🚀 <strong>Projekt:</strong> {idea.linked_project_name}
+            🚀 <strong>Projekt:</strong>{' '}
+            <Link to={`/projects/${idea.linked_project_id}`}
+              title="Otevřít projekt a jeho úkoly"
+              className="text-brand-600 hover:underline">{idea.linked_project_name}</Link>
             {idea.linked_project_team_name && <span className="text-ink-500"> ({idea.linked_project_team_name})</span>}
           </div>}
         </div>
@@ -567,6 +571,15 @@ function IdeaDetail({ data, onChanged }) {
               🔀 Sloučit / přiřadit
             </button>
           )}
+          {/* Po schválení analýzy nemusí vzniknout rovnou projekt — na drobnost
+              stačí úkol. Používá tentýž modal, jen rovnou na záložce projektů. */}
+          {idea.state === 'schvalena_analyza' && (
+            <button onClick={() => setMergeOpen(true)}
+              title="Založit z nápadu úkol v existujícím projektu."
+              className="mt-2 w-full px-3 py-1.5 text-sm bg-white border border-ink-300 rounded hover:bg-cream-50">
+              ✅ Vytvořit úkol
+            </button>
+          )}
           {idea.state === 'odlozeno' && (
             <button onClick={async () => { await ideasApi.reactivate(idea.id); reload(); }}
               title="Vrátit odložený nápad zpět mezi aktivní."
@@ -608,7 +621,9 @@ function IdeaDetail({ data, onChanged }) {
               <div className="text-ink-400 text-[10px]">
                 {fmtDate(ev.created_at)}{ev.user_name ? ` · ${ev.user_name}` : ''}
               </div>
-              {ev.comment && ev.action !== 'edit' && (
+              {/* U 'edit' se dřív obsah schovával, protože se ukládal syrový
+                  JSON requestu. Backend teď loguje čitelně „pole: staré → nové". */}
+              {ev.comment && (
                 <div className="text-ink-600 mt-0.5 whitespace-pre-wrap">{ev.comment}</div>
               )}
             </li>

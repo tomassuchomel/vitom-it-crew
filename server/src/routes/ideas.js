@@ -43,8 +43,9 @@ async function sendIdeaMail(userId, email, prefKey, subject, title, body) {
   }
 }
 
-// Cloudflare Turnstile server-side verify. Když TURNSTILE_SECRET není nastaven,
-// vrací true (bypass — dev/local i nasazení bez klíčů funguje). Token je z FE.
+// Cloudflare Turnstile server-side verify. Bez TURNSTILE_SECRET se v produkci
+// odesílání ODMÍTÁ (fail-closed) — veřejný endpoint bez antispamu je otevřený
+// sklad. V dev/local se kontrola přeskakuje. Token je z FE.
 async function verifyTurnstile(token, remoteIp) {
   const secret = process.env.TURNSTILE_SECRET;
   if (!secret) {
@@ -95,7 +96,10 @@ const TRANSITIONS = {
     { to: 'odlozeno',                  action: 'Odložit',                 role: 'management',           requireComment: true },
   ],
   schvalena_analyza: [
-    // "Vytvořit projekt" má samostatný endpoint /create-project (vyžaduje team + název)
+    // "Vytvořit projekt" má samostatný endpoint /create-project (vyžaduje team + název),
+    // "Vytvořit úkol" endpoint /create-task. Některé nápady ale projekt ani úkol
+    // nepotřebují — udělaly se rovnou, takže je možné je jen uzavřít.
+    { to: 'hotovo',                    action: 'Uzavřít jako hotové',     role: 'garant_or_management', requireComment: true },
   ],
   rozpracovano: [
     { to: 'hotovo',                    action: 'Dokončit',                role: 'garant_or_management', requireComment: false },
@@ -103,7 +107,11 @@ const TRANSITIONS = {
   odlozeno: [
     { to: 'ke_schvaleni',              action: 'Obnovit',                 role: 'garant_or_management', requireComment: false },
   ],
-  hotovo:    [],
+  hotovo: [
+    // Omylem uzavřený nápad musí jít vrátit. Komentář je povinný, ať je
+    // v historii vidět proč.
+    { to: 'rozpracovano',              action: 'Vrátit k rozpracování',   role: 'garant_or_management', requireComment: true },
+  ],
   zamitnuto: [],
 };
 
@@ -168,8 +176,8 @@ function insertIdea(b, { source, createdById = null, proposerName, proposerEmail
 }
 
 // Public endpoint: veřejný formulář, bez autentizace.
-// Vytvoří nový nápad ve stavu 'zadano'.
-// Fáze 5 přidá Turnstile check.
+// Vytvoří nový nápad ve stavu 'zadano'. Chráněný Turnstile (viz výše)
+// a přísnějšími limity na přílohy než interní upload.
 router.post('/public', publicFormUpload.array('files', MAX_PUBLIC_FILES), async (req, res) => {
   const b = req.body || {};
   const errors = validateIdeaFields(b);
@@ -177,8 +185,7 @@ router.post('/public', publicFormUpload.array('files', MAX_PUBLIC_FILES), async 
     return res.status(400).json({ error: 'validation', fields: errors });
   }
 
-  // Cloudflare Turnstile ověření (spam ochrana). Přeskočí se, když
-  // TURNSTILE_SECRET není nastaven (dev / lokální).
+  // Cloudflare Turnstile ověření (spam ochrana).
   const tsOk = await verifyTurnstile(b.turnstile_token, req.ip);
   if (!tsOk) {
     return res.status(400).json({ error: 'turnstile_failed', message: 'Ověření anti‑spam selhalo. Zkus prosím znovu.' });
@@ -512,8 +519,11 @@ router.patch('/:id', requireAuth, requireIdeaAccess, async (req, res) => {
   const id = Number(req.params.id);
   const b = req.body || {};
   // Zjisti current stav (kvůli garant-change notifikaci)
-  const prevR = await query(`SELECT garant_id, title FROM ideas WHERE id = $1`, [id]);
+  const prevR = await query(
+    `SELECT garant_id, title, priority, pm_recommendation, pm_note FROM ideas WHERE id = $1`, [id]
+  );
   const prev = prevR.rows[0];
+  const prevFull = prev || {};
   if (!prev) return res.status(404).json({ error: 'not_found' });
 
   const sets = [];
@@ -530,11 +540,29 @@ router.patch('/:id', requireAuth, requireIdeaAccess, async (req, res) => {
   params.push(id);
   await query(`UPDATE ideas SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
 
-  // Log každou změnu jako event (jednoduše, hromadně)
-  await query(`
-    INSERT INTO idea_events (idea_id, action, user_id, comment)
-    VALUES ($1, 'edit', $2, $3)
-  `, [id, req.user.id, JSON.stringify(b).slice(0, 500)]);
+  // Log změn — po polích a se starou i novou hodnotou, ať je v historii
+  // vidět CO se změnilo, ne jen že se editovalo. Dřív se ukládal syrový
+  // JSON celého requestu, který se uživateli ani nedal ukázat.
+  const FIELD_LABELS = {
+    garant_id: 'Garant', priority: 'Priorita',
+    pm_recommendation: 'Doporučení PM', pm_note: 'Poznámka PM',
+  };
+  const shorten = (v) => {
+    if (v === null || v === undefined || v === '') return '(prázdné)';
+    const t = String(v);
+    return t.length > 200 ? `${t.slice(0, 200)}…` : t;
+  };
+  const changes = Object.keys(FIELD_LABELS)
+    .filter(k => k in b)
+    .map(k => ({ k, before: prevFull[k], after: k === 'garant_id' ? (b[k] ? Number(b[k]) : null) : b[k] }))
+    .filter(c => String(c.before ?? '') !== String(c.after ?? ''));
+
+  for (const c of changes) {
+    await query(`
+      INSERT INTO idea_events (idea_id, action, user_id, comment)
+      VALUES ($1, 'edit', $2, $3)
+    `, [id, req.user.id, `${FIELD_LABELS[c.k]}: ${shorten(c.before)} → ${shorten(c.after)}`]);
+  }
 
   const r = await query(`${SELECT_FULL} WHERE i.id = $1`, [id]);
   res.json({ idea: r.rows[0] });
@@ -905,6 +933,21 @@ router.post('/:id/merge', requireAuth, requireIdeaAccess, async (req, res) => {
   // Přílohy a poznámky přesuneme, ať se sloučením nic neztratí.
   await query('UPDATE attachments SET idea_id = $1 WHERE idea_id = $2', [targetId, id]);
   await query('UPDATE idea_notes SET idea_id = $1 WHERE idea_id = $2', [targetId, id]);
+  // Vazba na realizace musí jít s sebou — jinak by cíl o úkolech nevěděl
+  // (nikdy by se nedostal na „hotovo") a zdrojový by se naopak uzavíral,
+  // přestože je sloučený. ON CONFLICT: dvojice (idea_id, task_id) je PK,
+  // takže když už cíl stejný úkol má, jen ten řádek zahodíme.
+  await query(`
+    INSERT INTO idea_tasks (idea_id, task_id, created_by)
+    SELECT $1, task_id, created_by FROM idea_tasks WHERE idea_id = $2
+    ON CONFLICT DO NOTHING
+  `, [targetId, id]);
+  await query('DELETE FROM idea_tasks WHERE idea_id = $1', [id]);
+  // Projekt převezmeme jen když cíl žádný nemá — vlastní vazbu nepřepisujeme.
+  await query(`
+    UPDATE ideas SET linked_project_id = $1, linked_project_team_id = $2
+    WHERE id = $3 AND linked_project_id IS NULL
+  `, [src.linked_project_id, src.linked_project_team_id, targetId]);
 
   // Popis zdrojového nápadu připojíme do poznámek cíle, ať text nezmizí.
   await query(`

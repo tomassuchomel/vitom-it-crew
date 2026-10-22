@@ -1,9 +1,9 @@
 // Upload příloh úkolů (foto/video).
 //
 // PERSISTENCE: Binární data uložená v attachments.data (BYTEA) v PostgreSQL,
-// nikoliv na disku. Důvod: Render bez persistent disku má ephemerální FS —
-// po deploy se data/uploads/ smaže. BYTEA v DB persistuje napříč deployi
-// (stejně jako děláme s users.avatar_data).
+// nikoliv na disku. Historicky kvůli Renderu s ephemerálním FS; dnes běžíme
+// na VPS s lokálním PostgreSQL, ale uložení v DB zůstává — přežije redeploy
+// i přesun serveru (stejně jako děláme s users.avatar_data).
 //
 // Endpointy:
 //   GET    /api/attachments/by-task/:taskId   – list metadata pro daný úkol
@@ -12,8 +12,7 @@
 //   DELETE /api/attachments/:id               – smaže záznam
 //
 // Pro legacy záznamy bez data (před touto migrací) je tu fallback na disk —
-// pokud filename existuje na disku, ještě se nahraje. Na Render free tier
-// se to nestane, ale pro lokální dev se zachová zpětná kompatibilita.
+// pokud filename existuje na disku, ještě se nahraje.
 
 import { Router } from 'express';
 import multer from 'multer';
@@ -58,26 +57,56 @@ function formatContentDisposition(name) {
 
 const router = Router();
 
+// Smí uživatel pracovat s přílohami daného úkolu?
+// Právo má admin, člen týmu projektu, řešitel úkolu a vedoucí projektu.
+// Vrací false i pro neexistující úkol — volající pak vrátí 404, takže
+// uhádnuté id neprozradí, jestli úkol existuje (viz pravidlo o IDOR
+// v CLAUDE.md).
+async function canAccessTask(taskId, user) {
+  if (!Number.isInteger(taskId) || taskId <= 0) return false;
+  const r = await query(`
+    SELECT t.assignee_id, p.team_id AS project_team_id, p.manager_id AS project_manager_id
+    FROM tasks t JOIN projects p ON p.id = t.project_id
+    WHERE t.id = $1
+  `, [taskId]);
+  const t = r.rows[0];
+  if (!t) return false;
+
+  if (user.role === 'admin') return true;
+  if (t.assignee_id === user.id) return true;
+  if (t.project_manager_id === user.id) return true;
+
+  const m = await query(
+    'SELECT 1 FROM team_members WHERE user_id = $1 AND team_id = $2 LIMIT 1',
+    [user.id, t.project_team_id]
+  );
+  return m.rows.length > 0;
+}
+
 // List metadata (bez binárních dat — ta se loadí lazy přes /:id/file).
 router.get('/by-task/:taskId', requireAuth, async (req, res) => {
+  const taskId = Number(req.params.taskId);
+  if (!await canAccessTask(taskId, req.user)) return res.status(404).json({ error: 'not_found' });
+
   const r = await query(`
     SELECT a.id, a.task_id, a.uploader_id, a.filename, a.original_name,
            a.mime_type, a.size, a.kind, a.created_at,
            (a.data IS NOT NULL) AS has_data,
            u.name AS uploader_name
     FROM attachments a
-    JOIN users u ON u.id = a.uploader_id
+    LEFT JOIN users u ON u.id = a.uploader_id
     WHERE a.task_id = $1
     ORDER BY a.created_at DESC
-  `, [Number(req.params.taskId)]);
+  `, [taskId]);
   res.json({ attachments: r.rows });
 });
 
 // Upload – data jdou do DB jako BYTEA.
 router.post('/by-task/:taskId', requireAuth, upload.array('files', 10), async (req, res) => {
   const taskId = Number(req.params.taskId);
-  const tR = await query('SELECT id FROM tasks WHERE id = $1', [taskId]);
-  if (!tR.rows[0]) return res.status(404).json({ error: 'task_not_found' });
+  // Kontrola práv PŘED zpracováním souborů — bez ní šlo nahrát
+  // 10 × 25 MB k libovolnému cizímu úkolu.
+  if (!await canAccessTask(taskId, req.user)) return res.status(404).json({ error: 'not_found' });
   if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'no_files' });
 
   const created = [];
@@ -118,12 +147,8 @@ router.get('/:id/file', requireAuth, async (req, res) => {
   // Příloha visí BUĎ na úkolu, NEBO na nápadu (CHECK v DB). Každá vazba má
   // vlastní pravidla přístupu, proto nejdřív načteme řádek a pak větvíme.
   const r = await query(`
-    SELECT a.data, a.mime_type, a.original_name, a.filename, a.task_id, a.idea_id,
-           t.assignee_id, p.team_id AS project_team_id, p.manager_id AS project_manager_id
-    FROM attachments a
-    LEFT JOIN tasks t    ON t.id = a.task_id
-    LEFT JOIN projects p ON p.id = t.project_id
-    WHERE a.id = $1
+    SELECT a.data, a.mime_type, a.original_name, a.filename, a.task_id, a.idea_id
+    FROM attachments a WHERE a.id = $1
   `, [id]);
   const a = r.rows[0];
   if (!a) return res.status(404).end();
@@ -136,21 +161,8 @@ router.get('/:id/file', requireAuth, async (req, res) => {
       isIdeaPM(req.user.id),
     ]);
     if (!mgr && !pm) return res.status(404).end();
-  } else {
-    const isAdmin       = req.user.role === 'admin';
-    const isAssignee    = a.assignee_id === req.user.id;
-    const isProjectMgr  = a.project_manager_id === req.user.id;
-    let isTeamMember    = false;
-    if (!isAdmin && !isAssignee && !isProjectMgr) {
-      const m = await query(
-        `SELECT 1 FROM team_members WHERE user_id = $1 AND team_id = $2 LIMIT 1`,
-        [req.user.id, a.project_team_id]
-      );
-      isTeamMember = m.rows.length > 0;
-    }
-    if (!isAdmin && !isAssignee && !isProjectMgr && !isTeamMember) {
-      return res.status(404).end();
-    }
+  } else if (!await canAccessTask(a.task_id, req.user)) {
+    return res.status(404).end();
   }
 
   const setDownloadHeaders = () => {
@@ -171,8 +183,8 @@ router.get('/:id/file', requireAuth, async (req, res) => {
     setDownloadHeaders();
     return fs.createReadStream(filePath).pipe(res);
   }
-  // Soubor je definitivně pryč (ephemerálnímu disk Renderu padly za oběť)
-  res.status(404).json({ error: 'file_missing', message: 'Soubor se ztratil (Render free tier ephemeral disk). Nahraj prosím znovu.' });
+  // Soubor je definitivně pryč — v DB není a na disku taky ne.
+  res.status(404).json({ error: 'file_missing', message: 'Obsah souboru se nepodařilo najít. Nahraj ho prosím znovu.' });
 });
 
 router.delete('/:id', requireAuth, async (req, res) => {

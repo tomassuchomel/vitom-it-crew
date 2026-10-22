@@ -11,10 +11,14 @@ import { query } from './db.js';
 
 // Přepočítá stav jednoho nápadu. Vrací true, když došlo ke změně na 'hotovo'.
 export async function syncIdeaCompletion(ideaId, userId = null) {
-  const idea = (await query('SELECT id, state, linked_project_id FROM ideas WHERE id = $1', [ideaId])).rows[0];
+  const idea = (await query(
+    'SELECT id, state, linked_project_id, merged_into_id FROM ideas WHERE id = $1', [ideaId]
+  )).rows[0];
   if (!idea) return false;
   // Uzavřené / zamítnuté nápady neoživujeme. Dokončit jde jen rozpracovaný.
   if (idea.state !== 'rozpracovano') return false;
+  // Sloučený nápad už není samostatný — dokončuje se jeho cíl.
+  if (idea.merged_into_id) return false;
 
   let total = 0;
   let done = 0;
@@ -23,7 +27,9 @@ export async function syncIdeaCompletion(ideaId, userId = null) {
     const p = (await query('SELECT status FROM projects WHERE id = $1', [idea.linked_project_id])).rows[0];
     if (p) {
       total += 1;
-      if (p.status === 'done') done += 1;
+      // Zrušený projekt se taky neřeší — jinak by nápad zůstal navždy
+      // rozpracovaný, i kdyby byly všechny úkoly hotové.
+      if (p.status === 'done' || p.status === 'cancelled') done += 1;
     }
   }
 

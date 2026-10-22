@@ -90,7 +90,7 @@ export default function MyTasks() {
   }, [tasks, filter, view, teamIdFilter]);
 
   const counts = useMemo(() => {
-    const c = { all: tasks.length, todo: 0, in_progress: 0, review: 0, needs_fix: 0, done: 0 };
+    const c = { all: tasks.length, todo: 0, in_progress: 0, waiting: 0, review: 0, needs_fix: 0, done: 0 };
     for (const t of tasks) { if (c[t.status] !== undefined) c[t.status]++; }
     return c;
   }, [tasks]);
@@ -429,6 +429,8 @@ function ListView({ tasks, filter, currentTeamId, onStatusChange, onOpen, onEdit
     todo: 'bg-amber-300',
     in_progress: 'bg-blue-400',
     review: 'bg-accent-400',
+    needs_fix: 'bg-orange-400',
+    waiting: 'bg-violet-400',
     done: 'bg-emerald-400',
   };
   const PRIORITY_PILL = {

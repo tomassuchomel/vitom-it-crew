@@ -36,6 +36,7 @@ export async function overdueTasks(teamId) {
         AND t.due_date IS NOT NULL
         AND t.due_date < CURRENT_DATE
         AND t.status <> 'done'
+        AND t.status <> 'waiting'
       ORDER BY t.due_date ASC`,
     [teamId]
   );
@@ -68,6 +69,7 @@ export async function upcomingDeadlines(teamId, days = 3) {
         AND t.due_date >= CURRENT_DATE
         AND t.due_date <= CURRENT_DATE + ($2 || ' days')::interval
         AND t.status <> 'done'
+        AND t.status <> 'waiting'
       ORDER BY t.due_date ASC`,
     [teamId, days]
   );

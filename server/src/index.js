@@ -1,7 +1,12 @@
 // Express entrypoint – VITOM IT Crew
 // MUSÍ být první import: nastaví process.env z .env (s override) ještě před db/auth/ai.
 import './env.js';
+// Musí být hned za express importem a PŘED mounty rout: patchuje Express 4 tak,
+// aby odmítnutý promise z async handleru doputoval do globálního error handleru.
+// Bez toho request visí bez odpovědi až do timeoutu — Express 4 async chyby
+// sám nezachytí a většina handlerů v repu nemá try/catch.
 import express from 'express';
+import 'express-async-errors';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'node:path';
@@ -40,6 +45,7 @@ import mzvRoutes from './routes/mzv.js';
 import adminServerRoutes from './routes/admin-server.js';
 import deployRoutes from './routes/deploy.js';
 import { recordError } from './errorBuffer.js';
+import { errorHandler } from './errorHandler.js';
 import { requireMcpAuth, handleMcpRequest } from './mcp/index.js';
 import { startPushCron } from './pushCron.js';
 import { agentConfig, describeAgentConfig, validateAgentConfig } from './aiAgent/config.js';
@@ -107,7 +113,8 @@ app.use('/uploads', express.static(uploadsDir, {
   setHeaders: (res) => res.setHeader('Cache-Control', 'public, max-age=86400'),
 }));
 
-// V produkci servírujeme statický build klienta (Render single-service deploy)
+// V produkci servírujeme statický build klienta ze stejného procesu
+// (VPS: nginx proxuje na Node, Node servíruje i client/dist).
 if (IS_PROD) {
   const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
   if (fs.existsSync(clientDist)) {
@@ -122,23 +129,12 @@ if (IS_PROD) {
   }
 }
 
-// Globální error handler — logujeme + zaznamenáme do error bufferu pro Admin UI.
-app.use((err, req, res, next) => {
-  console.error('[api error]', err);
-  recordError({
-    source: 'api',
-    message: err.message,
-    stack: err.stack,
-    path: req.originalUrl,
-    status: 500,
-    userId: req.user?.id,
-  });
-  res.status(500).json({ error: 'server_error', message: err.message });
-});
+// Globální error handler — implementace v ./errorHandler.js.
+app.use(errorHandler);
 
 // uncaughtException: proces je v nedefinovaném stavu (chybí handler → nikdo neví,
-// co selhalo mezi řádky). Zaznamenej + zaloguj a UMRI. systemd/Render nás
-// restartují — čistší než tiše běžet dál se zombie stavem.
+// co selhalo mezi řádky). Zaznamenej + zaloguj a UMRI. systemd nás
+// restartuje — čistší než tiše běžet dál se zombie stavem.
 let isShuttingDown = false;
 process.on('uncaughtException', (err) => {
   console.error('[uncaught]', err);

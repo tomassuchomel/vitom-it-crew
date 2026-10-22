@@ -44,9 +44,13 @@ async function loadProjectAccess(projectId, user, teamId) {
   const p = (await query('SELECT id, team_id, manager_id FROM projects WHERE id = $1', [projectId])).rows[0];
   if (!p) return null;
   const isAdmin = user.role === 'admin';
-  // Stejné pravidlo jako ve zbytku repa (projects.js): mimo aktuálně zvolený
-  // tým se na projekt nesahá, i kdyby v něm uživatel byl členem.
-  if (!isAdmin && teamId && p.team_id !== teamId) return { project: p, isMember: false, canEdit: false };
+  // Bez platného team kontextu nepracujeme. req.team_id je undefined i když
+  // klient pošle X-Team-Id týmu, kde není členem (viz auth.js) — podmiňovat
+  // kontrolu jeho existencí by ji nechalo celou přeskočit, tedy fail-open.
+  // Stejný guard má routes/dependencies.js.
+  if (!isAdmin && (!teamId || p.team_id !== teamId)) {
+    return { project: p, isMember: false, canEdit: false };
+  }
   let isMember = isAdmin;
   if (!isMember) {
     const m = await query(

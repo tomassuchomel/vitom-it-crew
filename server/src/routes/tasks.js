@@ -210,7 +210,10 @@ router.get('/mine', requireAuth, async (req, res) => {
     LEFT JOIN users cb ON cb.id = t.created_by
     WHERE t.assignee_id = $2 ${extra}
     ORDER BY
-      CASE t.status WHEN 'in_progress' THEN 0 WHEN 'review' THEN 1 WHEN 'todo' THEN 2 WHEN 'done' THEN 3 END,
+      -- ELSE je nutné: bez něj padnou 'waiting' i 'needs_fix' na NULL a
+      -- v ASC řazení skončí až pod hotovými úkoly.
+      CASE t.status WHEN 'in_progress' THEN 0 WHEN 'review' THEN 1 WHEN 'needs_fix' THEN 2
+                    WHEN 'waiting' THEN 3 WHEN 'todo' THEN 4 WHEN 'done' THEN 5 ELSE 6 END,
       CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 END,
       t.due_date NULLS LAST, t.due_date ASC
   `, params);
