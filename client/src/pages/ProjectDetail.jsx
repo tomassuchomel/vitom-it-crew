@@ -215,9 +215,10 @@ export default function ProjectDetail() {
             {/* Status filter pills */}
             <div className="flex flex-wrap gap-1.5 mb-4">
               {[
-                { value: 'open',        label: 'Otevřené', countSelector: (c) => (c.todo||0) + (c.in_progress||0) + (c.review||0) + (c.needs_fix||0) },
+                { value: 'open',        label: 'Otevřené', countSelector: (c) => (c.todo||0) + (c.in_progress||0) + (c.waiting||0) + (c.review||0) + (c.needs_fix||0) },
                 { value: 'todo',        label: '⏸ Čeká',         countSelector: (c) => c.todo || 0 },
                 { value: 'in_progress', label: '▶ V práci',      countSelector: (c) => c.in_progress || 0 },
+                { value: 'waiting',     label: '⏳ Čekám na',    countSelector: (c) => c.waiting || 0 },
                 { value: 'review',      label: '👀 Review',     countSelector: (c) => c.review || 0 },
                 { value: 'needs_fix',   label: '🔄 Vrácené',     countSelector: (c) => c.needs_fix || 0 },
                 { value: 'done',        label: '✅ Hotové',      countSelector: (c) => c.done || 0 },
@@ -723,7 +724,9 @@ function TaskRow({ task, children, user, onStatusChange, onReview, onAddSubtask,
   const STATUS_BAR = {
     todo: 'bg-amber-300',
     in_progress: 'bg-blue-400',
+    waiting: 'bg-violet-400',
     review: 'bg-accent-400',
+    needs_fix: 'bg-orange-400',
     done: 'bg-emerald-400',
   };
 

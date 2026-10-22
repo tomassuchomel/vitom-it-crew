@@ -18,6 +18,7 @@ import TaskDetailModal from '../components/TaskDetailModal.jsx';
 import { useAuth } from '../auth.jsx';
 import { useTeams } from '../teams.jsx';
 import { scoreboard as scoreboardApi, tasks as tasksApi } from '../api.js';
+import { StatusBadge } from '../components/TaskStatus.jsx';
 
 const MEDAL = ['🥇', '🥈', '🥉'];
 
@@ -536,13 +537,9 @@ function TaskListModal({ user, category, teamId, months, onClose, onOpenTask }) 
                   <td className="py-2 px-2 text-center text-xs tabular-nums">{fmtDate(t.due_date)}</td>
                   <td className="py-2 px-2 text-center text-xs tabular-nums">{fmtDate(t.completed_at)}</td>
                   <td className="py-2 pl-2 text-center">
-                    <span className={`text-[10px] px-2 py-0.5 rounded border ${
-                      t.status === 'done' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : t.status === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200'
-                        : t.status === 'needs_fix' ? 'bg-amber-50 text-amber-800 border-amber-200'
-                        : t.status === 'review' ? 'bg-purple-50 text-purple-700 border-purple-200'
-                        : 'bg-slate-50 text-slate-600 border-slate-200'
-                    }`}>{t.status}</span>
+                    {/* Sdílený badge — ternární řetěz tu zapomínal na nové
+                        stavy a ukazoval syrové anglické názvy. */}
+                    <StatusBadge status={t.status} size="small" />
                   </td>
                 </tr>
               ))}

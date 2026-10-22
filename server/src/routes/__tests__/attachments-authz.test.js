@@ -70,8 +70,35 @@ async function seed() {
     [taskCross, userMgr, buf.length, buf]
   )).rows[0].id;
 
-  return { userA, userB, userMgr, userAdmin, userCross, att, attCross };
+  return { userA, userB, userMgr, userAdmin, userCross, att, attCross, task, taskCross };
 }
+
+// Helpery pro /by-task endpointy — list metadat a upload.
+async function listAs(user, taskId) {
+  const res = await fetch(`http://127.0.0.1:${port}/api/attachments/by-task/${taskId}`, {
+    headers: { cookie: `tf_token=${signToken(user)}` },
+  });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+
+async function uploadAs(user, taskId) {
+  const fd = new FormData();
+  fd.append('files', new Blob(['data'], { type: 'text/plain' }), 'soubor.txt');
+  const res = await fetch(`http://127.0.0.1:${port}/api/attachments/by-task/${taskId}`, {
+    method: 'POST',
+    headers: { cookie: `tf_token=${signToken(user)}` },
+    body: fd,
+  });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+
+const USER = {
+  a:     () => ({ id: users.userA, email: 'a@t.cz', role: 'senior_dev', name: 'A' }),
+  b:     () => ({ id: users.userB, email: 'b@t.cz', role: 'senior_dev', name: 'B' }),
+  mgr:   () => ({ id: users.userMgr, email: 'm@t.cz', role: 'manager', name: 'Mgr' }),
+  admin: () => ({ id: users.userAdmin, email: 'adm@t.cz', role: 'admin', name: 'Admin' }),
+  cross: () => ({ id: users.userCross, email: 'cross@t.cz', role: 'senior_dev', name: 'Cross' }),
+};
 
 async function fetchAs(user, attId) {
   const token = signToken(user);
@@ -147,4 +174,51 @@ test('cross-team assignee (host) vidí svou přílohu', async () => {
 test('neexistující id → 404', async () => {
   const r = await fetchAs({ id: users.userA, email: 'a@t.cz', role: 'senior_dev', name: 'A' }, 999999);
   assert.equal(r.status, 404);
+});
+
+// ---------- /by-task: list metadat ----------
+// Dřív měly oba /by-task endpointy jen requireAuth — kdokoli přihlášený si
+// uhádnutím id vytáhl názvy příloh z cizího týmu a mohl tam i nahrávat.
+
+test('list příloh: cizí tým dostane 404', async () => {
+  const r = await listAs(USER.b(), users.task);
+  assert.equal(r.status, 404, 'user z jiného týmu nesmí vidět ani metadata');
+});
+
+test('list příloh: assignee, manager i admin dostanou 200', async () => {
+  for (const [who, u] of [['assignee', USER.a()], ['manager', USER.mgr()], ['admin', USER.admin()]]) {
+    const r = await listAs(u, users.task);
+    assert.equal(r.status, 200, `${who} má vidět seznam`);
+    assert.ok(Array.isArray(r.body.attachments));
+  }
+});
+
+test('list příloh: cross-team řešitel vidí jen svůj úkol', async () => {
+  assert.equal((await listAs(USER.cross(), users.taskCross)).status, 200, 'svůj úkol ano');
+  assert.equal((await listAs(USER.cross(), users.task)).status, 404, 'cizí úkol ne');
+});
+
+test('list příloh: neexistující úkol → 404', async () => {
+  assert.equal((await listAs(USER.a(), 999999)).status, 404);
+});
+
+// ---------- /by-task: upload ----------
+
+test('upload: cizí tým dostane 404 a nic se neuloží', async () => {
+  const before = (await db.query('SELECT COUNT(*)::int AS n FROM attachments WHERE task_id = $1', [users.task])).rows[0].n;
+  const r = await uploadAs(USER.b(), users.task);
+  assert.equal(r.status, 404, 'user z jiného týmu nesmí nahrávat');
+  const after = (await db.query('SELECT COUNT(*)::int AS n FROM attachments WHERE task_id = $1', [users.task])).rows[0].n;
+  assert.equal(after, before, 'nepřibyla žádná příloha');
+});
+
+test('upload: assignee smí nahrát', async () => {
+  const r = await uploadAs(USER.a(), users.task);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.attachments.length, 1);
+  assert.equal(r.body.attachments[0].original_name, 'soubor.txt');
+});
+
+test('upload: na neexistující úkol → 404', async () => {
+  assert.equal((await uploadAs(USER.a(), 999999)).status, 404);
 });

@@ -19,6 +19,11 @@ import { query } from './db.js';
 // SQL výraz pro „kdy byl úkol reálně předán" (předání do review, jinak dokončení).
 const DELIVERED = 'COALESCE(review_submitted_at, completed_at)';
 
+// Úkol ve stavu „Čekám na" stojí vědomě a s uvedeným důvodem — nepočítáme
+// ho jako zpožděný, aby skóre netrestalo za čekání na klienta nebo na
+// schválení. Zůstává mezi aktivními.
+const NOT_WAITING = "status <> 'waiting'";
+
 export async function userScore(userId, months = 6) {
   const win = Math.min(Math.max(Number(months) || 6, 1), 24);
 
@@ -27,7 +32,7 @@ export async function userScore(userId, months = 6) {
       COUNT(*) FILTER (WHERE status='done' AND due_date IS NOT NULL AND ${DELIVERED}::date <= due_date + 1) AS done_on_time,
       COUNT(*) FILTER (WHERE status='done' AND due_date IS NOT NULL AND ${DELIVERED}::date >  due_date + 1) AS done_late,
       COUNT(*) FILTER (WHERE status='done' AND due_date IS NULL)                                            AS done_no_deadline,
-      COUNT(*) FILTER (WHERE status<>'done' AND due_date IS NOT NULL AND due_date < CURRENT_DATE)           AS overdue,
+      COUNT(*) FILTER (WHERE status<>'done' AND ${NOT_WAITING} AND due_date IS NOT NULL AND due_date < CURRENT_DATE) AS overdue,
       COUNT(*) FILTER (WHERE status<>'done' AND (due_date IS NULL OR due_date >= CURRENT_DATE))             AS active
     FROM tasks WHERE assignee_id = $1
   `, [userId]);
@@ -67,7 +72,7 @@ export async function userScore(userId, months = 6) {
       CASE
         WHEN t.status='done' AND t.due_date IS NOT NULL AND COALESCE(t.review_submitted_at, t.completed_at)::date <= t.due_date + 1 THEN 'on_time'
         WHEN t.status='done' AND t.due_date IS NOT NULL AND COALESCE(t.review_submitted_at, t.completed_at)::date >  t.due_date + 1 THEN 'late'
-        WHEN t.status<>'done' AND t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE                                              THEN 'overdue'
+        WHEN t.status<>'done' AND t.status<>'waiting' AND t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE                      THEN 'overdue'
         WHEN t.status<>'done'                                                                                                       THEN 'active'
       END AS category
     FROM tasks t

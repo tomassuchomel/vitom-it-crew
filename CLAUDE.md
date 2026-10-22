@@ -35,9 +35,9 @@ cd server && npm run ai-worker   # AI agent worker (SAMOSTATNÝ proces vedle web
 cd server && npm run seed    # seed ukázkových dat
 ```
 
-Testy běží přes `node --test` (node:test). Testy umísťuj do `src/<oblast>/__tests__/*.test.js`
-— shell glob v `npm test` (`src/**/__tests__`) se rozbaluje jako `src/*/__tests__`, takže
-soubor přímo v `src/__tests__/` (bez mezilehlé složky) se NEspustí a tiše chybí v pokrytí.
+Testy běží přes `node --test` (node:test), který si testy najde sám — funguje
+`src/__tests__/*.test.js` i `src/<oblast>/__tests__/*.test.js`. Testy k routám
+dávej vedle nich (`src/routes/__tests__/`), testy infrastruktury do `src/__tests__/`.
 DB/route logiku testuj přes `src/testing/testDb.js` (embedded-postgres).
 Žádný ESLint ani Prettier v repu není; drž se stylu okolního kódu.
 

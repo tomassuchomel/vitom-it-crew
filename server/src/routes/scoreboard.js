@@ -21,7 +21,8 @@
 //   - done_on_time: status='done' AND completed_at <= due_date + 1d
 //   - done_late:    status='done' AND completed_at >  due_date + 1d
 //   - done_no_deadline: status='done' AND due_date IS NULL
-//   - overdue:      status!='done' AND due_date < CURRENT_DATE
+//   - overdue:      status!='done' AND status!='waiting' AND due_date < CURRENT_DATE
+//                   ('waiting' = čeká vědomě na někoho jiného, netrestáme)
 //   - in_progress:  status!='done' AND (due_date IS NULL OR due_date >= CURRENT_DATE)
 //   - success_rate: done_on_time / (done_on_time + done_late + overdue) v %
 
@@ -124,7 +125,7 @@ router.get('/', requireAuth, async (req, res) => {
         COUNT(*) FILTER (WHERE ut.status = 'done' AND ut.due_date IS NOT NULL AND COALESCE(ut.review_submitted_at, ut.completed_at) <= (ut.due_date + INTERVAL '1 day'))::int AS done_on_time,
         COUNT(*) FILTER (WHERE ut.status = 'done' AND ut.due_date IS NOT NULL AND COALESCE(ut.review_submitted_at, ut.completed_at) >  (ut.due_date + INTERVAL '1 day'))::int AS done_late,
         COUNT(*) FILTER (WHERE ut.status = 'done' AND ut.due_date IS NULL)::int AS done_no_deadline,
-        COUNT(*) FILTER (WHERE ut.status != 'done' AND ut.due_date IS NOT NULL AND ut.due_date < CURRENT_DATE)::int AS overdue,
+        COUNT(*) FILTER (WHERE ut.status != 'done' AND ut.status != 'waiting' AND ut.due_date IS NOT NULL AND ut.due_date < CURRENT_DATE)::int AS overdue,
         COUNT(*) FILTER (WHERE ut.status != 'done' AND (ut.due_date IS NULL OR ut.due_date >= CURRENT_DATE))::int AS in_progress,
         MAX(ut.completed_at) FILTER (WHERE ut.status = 'done') AS last_completed_at
       FROM user_tasks ut
@@ -246,7 +247,7 @@ router.get('/tasks', requireAuth, async (req, res) => {
   } else if (category === 'pozde') {
     statusFilter = `AND t.status = 'done' AND t.due_date IS NOT NULL AND COALESCE(t.review_submitted_at, t.completed_at) > (t.due_date + INTERVAL '1 day')`;
   } else if (category === 'po_terminu') {
-    statusFilter = `AND t.status != 'done' AND t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE`;
+    statusFilter = `AND t.status != 'done' AND t.status != 'waiting' AND t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE`;
   }
 
   // Time filter dle months — konzistentní s hlavním /scoreboard.
@@ -366,7 +367,7 @@ router.get('/teams-overview', requireAuth, async (req, res) => {
         COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE tb.status = 'done' AND tb.due_date IS NOT NULL AND COALESCE(tb.review_submitted_at, tb.completed_at) <= (tb.due_date + INTERVAL '1 day'))::int AS done_on_time,
         COUNT(*) FILTER (WHERE tb.status = 'done' AND tb.due_date IS NOT NULL AND COALESCE(tb.review_submitted_at, tb.completed_at) >  (tb.due_date + INTERVAL '1 day'))::int AS done_late,
-        COUNT(*) FILTER (WHERE tb.status != 'done' AND tb.due_date IS NOT NULL AND tb.due_date < CURRENT_DATE)::int AS overdue,
+        COUNT(*) FILTER (WHERE tb.status != 'done' AND tb.status != 'waiting' AND tb.due_date IS NOT NULL AND tb.due_date < CURRENT_DATE)::int AS overdue,
         COUNT(DISTINCT tb.assignee_id)::int AS users_active
       FROM tasks_by_team tb
       GROUP BY tb.team_id

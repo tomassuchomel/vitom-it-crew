@@ -45,10 +45,11 @@ const USER = {
   out:    () => ({ id: ctx.outsider, email: 'out-ms@t.cz', role: 'senior_dev', name: 'Cizí' }),
 };
 
-const api = async (user, method, path, body) => {
+const api = async (user, method, path, body, teamId) => {
+  const headers = { cookie: `tf_token=${signToken(user)}`, 'content-type': 'application/json' };
+  if (teamId !== undefined) headers['X-Team-Id'] = String(teamId);
   const res = await fetch(`http://127.0.0.1:${port}/api/milestones${path}`, {
-    method,
-    headers: { cookie: `tf_token=${signToken(user)}`, 'content-type': 'application/json' },
+    method, headers,
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   return { status: res.status, body: await res.json().catch(() => ({})) };
@@ -265,4 +266,38 @@ test('seznam projektů nese milníky pro Timeline', async () => {
   } finally {
     await new Promise(r => srv.close(r));
   }
+});
+
+// ---------- team kontext ----------
+// Regrese: kontrola týmu byla podmíněná existencí req.team_id. Jenže když
+// klient pošle X-Team-Id týmu, kde není členem, auth.js team_id NEnastaví
+// (žádný fallback) — kontrola se tím celá přeskočila a byla fail-open.
+
+test('hlavička cizího týmu přístup k milníkům nepustí', async () => {
+  // PM je členem jen svého týmu; ctx.other je tým, kde NENÍ.
+  const r = await api(USER.pm(), 'GET', `/project/${ctx.project}`, null, ctx.other);
+  assert.equal(r.status, 403, 'bez platného team kontextu se na projekt nesahá');
+});
+
+test('hlavička cizího týmu nepustí ani zápis', async () => {
+  const created = await addMilestone(USER.pm(), { name: 'Chráněný teamem' });
+  assert.equal(created.status, 201, 'kontrola: bez hlavičky to projde');
+
+  const add = await api(USER.pm(), 'POST', `/project/${ctx.project}`, { name: 'Hack' }, ctx.other);
+  assert.equal(add.status, 403);
+
+  const patch = await api(USER.pm(), 'PATCH', `/${created.body.milestone.id}`, { name: 'Hack' }, ctx.other);
+  assert.equal(patch.status, 403);
+
+  const del = await api(USER.pm(), 'DELETE', `/${created.body.milestone.id}`, null, ctx.other);
+  assert.equal(del.status, 403);
+
+  const still = await db.query('SELECT name FROM project_milestones WHERE id = $1', [created.body.milestone.id]);
+  assert.equal(still.rows[0].name, 'Chráněný teamem', 'milník zůstal nedotčený');
+});
+
+test('hlavička vlastního týmu funguje dál', async () => {
+  const r = await api(USER.pm(), 'GET', `/project/${ctx.project}`, null, ctx.team);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.can_edit, true);
 });

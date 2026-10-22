@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { requireAuth, requireRole } from '../auth.js';
 import { query } from '../db.js';
 import { getRecentErrors, clearErrors } from '../errorBuffer.js';
+import { validateEnvValue } from '../envValidation.js';
 
 const router = Router();
 router.use(requireAuth, requireRole('admin'));
@@ -21,7 +22,9 @@ router.use(requireAuth, requireRole('admin'));
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
-const ENV_FILE  = path.resolve(__dirname, '..', '..', '.env');
+// Cestu lze přesměrovat přes ENV_FILE_PATH — testy díky tomu nesahají na
+// skutečný .env vývojáře ani produkce.
+const ENV_FILE  = process.env.ENV_FILE_PATH || path.resolve(__dirname, '..', '..', '.env');
 
 // Whitelist ENV klíčů, které v UI ukazujeme + editujeme. Vše mimo whitelist
 // se v UI vůbec nezobrazí, aby si admin do .env náhodou nedostal Věci, které
@@ -186,7 +189,10 @@ router.put('/env', async (req, res) => {
     return res.status(400).json({ error: 'unknown_key', message: `Klíč ${key} není ve whitelistu.` });
   }
   // Blokujeme pár klíčů, u kterých by admin panel neměl umět „střelit sám sebe do nohy".
-  const IMMUTABLE = ['DATABASE_URL', 'PORT'];
+  // NODE_ENV je tu taky: jeho změna vypne servírování client/dist (index.js),
+  // takže by appka přišla o frontend — a opravit se to z UI už nedá, protože
+  // UI je právě ten frontend.
+  const IMMUTABLE = ['DATABASE_URL', 'PORT', 'NODE_ENV'];
   if (IMMUTABLE.includes(key)) {
     return res.status(400).json({
       error: 'immutable',
@@ -199,6 +205,10 @@ router.put('/env', async (req, res) => {
   if (/[\r\n]/.test(strVal)) {
     return res.status(400).json({ error: 'invalid_value', message: 'Hodnota nesmí obsahovat nový řádek.' });
   }
+  // Hodnoty, u kterých překlep shodí server nebo appku. Raději odmítnout
+  // teď, než aby to selhalo až při příštím startu.
+  const invalid = validateEnvValue(key, strVal);
+  if (invalid) return res.status(400).json({ error: 'invalid_value', message: invalid });
 
   try {
     let raw = '';
@@ -219,7 +229,13 @@ router.put('/env', async (req, res) => {
       if (lines.length && lines[lines.length - 1] !== '') lines.push('');
       lines.push(`${key}=${formatted}`);
     }
-    fs.writeFileSync(ENV_FILE, lines.join('\n'), { mode: 0o600 });
+    // Atomicky: zapsat vedle a přejmenovat. fs.writeFileSync soubor nejdřív
+    // zkrátí na nulu — kdyby se zápis nedokončil (plný disk, pád), zůstalo by
+    // prázdné .env. A protože env.js dělá dotenv override, prázdný soubor
+    // zahodí i DATABASE_URL ze systemd a server už nenastartuje.
+    const tmp = `${ENV_FILE}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, lines.join('\n'), { mode: 0o600 });
+    fs.renameSync(tmp, ENV_FILE);
     // Sync process.env pro běžící instanci (do restartu; některé consumery to
     // pořád nezachytí, protože env se čte při startu, ale pro některé pomůže).
     process.env[key] = strVal;
