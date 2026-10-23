@@ -22,6 +22,21 @@ export async function isIdeaPM(userId) {
   return r.rows.length > 0;
 }
 
+// Právo schvalovat / zamítat / odkládat nápady.
+//
+// Proč zvlášť, a ne přes členství v Managementu: PM Nápadníku, který má
+// schvalovat nápady, by jinak musel být v týmu Management — a tím by dostal
+// i všechna ostatní práva Managementu (schvalování projektů, reporty napříč
+// týmy). Příznak `can_approve_ideas` dává právo jen na schvalování nápadů.
+export async function canApproveIdeas(userId, userRole) {
+  if (await isManagement(userId, userRole)) return true;
+  const r = await query(
+    `SELECT 1 FROM idea_pms WHERE user_id = $1 AND can_approve_ideas = TRUE`,
+    [userId]
+  );
+  return r.rows.length > 0;
+}
+
 // Middleware: Nápadník smí vidět jen Management nebo PM Nápadníku. Ostatní
 // (např. běžný člen IT týmu) dostanou 403 — vč. přístupu k listu nápadů.
 export async function requireIdeaAccess(req, res, next) {

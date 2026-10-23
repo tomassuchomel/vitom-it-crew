@@ -75,6 +75,7 @@ router.get('/', requireAuth, async (req, res) => {
         `SELECT u.id, u.email, u.name, u.first_name, u.last_name, u.role, u.hourly_rate, u.active,
                 u.must_change_password, u.avatar_updated_at, u.can_see_all_teams,
                 (ip.user_id IS NOT NULL) AS is_idea_pm,
+                COALESCE(ip.can_approve_ideas, FALSE) AS can_approve_ideas,
                 COALESCE(
                   (SELECT json_agg(json_build_object('team_id', tm.team_id, 'team_role', tm.team_role, 'team_name', t.name, 'team_slug', t.slug)
                                    ORDER BY tm.team_id)
@@ -92,6 +93,7 @@ router.get('/', requireAuth, async (req, res) => {
         `SELECT u.id, u.email, u.name, u.first_name, u.last_name, u.role, u.hourly_rate, u.active,
                 u.must_change_password, u.avatar_updated_at, u.can_see_all_teams,
                 FALSE AS is_idea_pm,
+                FALSE AS can_approve_ideas,
                 COALESCE(
                   (SELECT json_agg(json_build_object('team_id', tm.team_id, 'team_role', tm.team_role, 'team_name', t.name, 'team_slug', t.slug)
                                    ORDER BY tm.team_id)
@@ -102,7 +104,12 @@ router.get('/', requireAuth, async (req, res) => {
          FROM users u ORDER BY u.id`
       );
     }
-    return res.json({ users: r.rows.map(u => ({ ...publicUser(u, { includeRate: showRates }), teams: u.teams, is_idea_pm: u.is_idea_pm })) });
+    return res.json({ users: r.rows.map(u => ({
+      ...publicUser(u, { includeRate: showRates }),
+      teams: u.teams,
+      is_idea_pm: u.is_idea_pm,
+      can_approve_ideas: !!u.can_approve_ideas,
+    })) });
   }
 
   // ?team_id=N → členové konkrétního týmu (pro cross-team task creation,
@@ -252,9 +259,10 @@ router.put('/:id', requireAuth, requireRole('admin'), async (req, res) => {
     hourly_rate = cur.hourly_rate,
     active = cur.active,
     can_see_all_teams = cur.can_see_all_teams,
-    // Speciální nesloupcový flag: přiřazení role „PM Nápadníku" (tabulka idea_pms).
-    // Undefined = neměnit; true/false = toggle.
+    // Speciální nesloupcové flagy: role „PM Nápadníku" a její právo schvalovat
+    // nápady (tabulka idea_pms). Undefined = neměnit; true/false = toggle.
     is_idea_pm,
+    can_approve_ideas,
   } = req.body || {};
 
   // Pokud admin pošle first/last, použijeme je a přegenerujeme name
@@ -287,6 +295,20 @@ router.put('/:id', requireAuth, requireRole('admin'), async (req, res) => {
       }
     } catch (err) {
       if (err.code !== '42P01') throw err; // tabulka neexistuje — nechme být
+    }
+  }
+
+  // Právo schvalovat nápady. Platí jen pro PM Nápadníku — když PM není,
+  // řádek v idea_pms neexistuje a UPDATE nic neudělá (právo tedy nejde
+  // „zapomenout" zapnuté u někoho, kdo PM být přestal).
+  if (typeof can_approve_ideas === 'boolean') {
+    try {
+      await query(
+        `UPDATE idea_pms SET can_approve_ideas = $1 WHERE user_id = $2`,
+        [can_approve_ideas, id]
+      );
+    } catch (err) {
+      if (err.code !== '42P01' && err.code !== '42703') throw err;
     }
   }
   const r = await query(

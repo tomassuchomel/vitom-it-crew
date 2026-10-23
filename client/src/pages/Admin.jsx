@@ -797,6 +797,7 @@ function EditUserModal({ userId, users, onClose, onSaved }) {
     active:     userData?.active ?? true,
     can_see_all_teams: !!userData?.can_see_all_teams,
     is_idea_pm: !!userData?.is_idea_pm,
+    can_approve_ideas: !!userData?.can_approve_ideas,
   });
   const [allTeams, setAllTeams] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -890,9 +891,23 @@ function EditUserModal({ userId, users, onClose, onSaved }) {
           </label>
           <label className="flex items-center gap-2 text-sm cursor-pointer">
             <input type="checkbox" checked={form.is_idea_pm}
-              onChange={e => setForm({ ...form, is_idea_pm: e.target.checked })} />
-            💡 PM Nápadníku (vidí Report + Dashboard, edituje metadata, ale neschvaluje)
+              onChange={e => setForm({ ...form, is_idea_pm: e.target.checked, can_approve_ideas: e.target.checked ? form.can_approve_ideas : false })} />
+            💡 PM Nápadníku (vidí Report + Dashboard, edituje metadata)
           </label>
+          {/* Schvalování je zvlášť — aby PM nemusel být v týmu Management
+              (to by mu dalo i práva, která s Nápadníkem nesouvisí). */}
+          {form.is_idea_pm && (
+            <label className="flex items-start gap-2 text-sm cursor-pointer pl-6">
+              <input type="checkbox" className="mt-1" checked={form.can_approve_ideas}
+                onChange={e => setForm({ ...form, can_approve_ideas: e.target.checked })} />
+              <span>
+                … a smí nápady <strong>schvalovat / zamítat / odkládat</strong>
+                <span className="block text-[11px] text-ink-500">
+                  Jen pro Nápadník. Ostatní práva Managementu (projekty, reporty napříč týmy) tím nedostane.
+                </span>
+              </span>
+            </label>
+          )}
           <button onClick={resetPassword} className="text-xs text-brand-500 hover:text-brand-600 underline">
             Resetovat heslo na výchozí
           </button>
