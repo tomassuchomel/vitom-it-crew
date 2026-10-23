@@ -5,7 +5,7 @@ import express from 'express';
 import { requireAuth } from '../auth.js';
 import { query } from '../db.js';
 import { sendMail, getNotificationPrefs, buildIdeaEmailHtml } from '../mailer.js';
-import { isManagement, isIdeaPM, requireIdeaAccess } from '../ideaAccess.js';
+import { isManagement, isIdeaPM, canApproveIdeas, requireIdeaAccess } from '../ideaAccess.js';
 import {
   publicIdeaUpload, publicFormUpload, saveIdeaAttachments, describeUploadError,
   MAX_IDEA_FILES, MAX_PUBLIC_FILES,
@@ -448,17 +448,18 @@ router.get('/_meta/turnstile', (req, res) => {
 
 // Meta: kdo jsem v Nápadníku (pro FE — tab visibility, tlačítka).
 router.get('/_meta/perms', requireAuth, async (req, res) => {
-  const [mgr, pm] = await Promise.all([
+  const [mgr, pm, canApprove] = await Promise.all([
     isManagement(req.user.id, req.user.role),
     isIdeaPM(req.user.id),
+    canApproveIdeas(req.user.id, req.user.role),
   ]);
-  res.json({ is_management: mgr, is_idea_pm: pm });
+  res.json({ is_management: mgr, is_idea_pm: pm, can_approve_ideas: canApprove });
 });
 
 // Seznam PMek Nápadníku. Vidí Management + PM (kvůli přehledu).
 router.get('/_pms', requireAuth, requireIdeaAccess, async (req, res) => {
   const r = await query(`
-    SELECT ip.user_id, ip.assigned_at, u.name, u.email,
+    SELECT ip.user_id, ip.assigned_at, ip.can_approve_ideas, u.name, u.email,
            ab.name AS assigned_by_name
     FROM idea_pms ip
     JOIN users u ON u.id = ip.user_id
@@ -593,17 +594,18 @@ router.get('/:id/transitions', requireAuth, requireIdeaAccess, async (req, res) 
   const r = await query(`SELECT id, state, garant_id FROM ideas WHERE id = $1`, [id]);
   if (r.rows.length === 0) return res.status(404).json({ error: 'not_found' });
   const idea = r.rows[0];
-  const [mgr, pm] = await Promise.all([
+  const [mgr, pm, canApprove] = await Promise.all([
     isManagement(req.user.id, req.user.role),
     isIdeaPM(req.user.id),
+    canApproveIdeas(req.user.id, req.user.role),
   ]);
   const isGarant = idea.garant_id && idea.garant_id === req.user.id;
-  // PM Nápadníku má garant-role practical rights (posouvá analýzu, dokončí),
-  // ale NEschvaluje / nezamítá — role 'management' zůstává striktní.
+  // PM Nápadníku má garant-role practical rights (posouvá analýzu, dokončí).
+  // Schvalování / zamítání je zvlášť — Management, nebo PM s právem schvalovat.
   const canGarant = isGarant || pm;
   const available = (TRANSITIONS[idea.state] || []).map(t => {
     let allowed = false;
-    if (t.role === 'management') allowed = mgr;
+    if (t.role === 'management') allowed = canApprove;
     else if (t.role === 'garant') allowed = canGarant;
     else if (t.role === 'garant_or_management') allowed = mgr || canGarant;
     if (t.requireGarant && !idea.garant_id) allowed = false;
@@ -613,7 +615,7 @@ router.get('/:id/transitions', requireAuth, requireIdeaAccess, async (req, res) 
   if (idea.state === 'schvalena_analyza' && canGarant) {
     available.push({ to: 'rozpracovano', action: 'Vytvořit projekt', requireComment: false, allowed: true, special: 'create_project' });
   }
-  res.json({ state: idea.state, transitions: available, isManagement: mgr, isGarant, isIdeaPM: pm });
+  res.json({ state: idea.state, transitions: available, isManagement: mgr, isGarant, isIdeaPM: pm, canApprove });
 });
 
 // Provede state transition. Body: { to_state, comment }
@@ -630,16 +632,17 @@ router.post('/:id/state', requireAuth, requireIdeaAccess, async (req, res) => {
   const allowed = (TRANSITIONS[idea.state] || []).find(t => t.to === toState);
   if (!allowed) return res.status(400).json({ error: 'invalid_transition', from: idea.state, to: toState });
 
-  // Autorizace. PM Nápadníku má garant-role rights (posun analýzy, dokončení),
-  // ale NE schvalování / zamítání.
-  const [mgr, pm] = await Promise.all([
+  // Autorizace. PM Nápadníku má garant-role rights (posun analýzy, dokončení);
+  // schvalování / zamítání jen Management nebo PM s právem schvalovat.
+  const [mgr, pm, canApprove] = await Promise.all([
     isManagement(req.user.id, req.user.role),
     isIdeaPM(req.user.id),
+    canApproveIdeas(req.user.id, req.user.role),
   ]);
   const isGarant = idea.garant_id && idea.garant_id === req.user.id;
   const canGarant = isGarant || pm;
   const canDo =
-    (allowed.role === 'management' && mgr) ||
+    (allowed.role === 'management' && canApprove) ||
     (allowed.role === 'garant' && canGarant) ||
     (allowed.role === 'garant_or_management' && (mgr || canGarant));
   if (!canDo) return res.status(403).json({ error: 'forbidden', message: 'Tuhle akci nemáš oprávnění provést.' });
